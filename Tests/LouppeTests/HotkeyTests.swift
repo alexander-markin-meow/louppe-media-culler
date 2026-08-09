@@ -335,7 +335,7 @@ final class HotkeyTests: XCTestCase {
         // XCTest bundles cannot become the process's active app, so AppKit
         // never assigns their otherwise-real test window to NSApp.keyWindow.
         // The debug-only override supplies only that unavailable fact; event
-        // monitoring, window-number matching, SessionWindowReader discovery,
+        // monitoring, window-number matching, hosting-window discovery,
         // first responders, and teardown all remain the production path.
         SessionKeyMonitorTestProbe.overrideKeyWindow(with: window)
         defer {
@@ -377,8 +377,28 @@ final class HotkeyTests: XCTestCase {
         XCTAssertEqual(store.items[1].rating, .undecided)
         XCTAssertTrue(store.selectedIndices.isEmpty)
 
-        // Removing the hosted SessionView must unregister its process-wide
-        // monitor. Dispatching the same key afterward must leave state alone.
+        // A SessionView can leave and re-enter the persistent window while a
+        // folder is closed, rescanned, or replaced. Its process-wide monitor
+        // must disappear while detached and reliably return on reattachment.
+        sessionHost?.removeFromSuperview()
+        XCTAssertTrue(waitForCondition {
+            SessionKeyMonitorTestProbe.activeMonitorCount
+                == baselineMonitorCount
+        })
+        if let sessionHost {
+            container.addSubview(sessionHost)
+        }
+        XCTAssertTrue(waitForCondition {
+            SessionKeyMonitorTestProbe.activeMonitorCount
+                == baselineMonitorCount + 1
+        })
+        XCTAssertTrue(window.makeFirstResponder(button))
+        sendKeyEvent(code: 2, characters: "d", in: window)
+        XCTAssertEqual(store.items[1].rating, .no)
+        XCTAssertEqual(store.currentIndex, 2)
+
+        // Final removal must unregister the monitor. Dispatching the same key
+        // afterward must leave state alone.
         sessionHost?.removeFromSuperview()
         sessionHost = nil
         XCTAssertTrue(waitForCondition {
@@ -387,7 +407,7 @@ final class HotkeyTests: XCTestCase {
         })
         XCTAssertTrue(window.makeFirstResponder(button))
         sendKeyEvent(code: 2, characters: "d", in: window)
-        XCTAssertEqual(store.items[1].rating, .undecided)
+        XCTAssertEqual(store.items[2].rating, .undecided)
     }
 #endif
 

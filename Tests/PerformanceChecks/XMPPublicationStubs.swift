@@ -58,6 +58,41 @@ struct XMPSameStemConflictDescriptor: Equatable, Sendable, Identifiable {
 
     var rawMember: Member? { members.first(where: { $0.role == .raw }) }
     var jpegMember: Member? { members.first(where: { $0.role == .jpeg }) }
+
+    /// Must stay identical to the production property in
+    /// `Sources/Louppe/XMP/XMPPublication.swift`. SessionStore's mutation
+    /// boundary calls this, so a weaker copy here would let the performance
+    /// harness pass on input the app rejects.
+    var isStructurallyResolvable: Bool {
+        guard resolutionEligibility == .eligible,
+              members.count == 2,
+              members.count(where: { $0.role == .raw }) == 1,
+              members.count(where: { $0.role == .jpeg }) == 1,
+              let raw = rawMember,
+              let jpeg = jpegMember,
+              raw.id != jpeg.id,
+              raw.exactPath != jpeg.exactPath,
+              raw.metadata.fileID == raw.id,
+              jpeg.metadata.fileID == jpeg.id,
+              FolderScanner.rawExtensions.contains(
+                raw.exactPath.url.pathExtension.lowercased()
+              ),
+              ["jpg", "jpeg"].contains(
+                jpeg.exactPath.url.pathExtension.lowercased()
+              ) else { return false }
+        var actualDifferences: Set<XMPMetadataDimension> = []
+        if raw.metadata.rating != jpeg.metadata.rating {
+            actualDifferences.insert(.decision)
+        }
+        if raw.metadata.starRating != jpeg.metadata.starRating {
+            actualDifferences.insert(.stars)
+        }
+        if raw.metadata.colorLabel != jpeg.metadata.colorLabel {
+            actualDifferences.insert(.color)
+        }
+        return !actualDifferences.isEmpty
+            && actualDifferences == differingDimensions
+    }
 }
 
 struct XMPExportApplicationPacket: Equatable, Sendable {

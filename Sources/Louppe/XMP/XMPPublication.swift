@@ -114,6 +114,43 @@ struct XMPSameStemConflictDescriptor: Equatable, Sendable, Identifiable {
     var rawMember: Member? { members.first(where: { $0.role == .raw }) }
     var jpegMember: Member? { members.first(where: { $0.role == .jpeg }) }
 
+    /// Do not trust the stored eligibility flag by itself at the SessionStore
+    /// mutation boundary. A resolvable descriptor must still be exactly the
+    /// two distinct physical files and metadata difference the planner says it
+    /// is. This makes malformed or accidentally duplicated internal requests
+    /// fail closed instead of assigning the wrong winner.
+    var isStructurallyResolvable: Bool {
+        guard resolutionEligibility == .eligible,
+              members.count == 2,
+              members.count(where: { $0.role == .raw }) == 1,
+              members.count(where: { $0.role == .jpeg }) == 1,
+              let raw = rawMember,
+              let jpeg = jpegMember,
+              raw.id != jpeg.id,
+              raw.exactPath != jpeg.exactPath,
+              raw.metadata.fileID == raw.id,
+              jpeg.metadata.fileID == jpeg.id,
+              FolderScanner.rawExtensions.contains(
+                raw.exactPath.url.pathExtension.lowercased()
+              ),
+              ["jpg", "jpeg"].contains(
+                jpeg.exactPath.url.pathExtension.lowercased()
+              ) else { return false }
+
+        var actualDifferences: Set<XMPMetadataDimension> = []
+        if raw.metadata.rating != jpeg.metadata.rating {
+            actualDifferences.insert(.decision)
+        }
+        if raw.metadata.starRating != jpeg.metadata.starRating {
+            actualDifferences.insert(.stars)
+        }
+        if raw.metadata.colorLabel != jpeg.metadata.colorLabel {
+            actualDifferences.insert(.color)
+        }
+        return !actualDifferences.isEmpty
+            && actualDifferences == differingDimensions
+    }
+
     static func make(
         id: String,
         sessionGeneration: UInt64,
@@ -194,6 +231,10 @@ struct XMPPublicationPlanEntry: Equatable, Sendable, Identifiable {
     let applicationPacketCount: Int
     let excludedACRCompanionCount: Int
     let sameStemConflict: XMPSameStemConflictDescriptor?
+    /// Whether a packet was really on disk at preflight. A failed *create*
+    /// still carries the sidecar path it was going to write, so the path alone
+    /// cannot answer "how many recognized sidecars are already there".
+    let canonicalSidecarExisted: Bool
 }
 
 struct XMPPublicationPlan: Equatable, Sendable {
@@ -207,6 +248,10 @@ struct XMPPublicationPlan: Equatable, Sendable {
 
     var publishableCount: Int {
         entries.count(where: { $0.category.canPublish })
+    }
+
+    var existingRecognizedSidecarCount: Int {
+        entries.count(where: \.canonicalSidecarExisted)
     }
 
     var bestEffortFilenames: [String] {
@@ -233,7 +278,7 @@ struct XMPPublicationPlan: Equatable, Sendable {
 
     var resolvableSameStemConflicts: [XMPSameStemConflictDescriptor] {
         entries.compactMap(\.sameStemConflict).filter {
-            $0.resolutionEligibility == .eligible
+            $0.isStructurallyResolvable
         }
     }
 }
@@ -545,7 +590,8 @@ enum XMPPublicationPlanner {
                         colors: changes.color ? 1 : 0,
                         flags: changes.flag ? 1 : 0,
                         keywords: changes.keywords ? 1 : 0
-                    )
+                    ),
+                    sidecarExisted: prepared.action != .create
                 )
             } catch {
                 return base.entry(
@@ -572,7 +618,8 @@ enum XMPPublicationPlanner {
             message: String,
             fingerprint: XMPPreflightFingerprint? = nil,
             changeCounts: XMPPublicationChangeCounts = .init(),
-            sameStemConflict: XMPSameStemConflictDescriptor? = nil
+            sameStemConflict: XMPSameStemConflictDescriptor? = nil,
+            sidecarExisted: Bool? = nil
         ) -> XMPPublicationPlanEntry {
             XMPPublicationPlanEntry(
                 id: id,
@@ -586,7 +633,11 @@ enum XMPPublicationPlanner {
                 bestEffortFilenames: bestEffortFilenames,
                 applicationPacketCount: applicationPacketCount,
                 excludedACRCompanionCount: excludedACRCompanionCount,
-                sameStemConflict: sameStemConflict
+                sameStemConflict: sameStemConflict,
+                // The prepared paths below state existence exactly. Anywhere
+                // else, only a real directory entry counts.
+                canonicalSidecarExisted: sidecarExisted
+                    ?? (sidecar?.entryExists == true)
             )
         }
     }
@@ -757,7 +808,8 @@ enum XMPPublicationWorker {
             bestEffortFilenames: entry.bestEffortFilenames,
             applicationPacketCount: entry.applicationPacketCount,
             excludedACRCompanionCount: entry.excludedACRCompanionCount,
-            sameStemConflict: entry.sameStemConflict
+            sameStemConflict: entry.sameStemConflict,
+            canonicalSidecarExisted: entry.canonicalSidecarExisted
         )
     }
 }

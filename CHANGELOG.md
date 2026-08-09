@@ -5,7 +5,7 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.7.0 (9) — 2026-08-06
+## 1.7.0 (9) — 2026-08-07
 
 - Added [louppe.eu](https://louppe.eu) to the About panel and README. PNG
   histograms now exclude fully transparent pixels instead of treating them as
@@ -64,7 +64,24 @@ release bundle.
   that can use the RAW or JPEG decision, stars, and color for both files. The
   batch is one undoable Louppe action, rejects stale choices, performs no file
   work itself, and discards and fully rebuilds the Export/XMP plan before a new
-  confirmation.
+  confirmation. The resolver also rejects duplicate or overlapping internal
+  requests before any metadata changes, verifies the displayed exact paths at
+  apply time, and presents labeled decision, star, and color indicators with
+  full filenames available on hover.
+
+- Made the Export sheet respond immediately in folders that already contain one
+  XMP sidecar per photo. Louppe now reads the folder listing once instead of
+  rescanning it for every photo, which took 14 seconds for 2,000 photos and
+  grew four times worse each time the folder doubled; the same folder is now
+  checked in under a tenth of a second. Changing the decision, star, or color
+  selection also stops the previous check instead of leaving several full scans
+  running at once. Alongside that: a Move whose photos all transferred is now
+  reported as moved even when the old sidecar beside the originals could not be
+  cleared afterwards, so those photos leave the session correctly; a RAW+JPEG
+  pair matched across two subfolders reports its skipped shared sidecars instead
+  of omitting them silently; the sidecar preflight no longer counts a packet it
+  failed to create as one that already exists; and its progress total no longer
+  jumps on the first update.
 
 - Restored full-size Grid tiles after the native immediate-click surface made
   cells adopt the preview image's intrinsic size, and made pairing group an
@@ -72,6 +89,11 @@ release bundle.
   Fast Grid scrolling now keeps AppKit's native scrolling indicator instead of
   redrawing a custom thumb and coalesces its one-time setup, so the indicator
   tracks a quick scroll smoothly without changing the always-visible gutter.
+  Session hotkeys now stay attached to the actual photo-review window across
+  folder, scan, and view lifecycle changes instead of relying on SwiftUI
+  appearance state that could silently leave the shortcuts disconnected. The
+  clipping-warning control is now a compact half-circle icon in the
+  histogram's top-right corner and turns purple while active.
 
 - Removed the false save failure shown when quitting after ejecting a photo
   card. New ratings now save to that exact folder's identity-bound local backup

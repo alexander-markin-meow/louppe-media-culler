@@ -11,14 +11,19 @@ struct HistogramSection: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            chart
-                .frame(height: Self.chartHeight)
+            ZStack(alignment: .topTrailing) {
+                chart
+                    .frame(height: Self.chartHeight)
+
+                if !loadFailed, store.viewMode == .gallery {
+                    clippingButton
+                        .padding(.top, 2)
+                        .padding(.trailing, 2)
+                }
+            }
 
             if !loadFailed {
                 percentageRow
-                if store.viewMode == .gallery {
-                    clippingButton
-                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -79,34 +84,22 @@ struct HistogramSection: View {
         Button {
             store.toggleClippingWarnings()
         } label: {
-            Label(
-                store.showClippingWarnings
-                    ? "Hide Clipping Warnings"
-                    : "Show Clipping Warnings",
-                systemImage: store.showClippingWarnings
-                    ? "exclamationmark.triangle.fill"
-                    : "exclamationmark.triangle"
-            )
-            .font(.caption.weight(.medium))
-            .foregroundStyle(
-                store.showClippingWarnings
-                    ? Color.louppeAccent
-                    : Color.primary
-            )
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(
+            Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(
                     store.showClippingWarnings
                         ? Color.louppeAccent
-                        : Color(nsColor: .separatorColor),
-                    lineWidth: 1
+                        : Color.secondary
                 )
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            store.showClippingWarnings
+                ? "Hide Clipping Warnings"
+                : "Show Clipping Warnings"
+        )
         .accessibilityValue(
             store.showClippingWarnings ? "On" : "Off"
         )

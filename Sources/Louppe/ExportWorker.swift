@@ -92,6 +92,12 @@ enum ExportWorker {
             }
         }
 
+        /// Families the collision planner could not name. Their media still
+        /// exports; only the shared packet is left behind.
+        mutating func recordUnplannedFamilies(_ count: Int) {
+            skipped += count
+        }
+
         mutating func recordFailures(in items: some Sequence<PlannedItem>) {
             failed += items.reduce(0) { count, item in
                 count + item.files.count(where: {
@@ -138,6 +144,18 @@ enum ExportWorker {
 
     struct Plan: Sendable, Equatable {
         let items: [PlannedItem]
+        /// Sidecar families whose media is spread across more than one family
+        /// — a RAW+JPEG pair matched across subfolders. One collision suffix
+        /// cannot name a shared packet for two directories, so the media
+        /// exports without it. The result reports these as skipped instead of
+        /// quietly dropping packets the preflight already counted.
+        let unplannedSidecarFamilyCount: Int
+
+        init(items: [PlannedItem], unplannedSidecarFamilyCount: Int = 0) {
+            self.items = items
+            self.unplannedSidecarFamilyCount = unplannedSidecarFamilyCount
+        }
+
         var totalFiles: Int { items.reduce(0) { $0 + $1.files.count } }
 
         func photoCount(from itemOffset: Int) -> Int {
@@ -188,11 +206,18 @@ enum ExportWorker {
         )
         var groupedItems: [(key: String, items: [PhotoItem])] = []
         var groupIndex: [String: Int] = [:]
+        var unplannedFamilyIDs: Set<String> = []
         for item in items {
             let familyIDs = Set(item.individualFiles.compactMap { file in
                 (try? XMPExactFileSystemPath(url: file.url))
                     .flatMap { familyByMediaPath[$0]?.id }
             })
+            if familyIDs.count > 1 {
+                // A pair matched across subfolders belongs to one sidecar
+                // family per directory. Keep the media atomic in one planned
+                // item and record the packets Louppe will not write.
+                unplannedFamilyIDs.formUnion(familyIDs)
+            }
             let key = familyIDs.count == 1
                 ? "xmp:\(familyIDs.first!)"
                 : "item:\(item.id)"
@@ -320,7 +345,19 @@ enum ExportWorker {
                 suffix += 1
             }
         }
-        return Plan(items: plannedItems)
+        // A family claimed by a single-family group is planned normally even
+        // if another item also touched it, so only families no group planned
+        // are reported.
+        let plannedFamilyIDs = Set(
+            plannedItems.map(\.itemID)
+                .filter { $0.hasPrefix("xmp:") }
+                .map { String($0.dropFirst(4)) }
+        )
+        return Plan(
+            items: plannedItems,
+            unplannedSidecarFamilyCount:
+                unplannedFamilyIDs.subtracting(plannedFamilyIDs).count
+        )
     }
 
     static func copy(
@@ -360,6 +397,7 @@ enum ExportWorker {
                 xmpSummary: xmpSummary
             )
         }
+        xmpSummary?.recordUnplannedFamilies(plan.unplannedSidecarFamilyCount)
         guard plan.items.allSatisfy({ item in
             item.files.allSatisfy { $0.scannedIdentity != nil }
         }) else {
@@ -811,6 +849,7 @@ enum ExportWorker {
                 xmpSummary: xmpSummary
             )
         }
+        xmpSummary?.recordUnplannedFamilies(plan.unplannedSidecarFamilyCount)
         guard plan.items.allSatisfy({ item in
             item.files.allSatisfy { $0.scannedIdentity != nil }
         }) else {
@@ -1144,18 +1183,25 @@ enum ExportWorker {
                             temporary: writer.temporaryURL(at: touched.index)
                         )
                     }
-                if retirementCleanupFailed {
-                    inconsistentPhotos += 1
-                    journalFailure = true
-                    failedPhotos += plan.photoCount(from: itemOffset)
-                    break itemLoop
-                }
+                // Every media file in this item already reached the
+                // destination with a durable completed checkpoint, and
+                // recovery preserves a completed Move. Report the photos as
+                // moved even when only the old source packet could not be
+                // retired: withholding their ids would leave the session
+                // holding items whose files are gone from the source folder.
+                // The stale packet is exactly what launch recovery re-runs.
                 movedItemIDs.append(contentsOf: item.movedItemIDs)
                 movedFiles += touchedForItem.count(where: {
                     $0.file.role != .retiredXMPSource
                 })
                 for touched in touchedForItem {
                     xmpSummary?.record(touched.file)
+                }
+                if retirementCleanupFailed {
+                    inconsistentPhotos += 1
+                    journalFailure = true
+                    failedPhotos += plan.photoCount(from: itemOffset + 1)
+                    break itemLoop
                 }
             }
         }

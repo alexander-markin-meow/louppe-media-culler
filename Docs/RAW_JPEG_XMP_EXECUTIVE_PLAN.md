@@ -16,7 +16,7 @@ RAW/JPEG photos by default, exposes the hidden grouping switch with the exact
 approved wording, provides typed and stale-safe conflict resolution for an
 unambiguous RAW+JPEG family, applies all chosen winners as one undoable session
 mutation, and discards and fully rebuilds the old immutable publication or
-Copy/Move preflight plan. The complete 267-test XCTest suite, 73 performance
+Copy/Move preflight plan. The complete 269-test XCTest suite, 73 performance
 checks, current-SDK debug build, release package and archive checks, installed
 signature verification, and an installed `-openFolder` launch all pass. The
 launch sidecar contained two physical entries for one same-stem CR3+JPEG pair,
@@ -26,6 +26,11 @@ Capture One 16.8.4.13 is installed, but its new end-to-end resolver/reload row
 requires visible manual interaction and remains pending. Lightroom Classic,
 Bridge, and darktable are not installed and also remain explicitly pending.
 No result is inferred from packet tests.
+
+A same-day self-review then hardened the mutation boundary against duplicate
+or overlapping internal conflict requests, added exact displayed-path checks,
+and made the resolver's filename and metadata comparison easier to inspect.
+Duplicate opposite-winner requests now fail before either can change metadata.
 
 ---
 

@@ -17,8 +17,6 @@ import AppKit
 ///   (⇧-click range and ⌘-click add/remove live in the thumbnail views)
 struct SessionView: View {
     @ObservedObject var store: SessionStore
-    @State private var keyMonitor: Any?
-    @State private var sessionWindowReference = SessionWindowReference()
 
     var body: some View {
         mainContent
@@ -27,8 +25,12 @@ struct SessionView: View {
             .navigationTitle("")
             .focusedSceneValue(\.louppeSessionStore, store)
             .background {
-                SessionWindowReader { window in
-                    sessionWindowReference.window = window
+                SessionKeyEventMonitor { event, sessionWindow in
+                    let context = liveKeyRoutingContext(
+                        for: event,
+                        sessionWindow: sessionWindow
+                    )
+                    return handleKey(event, context: context)
                 }
             }
             .sheet(isPresented: $store.isExportPresented) {
@@ -82,8 +84,6 @@ struct SessionView: View {
             } message: {
                 Text(store.cleanUpError ?? "")
             }
-            .onAppear(perform: installKeyMonitor)
-            .onDisappear(perform: removeKeyMonitor)
     }
 
     // MARK: - Clean up confirmation
@@ -490,33 +490,6 @@ struct SessionView: View {
 
     // MARK: - Keyboard shortcuts
 
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        guard let monitor = NSEvent.addLocalMonitorForEvents(
-            matching: .keyDown,
-            handler: { event in
-                let context = liveKeyRoutingContext(for: event)
-                if handleKey(event, context: context) { return nil }
-                return event
-            }
-        ) else { return }
-        keyMonitor = monitor
-#if DEBUG
-        SessionKeyMonitorTestProbe.didInstall()
-#endif
-    }
-
-    private func removeKeyMonitor() {
-        if let monitor = keyMonitor {
-            NSEvent.removeMonitor(monitor)
-            keyMonitor = nil
-#if DEBUG
-            SessionKeyMonitorTestProbe.didRemove()
-#endif
-        }
-        sessionWindowReference.window = nil
-    }
-
     /// Internal compatibility entry point for focused logic tests that use
     /// synthetic events without an AppKit window. The installed event monitor
     /// always calls the context-aware overload below.
@@ -793,7 +766,8 @@ struct SessionView: View {
     }
 
     private func liveKeyRoutingContext(
-        for event: NSEvent
+        for event: NSEvent,
+        sessionWindow: NSWindow
     ) -> SessionKeyRoutingContext {
 #if DEBUG
         let keyWindow =
@@ -804,7 +778,7 @@ struct SessionView: View {
         return SessionKeyRoutingContext(
             eventWindow: event.window,
             eventWindowNumber: event.windowNumber,
-            sessionWindow: sessionWindowReference.window,
+            sessionWindow: sessionWindow,
             keyWindow: keyWindow,
             modalWindow: NSApp.modalWindow
         )
@@ -1007,41 +981,78 @@ struct SessionRenderMarker: NSViewRepresentable {
     }
 }
 
-/// Resolves the exact NSWindow that hosts this SessionView. The event monitor
-/// keeps only a weak reference, so it cannot extend the window's lifetime.
-private struct SessionWindowReader: NSViewRepresentable {
-    let onWindowChange: (NSWindow?) -> Void
+/// Owns the local keyboard monitor for exactly as long as SessionView's AppKit
+/// bridge is attached to a window. Keeping the token here avoids SwiftUI
+/// appearance callbacks and `@State` being replaced independently, which can
+/// otherwise leave a visible session with an orphaned or missing monitor.
+private struct SessionKeyEventMonitor: NSViewRepresentable {
+    let route: (NSEvent, NSWindow) -> Bool
 
-    func makeNSView(context: Context) -> WindowReaderView {
-        let view = WindowReaderView()
-        view.onWindowChange = onWindowChange
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.route = route
         return view
     }
 
-    func updateNSView(_ nsView: WindowReaderView, context: Context) {
-        nsView.onWindowChange = onWindowChange
-        nsView.reportWindowIfNeeded()
+    func updateNSView(_ nsView: MonitorView, context: Context) {
+        nsView.route = route
+        nsView.installIfNeeded()
     }
 
-    final class WindowReaderView: NSView {
-        var onWindowChange: (NSWindow?) -> Void = { _ in }
-        private weak var reportedWindow: NSWindow?
+    static func dismantleNSView(
+        _ nsView: MonitorView,
+        coordinator: Void
+    ) {
+        nsView.removeMonitor()
+    }
+
+    /// The two removal paths below are exhaustive, so this deliberately has no
+    /// `deinit` safety net: a monitor is only ever installed while the view is
+    /// in a window, a windowed view is retained by that window, and leaving
+    /// the window always runs `viewDidMoveToWindow` with a nil window before
+    /// the view can be released. (A nonisolated `deinit` also cannot read the
+    /// non-Sendable monitor token without an unchecked-Sendable box, which
+    /// would assert a guarantee for an unreachable case.)
+    final class MonitorView: NSView {
+        var route: (NSEvent, NSWindow) -> Bool = { _, _ in false }
+        private var monitor: Any?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            reportWindowIfNeeded()
+            if window == nil {
+                removeMonitor()
+            } else {
+                installIfNeeded()
+            }
         }
 
-        func reportWindowIfNeeded() {
-            guard reportedWindow !== window else { return }
-            reportedWindow = window
-            onWindowChange(window)
+        func installIfNeeded() {
+            guard window != nil, monitor == nil else { return }
+            guard let monitor = NSEvent.addLocalMonitorForEvents(
+                matching: .keyDown,
+                handler: { [weak self] event in
+                    guard let self, let window = self.window else {
+                        return event
+                    }
+                    return self.route(event, window) ? nil : event
+                }
+            ) else { return }
+            self.monitor = monitor
+#if DEBUG
+            SessionKeyMonitorTestProbe.didInstall()
+#endif
         }
+
+        func removeMonitor() {
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+#if DEBUG
+            SessionKeyMonitorTestProbe.didRemove()
+#endif
+        }
+
     }
-}
-
-private final class SessionWindowReference {
-    weak var window: NSWindow?
 }
 
 /// The Clean Up menu body — the three trash actions plus the inline scope —

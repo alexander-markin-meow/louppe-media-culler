@@ -31,6 +31,11 @@ struct ExportView: View {
     @State private var isCheckingExistingXMP = false
     @State private var xmpInspectionID = UUID()
     @State private var xmpInspectionTask: Task<Void, Never>?
+    /// The detached scan itself. A detached task is not a child, so cancelling
+    /// only the awaiting wrapper would leave a superseded whole-session scan
+    /// running behind the newer one.
+    @State private var xmpInspectionWork:
+        Task<XMPExportSourceInspection?, Never>?
     @State private var conflictResolver: XMPConflictResolverPresentation?
     @State private var conflictResolutionNotice: String?
 
@@ -65,7 +70,7 @@ struct ExportView: View {
             refreshSelectionSnapshot()
         }
         .onDisappear {
-            xmpInspectionTask?.cancel()
+            cancelXMPInspection()
             exporter.reset()
             store.resetXMPPublication()
         }
@@ -392,11 +397,16 @@ struct ExportView: View {
                 "Unified \(outcome.appliedCount) RAW+JPEG conflict\(outcome.appliedCount == 1 ? "" : "s") in Louppe. Review the new plan before continuing."
             )
         }
-        let rejected = outcome.staleConflictIDs.count
-            + outcome.ineligibleConflictIDs.count
-        if rejected > 0 {
+        let stale = outcome.staleConflictIDs.count
+        if stale > 0 {
             parts.append(
-                "\(rejected) conflict\(rejected == 1 ? " changed while the resolver was open and was" : "s changed while the resolver was open and were") not overwritten. The refreshed plan shows the current values."
+                "\(stale) conflict\(stale == 1 ? " changed while the resolver was open and was" : "s changed while the resolver was open and were") not overwritten. The refreshed plan shows the current values."
+            )
+        }
+        let ineligible = outcome.ineligibleConflictIDs.count
+        if ineligible > 0 {
+            parts.append(
+                "\(ineligible) conflict choice\(ineligible == 1 ? " was" : "s were") rejected because the files no longer formed one safe RAW+JPEG pair."
             )
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
@@ -411,7 +421,7 @@ struct ExportView: View {
     }
 
     private func scheduleXMPInspection() {
-        xmpInspectionTask?.cancel()
+        cancelXMPInspection()
         guard mode != .metadataXMP else {
             isCheckingExistingXMP = false
             excludedACRCompanionCount = 0
@@ -422,13 +432,15 @@ struct ExportView: View {
         isCheckingExistingXMP = true
         let selected = selectionSnapshot.selectedItems(from: store.items)
         let context = store.items
+        let work = Task.detached(priority: .utility) {
+            try? XMPExportPlanner.inspectSources(
+                selected: selected,
+                familyContextItems: context
+            )
+        }
+        xmpInspectionWork = work
         xmpInspectionTask = Task {
-            let inspection = await Task.detached(priority: .utility) {
-                try? XMPExportPlanner.inspectSources(
-                    selected: selected,
-                    familyContextItems: context
-                )
-            }.value
+            let inspection = await work.value
             guard !Task.isCancelled, xmpInspectionID == requestID else {
                 return
             }
@@ -438,6 +450,13 @@ struct ExportView: View {
             isCheckingExistingXMP = false
             xmpInclusionChoice.applyRecognizedPacketCount(existingXMPCount)
         }
+    }
+
+    private func cancelXMPInspection() {
+        xmpInspectionWork?.cancel()
+        xmpInspectionWork = nil
+        xmpInspectionTask?.cancel()
+        xmpInspectionTask = nil
     }
 
     private var copyMoveXMPExplanation: String {
@@ -698,10 +717,7 @@ struct ExportView: View {
                 xmpCountRow("Already current", plan.count(.alreadyCurrent))
                 xmpCountRow(
                     "Existing recognized sidecars",
-                    plan.entries.count(where: {
-                        $0.category != .create
-                            && $0.canonicalSidecar != nil
-                    })
+                    plan.existingRecognizedSidecarCount
                 )
                 ForEach(
                     XMPPublicationCategory.allCases.filter {

@@ -62,6 +62,32 @@ final class RAWJPEGXMPResolutionTests: XCTestCase {
         XCTAssertEqual(conflict.jpegMember?.wasSelectedForExport, false)
         XCTAssertEqual(conflict.rawMember?.filename, "IMG_0001.NEF")
         XCTAssertEqual(conflict.jpegMember?.filename, "IMG_0001.JPG")
+
+        let jpegSelectedInput = try XMPPublicationInput(
+            items: [fixture.jpegItem],
+            familyContextItems: [fixture.rawItem, fixture.jpegItem],
+            sessionGeneration: 74,
+            profile: .captureOne,
+            visibleDecisionKeywords: true
+        )
+        let maybeJPEGSelectedPlan = await XMPPublicationPlanner.preflight(
+            jpegSelectedInput,
+            isCancelled: { false },
+            progress: { _, _ in }
+        )
+        let jpegSelectedPlan = try XCTUnwrap(maybeJPEGSelectedPlan)
+        let jpegSelectedConflict = try XCTUnwrap(
+            jpegSelectedPlan.resolvableSameStemConflicts.only
+        )
+        XCTAssertEqual(jpegSelectedConflict.sessionGeneration, 74)
+        XCTAssertEqual(
+            jpegSelectedConflict.rawMember?.wasSelectedForExport,
+            false
+        )
+        XCTAssertEqual(
+            jpegSelectedConflict.jpegMember?.wasSelectedForExport,
+            true
+        )
     }
 
     func testTwoRAWConflictIsTypedButNeverResolvable() async throws {
@@ -195,6 +221,64 @@ final class RAWJPEGXMPResolutionTests: XCTestCase {
 
         XCTAssertEqual(outcome.staleConflictIDs, [conflict.id])
         XCTAssertEqual(fixture.jpegItem.primaryFile.metadataSnapshot, newer)
+        XCTAssertFalse(store.canUndo)
+    }
+
+    func testStaleSessionGenerationIsRejectedWithoutMutation() async throws {
+        let fixture = try makePair(
+            named: "StaleGeneration",
+            rawMetadata: (.yes, .five, .green),
+            jpegMetadata: (.no, .two, .red)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        let store = SessionStore()
+        store.items = [fixture.rawItem, fixture.jpegItem]
+        store.phase = .ready
+        store.rebuildDerivedDataForTesting()
+        let before = fixture.jpegItem.primaryFile.metadataSnapshot
+        let conflict = try await descriptor(
+            selected: [fixture.rawItem],
+            context: [fixture.rawItem, fixture.jpegItem],
+            generation: store.xmpConflictSessionGeneration &+ 1
+        )
+
+        let outcome = store.applyXMPConflictResolutions([
+            .init(conflict: conflict, choice: .useRAW),
+        ])
+
+        XCTAssertEqual(outcome.staleConflictIDs, [conflict.id])
+        XCTAssertEqual(fixture.jpegItem.primaryFile.metadataSnapshot, before)
+        XCTAssertFalse(store.canUndo)
+    }
+
+    func testDuplicateOppositeWinnersAreRejectedBeforeEitherCanApply() async throws {
+        let fixture = try makePair(
+            named: "DuplicateWinner",
+            rawMetadata: (.yes, .five, .green),
+            jpegMetadata: (.no, .two, .red)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        let store = SessionStore()
+        store.items = [fixture.rawItem, fixture.jpegItem]
+        store.phase = .ready
+        store.rebuildDerivedDataForTesting()
+        let beforeRAW = fixture.rawItem.primaryFile.metadataSnapshot
+        let beforeJPEG = fixture.jpegItem.primaryFile.metadataSnapshot
+        let conflict = try await descriptor(
+            selected: [fixture.rawItem, fixture.jpegItem],
+            context: [fixture.rawItem, fixture.jpegItem],
+            generation: store.xmpConflictSessionGeneration
+        )
+
+        let outcome = store.applyXMPConflictResolutions([
+            .init(conflict: conflict, choice: .useRAW),
+            .init(conflict: conflict, choice: .useJPEG),
+        ])
+
+        XCTAssertTrue(outcome.appliedConflictIDs.isEmpty)
+        XCTAssertEqual(outcome.ineligibleConflictIDs, [conflict.id])
+        XCTAssertEqual(fixture.rawItem.primaryFile.metadataSnapshot, beforeRAW)
+        XCTAssertEqual(fixture.jpegItem.primaryFile.metadataSnapshot, beforeJPEG)
         XCTAssertFalse(store.canUndo)
     }
 

@@ -1060,12 +1060,17 @@ every selected item; and Copy/Move now exposes the detailed preflight and
 completion accounting required above.
 
 The 2026-08-07 RAW+JPEG amendment is implemented and locally verified. Its
-complete 267-test suite, 73 performance checks, current-SDK builds, release and
+complete 269-test suite, 73 performance checks, current-SDK builds, release and
 archive verification, installed signature, and real `-openFolder` launch pass.
 The launch sidecar records a same-stem CR3 and JPEG as two separate physical
 entries by default. Capture One's earlier profile acceptance remains valid, but
 the new interactive RAW/JPEG conflict-resolution and metadata-reload workflow
 has not yet been rerun and is explicitly pending.
+
+The same-day implementation review also made conflict application fail closed
+for duplicate or overlapping internal rows, rechecks exact displayed paths,
+and improved the resolver's labeled visual comparison without changing packet
+or filesystem semantics.
 
 ---
 

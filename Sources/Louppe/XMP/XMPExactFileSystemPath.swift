@@ -80,6 +80,14 @@ struct XMPExactFileSystemPath: Hashable, Sendable {
         return path
     }
 
+    /// Whether a directory entry exists at these exact bytes. `lstat` keeps a
+    /// symlink visible as an entry; the store's own open path decides whether
+    /// the target is a safe regular file.
+    var entryExists: Bool {
+        var info = Darwin.stat()
+        return withFileSystemRepresentation { Darwin.lstat($0, &info) == 0 }
+    }
+
     func withFileSystemRepresentation<Result>(
         _ body: (UnsafePointer<CChar>) throws -> Result
     ) rethrows -> Result {

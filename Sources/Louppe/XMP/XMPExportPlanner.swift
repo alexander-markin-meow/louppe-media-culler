@@ -148,7 +148,7 @@ struct XMPExportPreparedPlan: Equatable, Sendable {
 
     var resolvableSameStemConflicts: [XMPSameStemConflictDescriptor] {
         families.compactMap(\.sameStemConflict).filter {
-            $0.resolutionEligibility == .eligible
+            $0.isStructurallyResolvable
         }
     }
 
@@ -191,6 +191,7 @@ enum XMPExportPlanner {
         })
         var recognizedPacketCount = 0
         var acrCompanions = Set<XMPExactFileSystemPath>()
+        var caseSensitivity = VolumeCaseSensitivity()
         for family in try resolvedFamilies(
             contextItems: familyContextItems,
             profile: .universal,
@@ -199,24 +200,32 @@ enum XMPExportPlanner {
         ) where family.members.contains(where: {
             selectedPaths.contains($0.mediaPath)
         }) {
+            // The Export sheet reruns this probe on every metadata-tile
+            // change, so an abandoned pass must stop instead of finishing a
+            // whole-session scan behind the newer one.
+            try Task.checkCancellation()
             // Videos remain ordinary media exports, but the first XMP release
             // deliberately neither creates nor transfers video sidecars.
             guard family.disposition != .unsupportedMedia else { continue }
-            if let canonical = family.canonicalSidecar,
-               pathEntryExists(canonical) {
+            if family.canonicalSidecar?.entryExists == true {
                 recognizedPacketCount += 1
             }
+            let caseSensitiveNames = try familyDirectory(family).map {
+                try caseSensitivity.namesAreCaseSensitive(in: $0)
+            } ?? true
             for packet in family.extensionQualifiedSidecars {
                 guard let owner = try applicationPacketOwner(
                     packet,
-                    members: family.members
+                    members: family.members,
+                    caseSensitiveNames: caseSensitiveNames
                 ), selectedPaths.contains(owner.mediaPath) else { continue }
                 recognizedPacketCount += 1
             }
-            for packet in family.excludedACRCompanions where try acrCompanion(
+            for packet in family.excludedACRCompanions where acrCompanion(
                 packet,
                 belongsToAny: selectedPaths,
-                among: family.members
+                among: family.members,
+                caseSensitiveNames: caseSensitiveNames
             ) {
                 acrCompanions.insert(packet)
             }
@@ -256,9 +265,13 @@ enum XMPExportPlanner {
 
         let store = XMPMetadataStore()
         var preparedFamilies: [XMPExportPreparedFamily] = []
+        var caseSensitivity = VolumeCaseSensitivity()
         preparedFamilies.reserveCapacity(families.count)
         for family in families {
             try Task.checkCancellation()
+            let caseSensitiveNames = try familyDirectory(family).map {
+                try caseSensitivity.namesAreCaseSensitive(in: $0)
+            } ?? true
             let names = family.members.map {
                 $0.mediaPath.url.lastPathComponent
             }.sorted()
@@ -273,22 +286,23 @@ enum XMPExportPlanner {
                     member.mediaPath.url.pathExtension.lowercased()
                 ) ? member.mediaPath.url.lastPathComponent : nil
             }.sorted()
-            let canonicalExists = family.canonicalSidecar.map(pathEntryExists)
-                ?? false
+            let canonicalExists = family.canonicalSidecar?.entryExists == true
             let selectedApplicationSidecars = try family
                 .extensionQualifiedSidecars.filter { packet in
                     guard let owner = try applicationPacketOwner(
                         packet,
-                        members: family.members
+                        members: family.members,
+                        caseSensitiveNames: caseSensitiveNames
                     ) else { return false }
                     return selectedPaths.contains(owner.mediaPath)
                 }
-            let selectedACRCompanionCount = try family
+            let selectedACRCompanionCount = family
                 .excludedACRCompanions.count(where: {
-                    try acrCompanion(
+                    acrCompanion(
                         $0,
                         belongsToAny: selectedPaths,
-                        among: family.members
+                        among: family.members,
+                        caseSensitiveNames: caseSensitiveNames
                     )
                 })
             let supportsSidecars = family.disposition != .unsupportedMedia
@@ -311,7 +325,8 @@ enum XMPExportPlanner {
                         packet -> XMPExportApplicationPacket? in
                         guard let owner = try applicationPacketOwner(
                             packet,
-                            members: family.members
+                            members: family.members,
+                            caseSensitiveNames: caseSensitiveNames
                         ) else { return nil }
                         return XMPExportApplicationPacket(
                             source: packet,
@@ -504,9 +519,36 @@ enum XMPExportPlanner {
             ?? UUID().uuidString
     }
 
+    /// One volume probe per directory. Both packet helpers below run once per
+    /// sidecar, so probing inside them cost a syscall for every packet in the
+    /// session.
+    private struct VolumeCaseSensitivity {
+        private var byDirectory: [XMPExactFileSystemPath: Bool] = [:]
+
+        mutating func namesAreCaseSensitive(
+            in directory: XMPExactFileSystemPath
+        ) throws -> Bool {
+            if let cached = byDirectory[directory] { return cached }
+            // Same conservative default as XMPSidecarResolver: assuming
+            // case-sensitivity only ever narrows which packets Louppe adopts.
+            let resolved = try directory.url.resourceValues(
+                forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+            ).volumeSupportsCaseSensitiveNames ?? true
+            byDirectory[directory] = resolved
+            return resolved
+        }
+    }
+
+    private static func familyDirectory(
+        _ family: XMPSidecarFamilyPlan
+    ) -> XMPExactFileSystemPath? {
+        family.members.first?.mediaPath.parent
+    }
+
     private static func applicationPacketOwner(
         _ packet: XMPExactFileSystemPath,
-        members: [XMPStemFamilyMember]
+        members: [XMPStemFamilyMember],
+        caseSensitiveNames: Bool
     ) throws -> XMPStemFamilyMember? {
         guard packet.lastComponentBytes.count > 4 else {
             throw PlannerError.ambiguousApplicationPacket(
@@ -514,14 +556,11 @@ enum XMPExportPlanner {
             )
         }
         let ownerBytes = Data(packet.lastComponentBytes.dropLast(4))
-        let caseSensitive = try packet.parent.url.resourceValues(
-            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
-        ).volumeSupportsCaseSensitiveNames ?? true
         let matches = members.filter {
             namesEqual(
                 $0.mediaPath.lastComponentBytes,
                 ownerBytes,
-                caseSensitive: caseSensitive
+                caseSensitive: caseSensitiveNames
             )
         }
         guard matches.count <= 1 else {
@@ -535,23 +574,21 @@ enum XMPExportPlanner {
     private static func acrCompanion(
         _ packet: XMPExactFileSystemPath,
         belongsToAny selectedPaths: Set<XMPExactFileSystemPath>,
-        among members: [XMPStemFamilyMember]
-    ) throws -> Bool {
+        among members: [XMPStemFamilyMember],
+        caseSensitiveNames: Bool
+    ) -> Bool {
         guard packet.lastComponentBytes.count > 4 else { return false }
         let ownerBytes = Data(packet.lastComponentBytes.dropLast(4))
-        let caseSensitive = try packet.parent.url.resourceValues(
-            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
-        ).volumeSupportsCaseSensitiveNames ?? true
         return members.contains { member in
             guard selectedPaths.contains(member.mediaPath) else { return false }
             return namesEqual(
                 member.mediaPath.lastComponentBytes,
                 ownerBytes,
-                caseSensitive: caseSensitive
+                caseSensitive: caseSensitiveNames
             ) || namesEqual(
                 deletingFinalExtension(member.mediaPath.lastComponentBytes),
                 ownerBytes,
-                caseSensitive: caseSensitive
+                caseSensitive: caseSensitiveNames
             )
         }
     }
@@ -578,12 +615,4 @@ enum XMPExportPlanner {
         return filename[..<dot]
     }
 
-    private static func pathEntryExists(
-        _ path: XMPExactFileSystemPath
-    ) -> Bool {
-        var info = Darwin.stat()
-        return path.withFileSystemRepresentation {
-            Darwin.lstat($0, &info) == 0
-        }
-    }
 }

@@ -15,8 +15,12 @@ struct XMPConflictResolverView: View {
         self.conflicts = conflicts
         self.onCancel = onCancel
         self.onApply = onApply
+        // A real plan emits one row per sidecar family, but this must not be
+        // the place a malformed internal list becomes a crash — SessionStore's
+        // mutation boundary already rejects duplicate and overlapping rows.
         _choices = State(initialValue: Dictionary(
-            uniqueKeysWithValues: conflicts.map { ($0.id, .skip) }
+            conflicts.map { ($0.id, .skip) },
+            uniquingKeysWith: { first, _ in first }
         ))
     }
 
@@ -46,7 +50,7 @@ struct XMPConflictResolverView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Menu("Apply to All…") {
-                    Button("Keep all separate") { applyToAll(.skip) }
+                    Button("Skip XMP for all") { applyToAll(.skip) }
                     Button("Use RAW metadata for all") { applyToAll(.useRAW) }
                     Button("Use JPEG metadata for all") { applyToAll(.useJPEG) }
                 }
@@ -85,6 +89,7 @@ struct XMPConflictResolverView: View {
             Text(conflictTitle(conflict))
                 .font(.headline)
 
+            metadataHeader
             if let raw {
                 metadataRow(raw, differing: conflict.differingDimensions)
             }
@@ -114,6 +119,24 @@ struct XMPConflictResolverView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var metadataHeader: some View {
+        HStack(spacing: 10) {
+            Text("Type")
+                .frame(width: 38, alignment: .leading)
+            Text("File")
+                .frame(width: 158, alignment: .leading)
+            Text("Decision")
+                .frame(width: 92, alignment: .leading)
+            Text("Stars")
+                .frame(width: 86, alignment: .leading)
+            Text("Color")
+                .frame(minWidth: 86, alignment: .leading)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+    }
+
     private func metadataRow(
         _ member: XMPSameStemConflictDescriptor.Member,
         differing: Set<XMPMetadataDimension>
@@ -124,17 +147,19 @@ struct XMPConflictResolverView: View {
                 .frame(width: 38, alignment: .leading)
             Text(member.filename)
                 .lineLimit(1)
-                .frame(minWidth: 130, alignment: .leading)
-            metadataValue(
-                decisionLabel(member.metadata.rating),
+                .truncationMode(.middle)
+                .frame(width: 158, alignment: .leading)
+                .help(member.filename)
+            decisionValue(
+                member.metadata.rating,
                 differs: differing.contains(.decision)
             )
-            metadataValue(
-                starsLabel(member.metadata.starRating),
+            starValue(
+                member.metadata.starRating,
                 differs: differing.contains(.stars)
             )
-            metadataValue(
-                colorLabel(member.metadata.colorLabel),
+            colorValue(
+                member.metadata.colorLabel,
                 differs: differing.contains(.color)
             )
         }
@@ -145,11 +170,46 @@ struct XMPConflictResolverView: View {
         )
     }
 
-    private func metadataValue(_ value: String, differs: Bool) -> some View {
-        Text(value)
-            .fontWeight(differs ? .semibold : .regular)
-            .foregroundStyle(differs ? .primary : .secondary)
-            .frame(minWidth: 72, alignment: .leading)
+    private func decisionValue(_ rating: Rating, differs: Bool) -> some View {
+        HStack(spacing: 5) {
+            RatingBadge(rating: rating, size: 13)
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+            Text(decisionLabel(rating))
+        }
+        .fontWeight(differs ? .semibold : .regular)
+        .foregroundStyle(differs ? Color.primary : Color.secondary)
+        .frame(width: 92, alignment: .leading)
+    }
+
+    private func starValue(
+        _ rating: StarRating?,
+        differs: Bool
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: rating == nil ? "star" : "star.fill")
+                .foregroundStyle(
+                    rating == nil ? Color.secondary : Color.louppeAccent
+                )
+                .accessibilityHidden(true)
+            Text(starsLabel(rating))
+        }
+        .fontWeight(differs ? .semibold : .regular)
+        .foregroundStyle(differs ? Color.primary : Color.secondary)
+        .frame(width: 86, alignment: .leading)
+    }
+
+    private func colorValue(
+        _ label: PhotoColorLabel?,
+        differs: Bool
+    ) -> some View {
+        HStack(spacing: 5) {
+            ColorLabelMark(state: label.map(PhotoItemColorLabelState.label) ?? .none)
+            Text(colorLabel(label))
+        }
+        .fontWeight(differs ? .semibold : .regular)
+        .foregroundStyle(differs ? Color.primary : Color.secondary)
+        .frame(minWidth: 86, alignment: .leading)
     }
 
     private func choiceBinding(

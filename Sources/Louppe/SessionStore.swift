@@ -2576,18 +2576,51 @@ final class SessionStore: ObservableObject {
         var stale: [String] = []
         var ineligible: [String] = []
         var skipped: [String] = []
-        var claimedDestinations = Set<String>()
+
+        // A real planner emits one disjoint row per sidecar family. Reject the
+        // whole affected row if malformed internal input repeats a conflict or
+        // makes two conflict IDs claim either physical file. Prevalidating all
+        // requests prevents order-dependent partial application or an
+        // opposite-winner pair from swapping metadata.
+        let duplicateConflictIDs = Set(
+            Dictionary(grouping: requests, by: { $0.conflict.id })
+                .compactMap { $0.value.count > 1 ? $0.key : nil }
+        )
+        var conflictIDsByMemberID: [String: Set<String>] = [:]
+        for request in requests where request.choice != .skip
+            && request.conflict.isStructurallyResolvable {
+            for member in request.conflict.members {
+                conflictIDsByMemberID[member.id, default: []]
+                    .insert(request.conflict.id)
+            }
+        }
+        let overlappingConflictIDs = Set(
+            conflictIDsByMemberID.values
+                .filter { $0.count > 1 }
+                .flatMap { $0 }
+        )
+        let ambiguousRequestIDs = duplicateConflictIDs
+            .union(overlappingConflictIDs)
+        var reportedIneligibleIDs = Set<String>()
 
         for request in requests {
             let conflict = request.conflict
+            if ambiguousRequestIDs.contains(conflict.id) {
+                if reportedIneligibleIDs.insert(conflict.id).inserted {
+                    ineligible.append(conflict.id)
+                }
+                continue
+            }
             guard request.choice != .skip else {
                 skipped.append(conflict.id)
                 continue
             }
-            guard conflict.resolutionEligibility == .eligible,
+            guard conflict.isStructurallyResolvable,
                   let raw = conflict.rawMember,
                   let jpeg = conflict.jpegMember else {
-                ineligible.append(conflict.id)
+                if reportedIneligibleIDs.insert(conflict.id).inserted {
+                    ineligible.append(conflict.id)
+                }
                 continue
             }
             guard conflict.sessionGeneration == scanGeneration else {
@@ -2596,8 +2629,7 @@ final class SessionStore: ObservableObject {
             }
             let sourceMember = request.choice == .useRAW ? raw : jpeg
             let destinationMember = request.choice == .useRAW ? jpeg : raw
-            guard claimedDestinations.insert(destinationMember.id).inserted,
-                  let sourceIndex = itemIndexByFileID[sourceMember.id],
+            guard let sourceIndex = itemIndexByFileID[sourceMember.id],
                   let destinationIndex = itemIndexByFileID[destinationMember.id],
                   items.indices.contains(sourceIndex),
                   items.indices.contains(destinationIndex),
@@ -2612,11 +2644,27 @@ final class SessionStore: ObservableObject {
             }
             let currentSource = sourceFile.metadataSnapshot
             let currentDestination = destinationFile.metadataSnapshot
-            guard currentSource == sourceMember.metadata,
+            guard let currentSourcePath = try? XMPExactFileSystemPath(
+                    url: sourceFile.url
+                  ),
+                  let currentDestinationPath = try? XMPExactFileSystemPath(
+                    url: destinationFile.url
+                  ),
+                  currentSourcePath == sourceMember.exactPath,
+                  currentDestinationPath == destinationMember.exactPath,
+                  currentSource == sourceMember.metadata,
                   currentDestination == destinationMember.metadata,
                   sourceFile.scannedIdentity == sourceMember.scannedIdentity,
                   destinationFile.scannedIdentity
                     == destinationMember.scannedIdentity else {
+                stale.append(conflict.id)
+                continue
+            }
+            guard currentSource.rating != currentDestination.rating
+                    || currentSource.starRating
+                        != currentDestination.starRating
+                    || currentSource.colorLabel
+                        != currentDestination.colorLabel else {
                 stale.append(conflict.id)
                 continue
             }
@@ -2747,10 +2795,10 @@ final class SessionStore: ObservableObject {
         let cancelFlag = XMPPublicationCancelFlag()
         xmpPublicationSessionToken = token
         xmpPublicationCancelFlag = cancelFlag
-        xmpPublicationState = .preflighting(
-            done: 0,
-            total: input.selectedMediaPaths.count
-        )
+        // The planner reports progress in sidecar families, and a RAW+JPEG
+        // pair is one family with two paths. Seeding the physical-file count
+        // here made the displayed total drop on the first callback.
+        xmpPublicationState = .preflighting(done: 0, total: 0)
         let progress: XMPPublicationPlanner.Progress = { [weak self] done, total in
             Task { @MainActor [weak self] in
                 guard let self,

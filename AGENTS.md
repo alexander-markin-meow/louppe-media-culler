@@ -51,8 +51,16 @@ with an older SDK: doing so compiles out current SwiftUI features such as macOS
 Run the focused logic tests first, then verify by launching with a folder:
 
 ```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift test --disable-keychain --filter HotkeyTests
 ./Tests/run_performance_checks.sh
 ```
+
+The complete `HotkeyTests` run is mandatory before **every** local app install,
+even when the change seems unrelated to keyboard handling. It exercises the
+installed-monitor path with real AppKit window events, including detaching and
+reattaching the session view; direct `handleKey` unit tests alone are not an
+adequate regression check.
 
 The last two checks use disposable files for a real Trash/restore round trip.
 In a restricted agent sandbox, rerun the script with permission to access the
@@ -179,7 +187,9 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   window/focus gates. Review letters remain active after ordinary controls,
   but keyboard-focused controls keep Space, Tab, Escape, and arrows; editing or
   selecting text and modal UI keep every key. Preserve VoiceOver, Fn/Globe,
-  Help, and unsupported modifier chords.
+  Help, and unsupported modifier chords. Its monitor token belongs to the
+  AppKit bridge attached to the live session window; do not move it back into
+  SwiftUI `@State` with independent `onAppear`/`onDisappear` callbacks.
 - One background gray everywhere: `Color.appBackground`. Don't introduce
   other panel shades; use `Divider()` lines to separate regions.
 - One accent color everywhere: `Color.louppeAccent`, the brand purple

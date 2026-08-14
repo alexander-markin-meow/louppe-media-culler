@@ -364,6 +364,7 @@ enum ExportWorker {
         _ items: [PhotoItem],
         to destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
+        preparedPlan: Plan? = nil,
         journalDirectory: URL? = nil,
         isCancelled: @escaping @Sendable () -> Bool = { false },
         fileCopier: @escaping FileCopier = { source, destination in
@@ -376,12 +377,12 @@ enum ExportWorker {
         var xmpSummary = xmpPlan.map(XMPResultSummary.init(plan:))
         let plan: Plan
         do {
-            plan = try makePlan(
-                for: items,
-                in: destination,
-                xmpPlan: xmpPlan,
-                mode: .copy
-            )
+            plan = try preparedPlan ?? makePlan(
+                    for: items,
+                    in: destination,
+                    xmpPlan: xmpPlan,
+                    mode: .copy
+                )
         } catch {
             return CopyResult(
                 copiedFiles: 0,
@@ -394,6 +395,19 @@ enum ExportWorker {
                     for: error,
                     phase: .planning
                 ),
+                xmpSummary: xmpSummary
+            )
+        }
+        if preparedPlan != nil,
+           !confirmedPlanTargetsRemainAvailable(plan) {
+            return CopyResult(
+                copiedFiles: 0,
+                failedPhotos: items.count,
+                inconsistentPhotos: 0,
+                cancelled: false,
+                journalFailure: false,
+                requiresRecovery: false,
+                failureMessage: "A destination name was claimed after confirmation. Review and confirm a fresh export plan.",
                 xmpSummary: xmpSummary
             )
         }
@@ -780,6 +794,7 @@ enum ExportWorker {
         _ items: [PhotoItem],
         to destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
+        preparedPlan: Plan? = nil,
         journalDirectory: URL? = nil,
         progress: @escaping Progress
     ) -> MoveResult {
@@ -828,12 +843,12 @@ enum ExportWorker {
         }
         let plan: Plan
         do {
-            plan = try makePlan(
-                for: items,
-                in: destination,
-                xmpPlan: xmpPlan,
-                mode: .move
-            )
+            plan = try preparedPlan ?? makePlan(
+                    for: items,
+                    in: destination,
+                    xmpPlan: xmpPlan,
+                    mode: .move
+                )
         } catch {
             return MoveResult(
                 movedItemIDs: [],
@@ -846,6 +861,19 @@ enum ExportWorker {
                     for: error,
                     phase: .planning
                 ),
+                xmpSummary: xmpSummary
+            )
+        }
+        if preparedPlan != nil,
+           !confirmedPlanTargetsRemainAvailable(plan) {
+            return MoveResult(
+                movedItemIDs: [],
+                movedFiles: 0,
+                failedPhotos: items.count,
+                inconsistentPhotos: 0,
+                journalFailure: false,
+                requiresRecovery: false,
+                failureMessage: "A destination name was claimed after confirmation. Review and confirm a fresh export plan.",
                 xmpSummary: xmpSummary
             )
         }
@@ -1660,6 +1688,18 @@ enum ExportWorker {
         return url.withUnsafeFileSystemRepresentation { path in
             guard let path else { return false }
             return Darwin.lstat(path, &info) == 0
+        }
+    }
+
+    /// The photographer confirmed these exact names. Replanning here would
+    /// execute a different operation than the one shown; beginning file work
+    /// would also create an avoidable rollback boundary. A later race remains
+    /// protected by every exclusive publish rename.
+    private static func confirmedPlanTargetsRemainAvailable(
+        _ plan: Plan
+    ) -> Bool {
+        plan.items.allSatisfy { item in
+            item.files.allSatisfy { !pathEntryExists($0.target) }
         }
     }
 

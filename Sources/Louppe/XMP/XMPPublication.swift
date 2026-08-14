@@ -7,6 +7,7 @@ enum XMPPublicationCategory: String, CaseIterable, Sendable {
     case alreadyCurrent
     case copyUnchangedApplicationPacket
     case unsupportedMedia
+    case crossFolderPair
     case sameStemMetadataConflict
     case destinationCollision
     case malformedXMP
@@ -22,6 +23,7 @@ enum XMPPublicationCategory: String, CaseIterable, Sendable {
         case .copyUnchangedApplicationPacket:
             return "Copy unchanged application packet"
         case .unsupportedMedia: return "Unsupported media"
+        case .crossFolderPair: return "Cross-folder pair sidecars skipped"
         case .sameStemMetadataConflict: return "Same-stem metadata conflict"
         case .destinationCollision: return "Destination collision"
         case .malformedXMP: return "Malformed XMP"

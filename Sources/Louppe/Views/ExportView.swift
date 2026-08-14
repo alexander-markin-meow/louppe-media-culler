@@ -1087,7 +1087,7 @@ struct ExportView: View {
         if outcome.recoveryRequired {
             return outcome.mode == .copy
                 ? "Securing copied files"
-                : "Restoring files for safety"
+                : "Securing moved files"
         }
         if outcome.cancelled { return "Copy stopped" }
         return outcome.isClean ? "Export complete" : "Export finished with problems"
@@ -1103,7 +1103,7 @@ struct ExportView: View {
                     + "Louppe kept a durable record of the interrupted copy and is preserving every verified completed file while checking the unfinished transfer. Wait for the recovery notice before starting another file operation."
             }
             return cause
-                + "Louppe kept a durable record of the interrupted move and is returning every affected original to its safe source state. Wait for the recovery notice before starting another file operation."
+                + "Louppe kept a durable record of the interrupted move. Completed groups stay at the destination; incomplete groups return to their safe source state. Wait for the recovery notice before starting another file operation."
         }
         let verb = outcome.mode == .copy ? "copied" : "moved"
         var text = "\(outcome.files) file\(outcome.files == 1 ? "" : "s") \(verb) to \(outcome.destination.lastPathComponent)"

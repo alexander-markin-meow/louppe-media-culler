@@ -119,9 +119,9 @@ final class XMPReviewFixTests: XCTestCase {
 
     /// A pair matched across subfolders belongs to one sidecar family per
     /// directory, and one collision suffix cannot name a shared packet for
-    /// two of them. The media still exports; the skipped packets must be
-    /// reported instead of silently disappearing from the confirmed plan.
-    func testPairSplitAcrossSubfoldersReportsUnplannedSidecarFamilies() async throws {
+    /// two of them. Preflight must exclude both packets explicitly so the
+    /// confirmed plan is exactly the plan the worker receives.
+    func testPairSplitAcrossSubfoldersIsSkippedDuringPreflight() async throws {
         let root = try temporaryDirectory("SplitFamily")
         let rawFolder = try directory("RAW", in: root)
         let jpegFolder = try directory("JPEG", in: root)
@@ -142,6 +142,9 @@ final class XMPReviewFixTests: XCTestCase {
             allowExternalLabelReplacement: false
         )
         XCTAssertEqual(xmp.families.count, 2)
+        XCTAssertEqual(xmp.count(.crossFolderPair), 2)
+        XCTAssertEqual(xmp.issueFamilies.count, 2)
+        XCTAssertTrue(xmp.familyByMediaPath.isEmpty)
 
         let plan = try ExportWorker.makePlan(
             for: [paired],
@@ -150,12 +153,99 @@ final class XMPReviewFixTests: XCTestCase {
             mode: .copy
         )
 
-        XCTAssertEqual(plan.unplannedSidecarFamilyCount, 2)
+        XCTAssertEqual(plan.unplannedSidecarFamilyCount, 0)
         XCTAssertEqual(plan.items.count, 1)
         XCTAssertEqual(
             plan.items[0].files.map(\.role),
             [.media, .media]
         )
+    }
+
+    /// Confirmation freezes destination names as well as XMP bytes. If a
+    /// different process claims one of those names before Start, the worker
+    /// must fail safely instead of silently executing a newly suffixed plan.
+    func testPreparedCopyPlanIsThePlanExecutedAfterConfirmation() async throws {
+        let root = try temporaryDirectory("ImmutableDestinationPlan")
+        let source = try directory("Source", in: root)
+        let destination = try directory("Destination", in: root)
+        let journals = root.appendingPathComponent("Journals")
+        let media = source.appendingPathComponent("FROZEN.NEF")
+        try Data("original media".utf8).write(to: media)
+        let selected = try item(media, stars: .four, color: .blue)
+        let xmp = try await XMPExportPlanner.prepare(
+            selected: [selected],
+            familyContextItems: [selected],
+            profile: .universal,
+            visibleDecisionKeywords: false,
+            allowExternalLabelReplacement: false
+        )
+        let preparedPlan = try ExportWorker.makePlan(
+            for: [selected],
+            in: destination,
+            xmpPlan: xmp,
+            mode: .copy
+        )
+        let mediaTarget = try XCTUnwrap(
+            preparedPlan.items[0].files.first(where: { $0.role == .media })
+        ).target
+        let lateContents = Data("late external file".utf8)
+        try lateContents.write(to: mediaTarget)
+
+        let result = ExportWorker.copy(
+            [selected],
+            to: destination,
+            xmpPlan: xmp,
+            preparedPlan: preparedPlan,
+            journalDirectory: journals
+        ) { _, _ in }
+
+        XCTAssertEqual(result.failedPhotos, 1)
+        XCTAssertFalse(result.requiresRecovery)
+        XCTAssertEqual(try Data(contentsOf: mediaTarget), lateContents)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(
+                at: destination,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent).sorted(),
+            [mediaTarget.lastPathComponent]
+        )
+        XCTAssertEqual(try Data(contentsOf: media), Data("original media".utf8))
+        XCTAssertFalse(
+            FileOperationJournal.hasPendingOperations(directory: journals)
+        )
+    }
+
+    /// A completed Move must leave the live session even when a later journal
+    /// cleanup still needs attention. Recovery can remain nonmodal for review,
+    /// so waiting for its rescan would leave a missing original on screen.
+    @MainActor
+    func testCompletedMoveLeavesSessionBeforeRecoveryFinishes() throws {
+        let root = try temporaryDirectory("MoveRecoverySession")
+        let journals = try directory("Journals", in: root)
+        let firstURL = root.appendingPathComponent("FIRST.NEF")
+        let secondURL = root.appendingPathComponent("SECOND.NEF")
+        try Data("first".utf8).write(to: firstURL)
+        try Data("second".utf8).write(to: secondURL)
+        let first = try item(firstURL)
+        let second = try item(secondURL)
+        let store = SessionStore(
+            operationJournalDirectory: journals,
+            automaticallyRecoversInterruptedOperations: false
+        )
+        store.items = [first, second]
+        store.phase = .ready
+        store.rebuildDerivedDataForTesting()
+
+        XCTAssertTrue(store.exportWillStart(mode: .move))
+        store.finishExport(
+            mode: .move,
+            movedIDs: [first.id],
+            requiresRecovery: true,
+            interruptionMessage: "Old XMP cleanup is still pending"
+        )
+
+        XCTAssertEqual(store.items.map(\.id), [second.id])
+        XCTAssertEqual(store.currentItem?.id, second.id)
     }
 
     /// SessionStore's mutation boundary already rejects duplicate rows. The

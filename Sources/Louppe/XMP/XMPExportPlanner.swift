@@ -32,6 +32,10 @@ struct XMPExportPreparationInput: Sendable {
     let selectedItemCount: Int
     let selectedPhysicalFileCount: Int
     let selectedMediaPaths: Set<XMPExactFileSystemPath>
+    /// Exact physical members for each selected Louppe item. Export keeps a
+    /// paired item atomic, so a pair spanning independent sidecar families
+    /// cannot safely publish both packets into one flat destination folder.
+    let selectedItemMediaPaths: [Set<XMPExactFileSystemPath>]
     let members: [XMPStemFamilyMember]
 
     init(
@@ -44,11 +48,14 @@ struct XMPExportPreparationInput: Sendable {
     ) throws {
         self.sessionGeneration = sessionGeneration
         selectedItemCount = selected.count
+        selectedItemMediaPaths = try selected.map { item in
+            try Set(item.individualFiles.map {
+                try XMPExactFileSystemPath(url: $0.url)
+            })
+        }
         let selectedFiles = selected.flatMap(\.individualFiles)
         selectedPhysicalFileCount = selectedFiles.count
-        selectedMediaPaths = try Set(selectedFiles.map {
-            try XMPExactFileSystemPath(url: $0.url)
-        })
+        selectedMediaPaths = Set(selectedItemMediaPaths.flatMap { $0 })
         members = try familyContextItems.flatMap { item in
             try item.individualFiles.map { file in
                 let snapshot = file.metadataSnapshot
@@ -118,7 +125,7 @@ struct XMPExportPreparedPlan: Equatable, Sendable {
 
     var familyByMediaPath: [XMPExactFileSystemPath: XMPExportPreparedFamily] {
         var result: [XMPExactFileSystemPath: XMPExportPreparedFamily] = [:]
-        for family in families {
+        for family in families where family.category != .crossFolderPair {
             for path in family.selectedMediaPaths { result[path] = family }
         }
         return result
@@ -427,10 +434,31 @@ enum XMPExportPlanner {
                 }
             }
         }
+        let familyIDBySelectedPath = Dictionary(
+            preparedFamilies.flatMap { family in
+                family.selectedMediaPaths.map { ($0, family.id) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let splitPairFamilyIDs = input.selectedItemMediaPaths.reduce(
+            into: Set<String>()
+        ) { result, itemPaths in
+            let familyIDs = Set(itemPaths.compactMap {
+                familyIDBySelectedPath[$0]
+            })
+            if familyIDs.count > 1 {
+                result.formUnion(familyIDs)
+            }
+        }
+        let exportableFamilies = preparedFamilies.map { family in
+            splitPairFamilyIDs.contains(family.id)
+                ? family.skippingCrossFolderPair()
+                : family
+        }
         return XMPExportPreparedPlan(
             selectedItemCount: input.selectedItemCount,
             physicalFileCount: input.selectedPhysicalFileCount,
-            families: preparedFamilies
+            families: exportableFamilies
         )
     }
 
@@ -615,4 +643,34 @@ enum XMPExportPlanner {
         return filename[..<dot]
     }
 
+}
+
+private extension XMPExportPreparedFamily {
+    /// A paired item is one rollback unit, but two source directories produce
+    /// two independent same-stem packets that cannot both occupy the flat
+    /// export destination. Keep the source inspection facts for confirmation,
+    /// while removing every payload so the exact operation plan contains only
+    /// the paired media.
+    func skippingCrossFolderPair() -> XMPExportPreparedFamily {
+        XMPExportPreparedFamily(
+            id: id,
+            filenames: filenames,
+            selectedMediaPaths: selectedMediaPaths,
+            allMediaPaths: allMediaPaths,
+            category: .crossFolderPair,
+            message: "This paired photo spans separate source folders. Its sidecar will stay at the source because both packets cannot safely share one destination name.",
+            changeCounts: .init(),
+            bestEffortFilenames: bestEffortFilenames,
+            excludedACRCompanionCount: excludedACRCompanionCount,
+            canonicalSourceWasPresent: canonicalSourceWasPresent,
+            recognizedApplicationPacketCount:
+                recognizedApplicationPacketCount,
+            canonicalSource: nil,
+            canonicalSourceIdentity: nil,
+            canonicalSourceDigest: nil,
+            finalPacket: nil,
+            applicationPackets: [],
+            sameStemConflict: nil
+        )
+    }
 }

@@ -2955,12 +2955,27 @@ final class SessionStore: ObservableObject {
         let expectedFolder = activeExportFolder
         activeExportFolder = nil
         activeFileOperation = nil
+        if mode == .move, !movedIDs.isEmpty {
+            removeCompletedMovedItems(
+                movedIDs,
+                expectedFolder: expectedFolder
+            )
+        }
         if requiresRecovery {
             operationRecoveryCause = interruptionMessage
             beginInterruptedOperationRecovery(rescanOnSuccess: true)
             return
         }
-        guard mode == .move, !movedIDs.isEmpty else { return }
+    }
+
+    /// Applies only worker-confirmed, pair-complete moves. An interrupted
+    /// operation can still need recovery for a later pair or for retiring an
+    /// old XMP source packet; those completed media must leave the live
+    /// session immediately even when that recovery remains nonblocking.
+    private func removeCompletedMovedItems(
+        _ movedIDs: [String],
+        expectedFolder: URL?
+    ) {
         // Belt over braces: the in-flight guards make a mid-move session swap
         // impossible, but never remove ids from an unrelated session.
         if let expectedFolder,

@@ -24,7 +24,8 @@ final class ExportManager: ObservableObject {
         /// file-safety boundary.
         let journalFailure: Bool
         /// Louppe has started reconciling an interrupted operation. Copy keeps
-        /// verified completed files; Move restores its conservative source state.
+        /// verified completed files; Move preserves completed groups and
+        /// restores incomplete ones to their conservative source state.
         let recoveryRequired: Bool
         /// Concrete worker failure retained for the export result and the
         /// recovery alert. Nil only when no useful cause was available.
@@ -180,7 +181,7 @@ final class ExportManager: ObservableObject {
             )
         } catch {
             state = .failed(
-                "XMP could not be prepared safely. \(error.localizedDescription)"
+                "The export could not be prepared safely. \(error.localizedDescription)"
             )
             return
         }
@@ -190,8 +191,15 @@ final class ExportManager: ObservableObject {
         let worker = Task.detached(priority: .userInitiated) {
             () -> XMPPreparationResult in
             do {
+                let xmpPlan = try await XMPExportPlanner.prepare(input)
                 return .prepared(
-                    try await XMPExportPlanner.prepare(input)
+                    xmpPlan,
+                    try ExportWorker.makePlan(
+                        for: selected,
+                        in: destination,
+                        xmpPlan: xmpPlan,
+                        mode: mode
+                    )
                 )
             } catch is CancellationError {
                 return .cancelled
@@ -207,13 +215,14 @@ final class ExportManager: ObservableObject {
             }
             self.xmpPreparationTask = nil
             switch result {
-            case .prepared(let plan):
+            case .prepared(let plan, let operationPlan):
                 self.pendingExport = PendingExport(
                     selected: selected,
                     sourceFolder: sourceFolder,
                     mode: mode,
                     destination: destination,
                     plan: plan,
+                    operationPlan: operationPlan,
                     xmpProfile: xmpProfile,
                     visibleDecisionKeywords: visibleDecisionKeywords,
                     allowExternalLabelReplacement:
@@ -232,7 +241,7 @@ final class ExportManager: ObservableObject {
             case .failed(let message):
                 self.pendingExport = nil
                 self.state = .failed(
-                    "XMP could not be prepared safely. \(message)"
+                    "The export could not be prepared safely. \(message)"
                 )
             }
         }
@@ -246,6 +255,7 @@ final class ExportManager: ObservableObject {
             selected: pendingExport.selected,
             mode: pendingExport.mode,
             xmpPlan: pendingExport.plan,
+            preparedPlan: pendingExport.operationPlan,
             to: pendingExport.destination,
             onOperationWillStart: pendingExport.onOperationWillStart,
             onOperationDidFinish: pendingExport.onOperationDidFinish
@@ -318,6 +328,7 @@ final class ExportManager: ObservableObject {
         selected: [PhotoItem],
         mode: ExportMode,
         xmpPlan: XMPExportPreparedPlan?,
+        preparedPlan: ExportWorker.Plan? = nil,
         to destination: URL,
         onOperationWillStart: @MainActor (_ mode: ExportMode) -> Bool,
         onOperationDidFinish: @escaping @MainActor (
@@ -327,7 +338,8 @@ final class ExportManager: ObservableObject {
             _ interruptionMessage: String?
         ) -> Void
     ) {
-        let totalFiles = selected.reduce(0) { $0 + $1.allURLs.count }
+        let totalFiles = preparedPlan?.totalFiles
+            ?? selected.reduce(0) { $0 + $1.allURLs.count }
         guard totalFiles > 0, onOperationWillStart(mode) else {
             state = .failed("Another file operation is already running. Wait for it to finish, then try again.")
             return
@@ -353,6 +365,7 @@ final class ExportManager: ObservableObject {
                     selected,
                     to: destination,
                     xmpPlan: xmpPlan,
+                    preparedPlan: preparedPlan,
                     isCancelled: { cancelFlag?.isSet ?? false },
                     progress: progress
                 ))
@@ -361,6 +374,7 @@ final class ExportManager: ObservableObject {
                 selected,
                 to: destination,
                 xmpPlan: xmpPlan,
+                preparedPlan: preparedPlan,
                 progress: progress
             ))
         }
@@ -395,7 +409,7 @@ final class ExportManager: ObservableObject {
                 // in-flight state here.
                 onOperationDidFinish(
                     .move,
-                    move.requiresRecovery ? [] : move.movedItemIDs,
+                    move.movedItemIDs,
                     move.requiresRecovery,
                     move.failureMessage
                 )
@@ -432,7 +446,7 @@ final class ExportManager: ObservableObject {
     }
 
     private enum XMPPreparationResult: Sendable {
-        case prepared(XMPExportPreparedPlan)
+        case prepared(XMPExportPreparedPlan, ExportWorker.Plan)
         case cancelled
         case failed(String)
     }
@@ -443,6 +457,7 @@ final class ExportManager: ObservableObject {
         let mode: ExportMode
         let destination: URL
         let plan: XMPExportPreparedPlan
+        let operationPlan: ExportWorker.Plan
         let xmpProfile: XMPApplicationProfile
         let visibleDecisionKeywords: Bool
         let allowExternalLabelReplacement: Bool

@@ -5,7 +5,7 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.7.0 (9) — 2026-08-07
+## 1.7.0 (9) — 2026-08-14
 
 - Added [louppe.eu](https://louppe.eu) to the About panel and README. PNG
   histograms now exclude fully transparent pixels instead of treating them as
@@ -77,11 +77,15 @@ release bundle.
   selection also stops the previous check instead of leaving several full scans
   running at once. Alongside that: a Move whose photos all transferred is now
   reported as moved even when the old sidecar beside the originals could not be
-  cleared afterwards, so those photos leave the session correctly; a RAW+JPEG
-  pair matched across two subfolders reports its skipped shared sidecars instead
-  of omitting them silently; the sidecar preflight no longer counts a packet it
-  failed to create as one that already exists; and its progress total no longer
-  jumps on the first update.
+  cleared afterwards, so those photos leave the session immediately even while
+  recovery remains available; a RAW+JPEG pair matched across two subfolders
+  reports both skipped shared sidecars before confirmation instead of changing
+  the plan after Start; Copy/Move executes the exact destination and XMP plan
+  that was confirmed and fails safely if another process claims a destination
+  name meanwhile; Move recovery now explains that complete groups remain at the
+  destination while incomplete groups return to the source; the sidecar
+  preflight no longer counts a packet it failed to create as one that already
+  exists; and its progress total no longer jumps on the first update.
 
 - Restored full-size Grid tiles after the native immediate-click surface made
   cells adopt the preview image's intrinsic size, and made pairing group an

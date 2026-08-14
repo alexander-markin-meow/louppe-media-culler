@@ -11,7 +11,10 @@ release bundle.
   histograms now exclude fully transparent pixels instead of treating them as
   black.
 
-- Established the audited parser foundation for future XMP interoperability.
+- Added XMP interoperability as a beta feature on top of an audited parser
+  foundation. Its supported mappings and round trips are extensively tested,
+  but photographers should verify a small batch in their own editing workflow
+  before relying on it for a large job.
   A pinned Adobe XMPCore Objective-C++/Swift bridge now round-trips synthetic
   Lightroom Classic, Bridge, Capture One, darktable, and universal packets
   without losing unrelated edits, keywords, or custom namespaces. The proof

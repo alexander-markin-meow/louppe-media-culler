@@ -129,9 +129,19 @@ else
     FEED_BUILD="$(xmllint --xpath \
         'string((//*[local-name()="enclosure"]/@*[local-name()="version"])[1])' \
         "$APPCAST" 2>/dev/null)"
+    if [[ -z "$FEED_BUILD" ]]; then
+        FEED_BUILD="$(xmllint --xpath \
+            'string((//*[local-name()="item"]/*[local-name()="version"])[1])' \
+            "$APPCAST" 2>/dev/null)"
+    fi
     FEED_MARKETING="$(xmllint --xpath \
         'string((//*[local-name()="enclosure"]/@*[local-name()="shortVersionString"])[1])' \
         "$APPCAST" 2>/dev/null)"
+    if [[ -z "$FEED_MARKETING" ]]; then
+        FEED_MARKETING="$(xmllint --xpath \
+            'string((//*[local-name()="item"]/*[local-name()="shortVersionString"])[1])' \
+            "$APPCAST" 2>/dev/null)"
+    fi
     FEED_URL="$(xmllint --xpath \
         'string((//*[local-name()="enclosure"]/@url)[1])' \
         "$APPCAST" 2>/dev/null)"

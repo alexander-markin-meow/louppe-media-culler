@@ -5,6 +5,14 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
+## 1.7.1 (10) — 2026-08-14
+
+- Fixed the release-quality gate so routine builds validate their own app and
+  archive without comparing a freshly created ZIP to the immutable signed
+  v1.7.0 download. The publishing preflight still requires the exact archive,
+  version, URL, length, and EdDSA signature to match before an update can ship.
+  No app behavior changed.
+
 ## 1.7.0 (9) — 2026-08-14
 
 - Added [louppe.eu](https://louppe.eu) to the About panel and README. PNG

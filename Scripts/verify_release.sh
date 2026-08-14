@@ -125,6 +125,12 @@ ITEM_COUNT="$(xmllint --xpath \
 if [[ "$ITEM_COUNT" == "0" ]]; then
     $PUBLISHING && fail "the publishing feed has no release enclosure."
     echo "Signed feed is intentionally empty; no unpublished local build will be offered."
+elif ! $PUBLISHING; then
+    # A normal source build creates a fresh ZIP whose container timestamps are
+    # not expected to match an immutable archive from an already-published
+    # feed. The loose and archived apps were verified independently above;
+    # exact feed/archive matching remains mandatory in --publishing mode.
+    echo "Signed feed contains published updates; routine build leaves it unchanged."
 else
     FEED_BUILD="$(xmllint --xpath \
         'string((//*[local-name()="enclosure"]/@*[local-name()="version"])[1])' \
@@ -167,11 +173,9 @@ else
     [[ -n "$FEED_SIGNATURE" ]] || fail "the release archive has no EdDSA signature."
     [[ "$MINIMUM_SYSTEM" == "$(plist_value "$EXTRACTED_APP" LSMinimumSystemVersion)" ]] \
         || fail "the feed minimum macOS version does not match the app."
-    if $PUBLISHING; then
-        "$SPARKLE_TOOLS/sign_update" \
-            --account "$ACCOUNT" \
-            --verify "$ARCHIVE" "$FEED_SIGNATURE"
-    fi
+    "$SPARKLE_TOOLS/sign_update" \
+        --account "$ACCOUNT" \
+        --verify "$ARCHIVE" "$FEED_SIGNATURE"
 fi
 
 echo "Release preflight passed for Louppe $MARKETING_VERSION ($BUILD_NUMBER)."

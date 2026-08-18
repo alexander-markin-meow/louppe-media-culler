@@ -25,6 +25,7 @@ swiftc \
     Sources/Louppe/ZoomViewport.swift \
     Sources/Louppe/VideoPlaybackController.swift \
     Sources/Louppe/DurableFileIO.swift \
+    Sources/Louppe/SourceOrganizationStorageSafety.swift \
     Sources/Louppe/FileOperationJournal.swift \
     Sources/Louppe/CleanUpWorker.swift \
     Sources/Louppe/ExportWorker.swift \

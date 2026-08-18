@@ -10,6 +10,7 @@ swiftc \
     -module-cache-path .build/video-checks/module-cache \
     -parse-as-library \
     Sources/Louppe/DurableFileIO.swift \
+    Sources/Louppe/SourceOrganizationStorageSafety.swift \
     Sources/Louppe/FileOperationJournal.swift \
     Sources/Louppe/Models.swift \
     Sources/Louppe/AppDateFormat.swift \

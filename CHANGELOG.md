@@ -50,6 +50,9 @@ release bundle.
   version, URL, length, and EdDSA signature to match before an update can ship.
   No app behavior changed.
 
+- Fixed the standalone native-video Quality check so it compiles the shared
+  source-organization storage-safety helper used by the file-operation journal.
+
 ## 1.7.0 (9) — 2026-08-14
 
 - Added [louppe.eu](https://louppe.eu) to the About panel and README. PNG

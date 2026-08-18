@@ -181,7 +181,7 @@ final class XMPNativeMetadataTests: XCTestCase {
         store.setColorLabel(.blue)
 
         let saved = try await waitForSidecar(in: photos) { session in
-            session.version == 5
+            session.version == SessionConstants.currentSchemaVersion
                 && session.entries.first?.stars == .four
                 && session.entries.first?.colorLabel == .blue
         }

@@ -144,6 +144,70 @@ final class DurableFileIOTests: XCTestCase {
         XCTAssertThrowsError(try DurableFileIO.syncDirectory(symlink))
     }
 
+    func testReducedDirectorySyncPolicyIgnoresOnlyUnsupportedErrors() {
+        XCTAssertTrue(DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+            POSIXError(.ENOTSUP),
+            policy: .allowUnsupported
+        ))
+        XCTAssertTrue(DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+            POSIXError(.EINVAL),
+            policy: .allowUnsupported
+        ))
+        XCTAssertFalse(DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+            POSIXError(.ENOTSUP),
+            policy: .required
+        ))
+        XCTAssertFalse(DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+            POSIXError(.EIO),
+            policy: .allowUnsupported
+        ))
+        XCTAssertFalse(DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+            CocoaError(.fileWriteUnknown),
+            policy: .allowUnsupported
+        ))
+    }
+
+    func testFoundationRenameRefusesCollisionAndPreservesIdentity() throws {
+        let root = try makeTemporaryDirectory(named: "FoundationRename")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.jpg")
+        let destination = root.appendingPathComponent("destination.jpg")
+        let sourceContents = Data("source".utf8)
+        let destinationContents = Data("destination".utf8)
+        try sourceContents.write(to: source)
+        try destinationContents.write(to: destination)
+        let sourceIdentity = try FileOperationJournal.captureIdentity(
+            at: source
+        )
+
+        XCTAssertThrowsError(
+            try DurableFileIO.renameWithoutOverwrite(
+                from: source,
+                to: destination,
+                strategy: .foundation
+            )
+        )
+        XCTAssertEqual(try Data(contentsOf: source), sourceContents)
+        XCTAssertEqual(try Data(contentsOf: destination), destinationContents)
+
+        try FileManager.default.removeItem(at: destination)
+        try DurableFileIO.renameWithoutOverwrite(
+            from: source,
+            to: destination,
+            strategy: .foundation
+        )
+        let destinationIdentity = try FileOperationJournal.captureIdentity(
+            at: destination
+        )
+        XCTAssertTrue(FileOperationJournal.identitiesMatch(
+            expected: sourceIdentity,
+            actual: destinationIdentity,
+            includeStatusChange: false
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try Data(contentsOf: destination), sourceContents)
+    }
+
     func testRegularFileUnlinkNeverRecursesOrFollowsSymlink() throws {
         let root = try makeTemporaryDirectory(named: "NonrecursiveUnlink")
         defer { try? FileManager.default.removeItem(at: root) }

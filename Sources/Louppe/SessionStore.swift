@@ -24,6 +24,7 @@ enum FileOperationKind: Equatable, Sendable {
     case cleanUp
     case exportCopy
     case exportMove
+    case organizeSource
 }
 
 enum SessionEmptyReason: Equatable, Sendable {
@@ -89,6 +90,12 @@ final class SessionStore: ObservableObject {
     // force a redundant second grid redraw after every resize/thumbnail zoom.
     private(set) var gridColumnCount = 1
     @Published var isExportPresented = false
+    @Published var isOrganizePresented = false
+    @Published private(set) var sourceOrganizationLaunchConfiguration:
+        SourceOrganizationConfiguration?
+    /// The searchable Command Palette. Its modal text field owns normal
+    /// typing while the photo session remains unchanged behind it.
+    @Published var isActionPalettePresented = false
     @Published var isFilterPresented = false
     @Published var isSortPresented = false
     /// Whether same-named RAW and JPEG files are reviewed and acted on as one
@@ -286,6 +293,8 @@ final class SessionStore: ObservableObject {
     /// definition so one route cannot mutate state behind another.
     var isSessionCommandPresentationActive: Bool {
         isExportPresented
+            || isOrganizePresented
+            || isActionPalettePresented
             || isFilterPresented
             || isSortPresented
             || isClearAllRatingsConfirmationPresented
@@ -298,6 +307,7 @@ final class SessionStore: ObservableObject {
     var isCleaningUp: Bool { activeFileOperation == .cleanUp }
     var isCopyingExport: Bool { activeFileOperation == .exportCopy }
     var isMovingExport: Bool { activeFileOperation == .exportMove }
+    var isOrganizingSource: Bool { activeFileOperation == .organizeSource }
     var isXMPPublicationRunning: Bool {
         switch xmpPublicationState {
         case .preflighting, .publishing, .cancelling:
@@ -324,6 +334,11 @@ final class SessionStore: ObservableObject {
             && !isNewFileOperationBlocked
             && !isLegacySessionMigrationConfirmationPresented
     }
+    var canOrganizeSource: Bool {
+        !items.isEmpty
+            && !isNewFileOperationBlocked
+            && !isLegacySessionMigrationConfirmationPresented
+    }
     var isExporting: Bool { isCopyingExport || isMovingExport }
 
     /// Retained for the complete filesystem transaction. This prevents idle
@@ -331,6 +346,10 @@ final class SessionStore: ObservableObject {
     /// macOS still sleeps when a MacBook lid is explicitly closed, so Copy's
     /// worker separately tolerates a removable source remount after wake.
     private var fileOperationPowerActivity: NSObjectProtocol?
+    /// Held only after choosing a palette action and before the native sheet
+    /// has fully dismissed. The follow-up always invokes an existing,
+    /// separately guarded SessionStore action.
+    private var actionPaletteFollowUp: (@MainActor () -> Void)?
     var isPreventingIdleSystemSleep: Bool {
         fileOperationPowerActivity != nil
     }
@@ -383,6 +402,7 @@ final class SessionStore: ObservableObject {
             previousItemID: String?,
             previousIndex: Int
         )
+        case organization(SourceOrganizationUndoRecord)
     }
     private var undoStack: [UndoStep] = []
     private var saveDebounce: DispatchWorkItem?
@@ -466,6 +486,18 @@ final class SessionStore: ObservableObject {
         let selectedItemIDs: Set<String>
     }
     private var scanResumeIdentity: ScanResumeIdentity?
+    private var nextScanResumeIdentityOverride: ScanResumeIdentity?
+    private var deferredOrganizationUndo: SourceOrganizationUndoRecord?
+    /// Current file ID -> byte-exact parent path as it existed before Louppe
+    /// first organized that physical file. Identity-based session restore
+    /// remaps these keys after every organizer rescan.
+    private var organizationOriginFolderPathBytesByFileID: [String: Data] = [:]
+    private var organizationGeneration: UInt64 = 0
+    @Published private(set) var organizationProgress:
+        SourceOrganizationProgress?
+    @Published private(set) var organizationOutcome:
+        SourceOrganizationOutcome?
+    @Published var organizationError: String?
     private var ratingTally = (yes: 0, no: 0, undecided: 0)
     private var mixedRatingCount = 0
     private var starTally: [StarRating: Int] = [:]
@@ -1298,13 +1330,19 @@ final class SessionStore: ObservableObject {
             showClippingWarnings = false
         }
         let preservesCurrentFilter = isSameFolder && !items.isEmpty
-        if preservesCurrentFilter {
+        if let override = nextScanResumeIdentityOverride,
+           override.folder == url.standardizedFileURL {
+            scanResumeIdentity = override
+            nextScanResumeIdentityOverride = nil
+        } else if preservesCurrentFilter {
+            nextScanResumeIdentityOverride = nil
             scanResumeIdentity = ScanResumeIdentity(
                 folder: url.standardizedFileURL,
                 currentItemID: currentItemID,
                 selectedItemIDs: selectionState.itemIDs
             )
         } else {
+            nextScanResumeIdentityOverride = nil
             scanResumeIdentity = nil
         }
         // Every scan establishes a fresh identity/revision access. A retained
@@ -1319,6 +1357,8 @@ final class SessionStore: ObservableObject {
         persistenceAccess = nil
         if !isSameFolder {
             retainedMissingSessionEntries = []
+            organizationOriginFolderPathBytesByFileID = [:]
+            deferredOrganizationUndo = nil
         }
         scanTask?.cancel()
         scanGeneration &+= 1
@@ -1532,6 +1572,10 @@ final class SessionStore: ObservableObject {
             $0.folder == url.standardizedFileURL ? $0 : nil
         }
         scanResumeIdentity = nil
+        nextScanResumeIdentityOverride = nil
+        organizationOriginFolderPathBytesByFileID = [:]
+        organizationGeneration &+= 1
+        organizationProgress = nil
         persistenceRejectedInvalidSnapshot = false
         guard let access = persistenceResult.access else {
             items = []
@@ -1555,6 +1599,7 @@ final class SessionStore: ObservableObject {
             displayName: String
         )] = []
         var consumedPersistedFileIDs = Set<Data>()
+        var restoredOrganizationOrigins: [String: Data] = [:]
         var relocatedSessionNeedsIdentityProof = false
         var unmatchedLegacyPhysicalFileCount = 0
         var legacySessionNeedsConfirmation = false
@@ -1578,6 +1623,10 @@ final class SessionStore: ObservableObject {
                                 colorChangedAt: match.value.colorChangedAt
                             )
                         )
+                        if let origin = match.value
+                            .organizationOriginFolderPathBytes {
+                            restoredOrganizationOrigins[file.id] = origin
+                        }
                     case .identityConflict(let conflict):
                         pendingIdentityConflicts.append((
                             persistedFileIDBytes:
@@ -1649,6 +1698,8 @@ final class SessionStore: ObservableObject {
             return
         }
         items = loaded
+        organizationOriginFolderPathBytesByFileID =
+            restoredOrganizationOrigins
         emptySessionReason = nil
         rebuildDerivedData()
         let firstUndecided =
@@ -1669,6 +1720,10 @@ final class SessionStore: ObservableObject {
             prefetchAroundCurrent()
         }
         phase = loaded.isEmpty ? .welcome : .ready
+        if !loaded.isEmpty, let organizationUndo = deferredOrganizationUndo {
+            deferredOrganizationUndo = nil
+            pushUndo(.organization(organizationUndo))
+        }
         if loaded.isEmpty {
             scanError = "No recognised photos or videos were found in that folder."
         } else if legacySessionNeedsConfirmation {
@@ -2152,6 +2207,9 @@ final class SessionStore: ObservableObject {
         if case .cleanUp = step {
             return !recoveryNeedsAttention
         }
+        if case .organization = step {
+            return !recoveryNeedsAttention
+        }
         return true
     }
 
@@ -2166,6 +2224,7 @@ final class SessionStore: ObservableObject {
         // restore. The step must remain available for a later retry, while a
         // newer rating step above it can still be undone immediately.
         if case .cleanUp = step, recoveryNeedsAttention { return }
+        if case .organization = step, recoveryNeedsAttention { return }
         _ = undoStack.popLast()
         // Undo moves the session back in time; a live selection would no
         // longer mean what the user built it for.
@@ -2243,6 +2302,8 @@ final class SessionStore: ObservableObject {
                 previousItemID: previousItemID,
                 previousIndex: previousIndex
             )
+        case .organization(let record):
+            undoSourceOrganization(record)
         }
     }
 
@@ -2345,6 +2406,42 @@ final class SessionStore: ObservableObject {
     func presentExport() {
         guard canExport else { return }
         isExportPresented = true
+    }
+
+    // MARK: - Command Palette
+
+    /// Opens the searchable action panel only from a settled review session.
+    /// `SessionView` owns its ⌘K routing, so this intentionally has no menu
+    /// key equivalent that could bypass text-focus and window checks.
+    func presentActionPalette() {
+        guard case .ready = phase,
+              !isFileOperationRunning,
+              !isSessionCommandPresentationActive else { return }
+        isActionPalettePresented = true
+    }
+
+    /// Close without running a palette action (Escape or the system Cancel
+    /// command).
+    func dismissActionPalette() {
+        actionPaletteFollowUp = nil
+        isActionPalettePresented = false
+    }
+
+    /// Native sheets must finish dismissing before they present a Filter
+    /// popover, Export sheet, confirmation, or folder picker. Queue the
+    /// existing action for the sheet's `onDismiss` rather than overlap two
+    /// modal presentations.
+    func dismissActionPalette(then action: @escaping @MainActor () -> Void) {
+        guard isActionPalettePresented else { return }
+        actionPaletteFollowUp = action
+        isActionPalettePresented = false
+    }
+
+    func finishActionPaletteDismissal() {
+        guard !isActionPalettePresented else { return }
+        let action = actionPaletteFollowUp
+        actionPaletteFollowUp = nil
+        action?()
     }
 
     /// Flushes a pending search debounce before presenting counts, ensuring
@@ -2539,6 +2636,285 @@ final class SessionStore: ObservableObject {
         saveSession()
         activeFileOperation = nil
         cleanUpProgress = nil
+    }
+
+    // MARK: - Source organization
+
+    func organizationScopeCount(for scope: SourceOrganizationScope) -> Int {
+        switch scope {
+        case .all: return items.count
+        case .filtered: return visibleIndices.count
+        case .selected: return effectiveSelection.count
+        }
+    }
+
+    var hasMultipleOrganizationTopLevelFolders: Bool {
+        var names = Set<String>()
+        var hasRootFiles = false
+        for file in items.flatMap(\.individualFiles) {
+            if let origin = organizationOriginFolderPathBytesByFileID[file.id] {
+                let components = origin.split(separator: UInt8(ascii: "/"))
+                if let first = components.first {
+                    names.insert(String(decoding: first, as: UTF8.self))
+                } else {
+                    hasRootFiles = true
+                }
+            } else if file.legacyPersistenceID.contains("/"),
+                      let first = file.legacyPersistenceID.split(
+                        separator: "/",
+                        omittingEmptySubsequences: true
+                      ).first {
+                names.insert(String(first))
+            } else {
+                hasRootFiles = true
+            }
+            if names.count + (hasRootFiles ? 1 : 0) > 1 { return true }
+        }
+        return false
+    }
+
+    func presentSourceOrganization(
+        configuration: SourceOrganizationConfiguration? = nil
+    ) {
+        guard canOrganizeSource else { return }
+        flushPendingFilter()
+        sourceOrganizationLaunchConfiguration = configuration
+        organizationOutcome = nil
+        organizationError = nil
+        isOrganizePresented = true
+    }
+
+    func sourceOrganizationPlanningSnapshot(
+        scope: SourceOrganizationScope
+    ) -> SourceOrganizationPlanningSnapshot? {
+        guard let sourceFolder, case .ready = phase else { return nil }
+        flushPendingFilter()
+        let indices: [Int]
+        switch scope {
+        case .all: indices = Array(items.indices)
+        case .filtered: indices = visibleIndices
+        case .selected: indices = effectiveSelection.sorted()
+        }
+        let selected = indices.compactMap {
+            items.indices.contains($0) ? items[$0] : nil
+        }
+        return SourceOrganizationPlanningSnapshot(
+            sourceFolder: sourceFolder,
+            selectedItems: selected,
+            familyContextItems: items,
+            knownOriginFolderPathBytesByFileID:
+                organizationOriginFolderPathBytesByFileID
+        )
+    }
+
+    func startSourceOrganization(_ plan: SourceOrganizationPlan) {
+        guard canOrganizeSource,
+              plan.canExecute,
+              let folder = sourceFolder,
+              folder.standardizedFileURL
+                == plan.sourceFolder.standardizedFileURL else { return }
+
+        var capturedNewOrigin = false
+        for (fileID, origin) in plan.originFolderPathBytesByFileID {
+            if organizationOriginFolderPathBytesByFileID[fileID] == nil {
+                organizationOriginFolderPathBytesByFileID[fileID] = origin
+                capturedNewOrigin = true
+            }
+        }
+        if capturedNewOrigin { markSessionChanged() }
+
+        organizationGeneration &+= 1
+        let generation = organizationGeneration
+        isOrganizePresented = true
+        organizationOutcome = nil
+        organizationError = nil
+        videoPlayback.stop()
+        activeFileOperation = .organizeSource
+        organizationProgress = SourceOrganizationProgress(
+            action: .organizing,
+            done: 0,
+            total: plan.workerPlan.totalFiles
+        )
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await self.persistCurrentSessionIfNeededBeforeDiscard()
+            guard self.organizationGeneration == generation,
+                  self.isOrganizingSource else { return }
+            guard self.currentSessionIsDurable else {
+                self.activeFileOperation = nil
+                self.organizationProgress = nil
+                self.organizationError = "Louppe could not save the current ratings safely. Retry Saving before organizing the source folder."
+                return
+            }
+            let reporter: SourceOrganizationWorker.Progress = {
+                [weak self] done, total in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.organizationGeneration == generation,
+                          self.isOrganizingSource else { return }
+                    self.organizationProgress = SourceOrganizationProgress(
+                        action: .organizing,
+                        done: done,
+                        total: total
+                    )
+                }
+            }
+            let journalDirectory = self.operationJournalDirectory
+            let task = Task.detached(priority: .userInitiated) {
+                SourceOrganizationWorker.organize(
+                    plan,
+                    journalDirectory: journalDirectory,
+                    progress: reporter
+                )
+            }
+            let result = await task.value
+            self.finishSourceOrganization(
+                result,
+                plan: plan,
+                generation: generation
+            )
+        }
+    }
+
+    private func finishSourceOrganization(
+        _ result: SourceOrganizationResult,
+        plan: SourceOrganizationPlan,
+        generation: UInt64
+    ) {
+        guard organizationGeneration == generation,
+              isOrganizingSource else { return }
+        activeFileOperation = nil
+        organizationProgress = nil
+        organizationOutcome = SourceOrganizationOutcome(
+            movedFiles: result.movedFiles,
+            failedItems: result.failedItems,
+            message: result.failureMessage,
+            wasUndo: false
+        )
+        if result.requiresRecovery {
+            organizationError = result.failureMessage
+                ?? "The interrupted organization needs recovery before another file operation."
+            operationRecoveryCause = organizationError
+            beginInterruptedOperationRecovery(rescanOnSuccess: true)
+            return
+        }
+        guard !result.movedItemIDs.isEmpty,
+              let folder = sourceFolder else {
+            if result.failedItems > 0 {
+                organizationError = result.failureMessage
+                    ?? "Some items could not be organized and stayed in their original folders."
+            }
+            return
+        }
+
+        let currentDestinationID = currentItemID.flatMap {
+            plan.destinationItemIDBySourceItemID[$0] ?? $0
+        }
+        let selectedDestinationIDs = Set(selectionState.itemIDs.map {
+            plan.destinationItemIDBySourceItemID[$0] ?? $0
+        })
+        nextScanResumeIdentityOverride = ScanResumeIdentity(
+            folder: folder.standardizedFileURL,
+            currentItemID: currentDestinationID,
+            selectedItemIDs: selectedDestinationIDs
+        )
+        deferredOrganizationUndo = result.undoRecord
+        beginOpeningFolder(folder)
+    }
+
+    private func undoSourceOrganization(
+        _ record: SourceOrganizationUndoRecord
+    ) {
+        guard !isNewFileOperationBlocked,
+              let folder = sourceFolder,
+              folder.standardizedFileURL
+                == record.sourceFolder.standardizedFileURL else { return }
+        organizationGeneration &+= 1
+        let generation = organizationGeneration
+        isOrganizePresented = true
+        organizationOutcome = nil
+        organizationError = nil
+        videoPlayback.stop()
+        activeFileOperation = .organizeSource
+        organizationProgress = SourceOrganizationProgress(
+            action: .restoring,
+            done: 0,
+            total: record.reversePlan.totalFiles
+        )
+        let reporter: SourceOrganizationWorker.Progress = {
+            [weak self] done, total in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.organizationGeneration == generation,
+                      self.isOrganizingSource else { return }
+                self.organizationProgress = SourceOrganizationProgress(
+                    action: .restoring,
+                    done: done,
+                    total: total
+                )
+            }
+        }
+        let currentItems = items
+        let journalDirectory = operationJournalDirectory
+        let resumeIdentity = ScanResumeIdentity(
+            folder: folder.standardizedFileURL,
+            currentItemID: currentItemID.map {
+                record.sourceItemIDByDestinationItemID[$0] ?? $0
+            },
+            selectedItemIDs: Set(selectionState.itemIDs.map {
+                record.sourceItemIDByDestinationItemID[$0] ?? $0
+            })
+        )
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = SourceOrganizationWorker.undo(
+                record,
+                currentItems: currentItems,
+                journalDirectory: journalDirectory,
+                progress: reporter
+            )
+            await self?.finishUndoSourceOrganization(
+                result,
+                record: record,
+                resumeIdentity: resumeIdentity,
+                generation: generation
+            )
+        }
+    }
+
+    private func finishUndoSourceOrganization(
+        _ result: SourceOrganizationResult,
+        record: SourceOrganizationUndoRecord,
+        resumeIdentity: ScanResumeIdentity,
+        generation: UInt64
+    ) {
+        guard organizationGeneration == generation,
+              isOrganizingSource else { return }
+        activeFileOperation = nil
+        organizationProgress = nil
+        organizationOutcome = SourceOrganizationOutcome(
+            movedFiles: result.movedFiles,
+            failedItems: result.failedItems,
+            message: result.failureMessage,
+            wasUndo: true
+        )
+        if result.requiresRecovery {
+            organizationError = result.failureMessage
+                ?? "The interrupted restore needs recovery before another file operation."
+            operationRecoveryCause = organizationError
+            beginInterruptedOperationRecovery(rescanOnSuccess: true)
+            return
+        }
+        guard result.movedFiles > 0, let folder = sourceFolder else {
+            organizationError = result.failureMessage
+                ?? "The previous folder layout could not be restored."
+            return
+        }
+        // Session persistence follows each physical file back to its previous
+        // ID. A normal same-folder scan is enough; no organizer undo is placed
+        // back on the new undo stack.
+        nextScanResumeIdentityOverride = resumeIdentity
+        beginOpeningFolder(folder)
     }
 
     // MARK: - Export
@@ -3578,7 +3954,9 @@ final class SessionStore: ObservableObject {
                     starsChangedAt: metadata.starsChangedAt,
                     colorLabel: metadata.colorLabel,
                     colorChangedAt: metadata.colorChangedAt,
-                    fileIdentity: file.scannedIdentity
+                    fileIdentity: file.scannedIdentity,
+                    organizationOriginFolderPathBytes:
+                        organizationOriginFolderPathBytesByFileID[file.id]
                 )
             }
         }
@@ -3697,6 +4075,9 @@ final class SessionStore: ObservableObject {
         visibleIndices = []
         isFilterPresented = false
         isSortPresented = false
+        isOrganizePresented = false
+        isActionPalettePresented = false
+        actionPaletteFollowUp = nil
         isGroupingEnabled = true
         phase = .welcome
     }

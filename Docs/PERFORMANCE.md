@@ -394,6 +394,10 @@ untouched. Obsolete path-keyed backups are considered only when both the
 sidecar and identity-keyed backup are absent; their legacy entries still use
 the explicit confirmation because that backup is not owned by the folder, and
 schema-4 entries still require a physical identity match.
+Schema 5 adds independent star and color dimensions. Schema 6 stores each
+physical file's byte-exact parent path from before its first Source
+Organization, allowing a later priority change to rebuild from that original
+structure instead of nesting the previous generated layout.
 Folder traversal has no arbitrary depth cutoff; symbolic-link directories and
 package descendants are skipped explicitly, so deep archives remain complete
 without following loops.
@@ -427,7 +431,8 @@ could not be restored.
 
 ## Process-crash file-operation journal
 
-Copy, Move, Trash, and Trash undo create an immutable plan in
+Copy, Move, Source Organization and its undo, Trash, and Trash undo create an
+immutable plan in
 `~/Library/Application Support/Louppe/Operations/` before their first
 filesystem change. The plan directory is activated with one atomic rename.
 Each file then owns an independent checkpoint under `steps/`; advancing file
@@ -544,9 +549,10 @@ the journal and enters conservative recovery instead of claiming success.
 
 `SessionStore` runs recovery off-main. While the pass is actively reconciling
 files, conflicting transitions remain blocked. If a journal remains unresolved,
-it becomes nonmodal attention: only new Copy, Move, Clean Up/Trash, and Trash
-undo wait. Reviewing, rating, navigation, opening/closing/rescanning folders,
-saving, updating, and Quit remain available, and a requested launch folder is
+it becomes nonmodal attention: only new Copy, Move, Source Organization, Clean
+Up/Trash, and Trash undo wait. Reviewing, rating, navigation,
+opening/closing/rescanning folders, saving, updating, and Quit remain available,
+and a requested launch folder is
 still opened. Reconnection is suggested only when the report actually
 identifies an unavailable volume. After recovery of an operation that may have
 moved source files, only that exact currently open folder is rescanned. Copy
@@ -592,8 +598,8 @@ its merged destination is durable; a packet shared with an unselected same-stem
 member is copied and retained at the source.
 
 `SessionStore.activeFileOperation` is the only in-flight authority for Clean
-Up, Copy, and Move. It blocks folder switching, rescan, rating/selection
-mutation, undo, Clear All Ratings, conflicting operations, updater
+Up, Copy, Move, and Source Organization. It blocks folder switching, rescan,
+rating/selection mutation, undo, Clear All Ratings, conflicting operations, updater
 installation, and Quit. The same state retains one `ProcessInfo` activity with
 `idleSystemSleepDisabled` for the complete transaction (recovery owns it too),
 so automatic system sleep cannot strand removable-media I/O; display sleep is
@@ -622,6 +628,52 @@ smaller race where the resolved directory itself is replaced after preflight.
 The important-usage capacity API's transient zero is treated as ambiguous and
 cross-checked with `statfs`, preventing File Provider-managed destinations from
 being falsely reported as full.
+
+## Source Organization lifecycle
+
+Source Organization follows the same snapshot → background I/O → main-actor
+apply boundary as Export. `SourceOrganizationPlanner` receives an immutable
+All, Filtered, or Selected item snapshot plus every in-session sidecar-family
+member. It builds the complete hierarchy preview from the checked level order,
+reserves every exact destination, and blocks the whole operation when a target
+already exists, two source files converge, a shared XMP family would split, or
+a path component is unsafe. It never invents collision suffixes. Preview work
+runs off-main and checks a shared cancellation flag throughout, so changing
+scope or level order in a large folder does not leave stale plans consuming
+CPU or filesystem reads.
+
+The Date level uses `AppDateFormat`: Full date is the Mac's effective short
+date, including a custom format, while Year and month and Year derive their
+field order, widths, and separator from that same pattern. Existing folder uses
+the schema-6 byte-exact original parent path at top-level or full depth. When
+it is unchecked, files flatten into the other chosen levels; previous folders
+are deliberately retained, even if they become empty.
+
+`SourceOrganizationWorker` activates an `.organizeSource` journal before it
+creates destination directories or moves a file. It revalidates the stable
+opened-folder identity, creates only normal descendant directories through the
+exact POSIX path boundary, then executes the confirmed `ExportWorker.Plan`
+with exclusive atomic renames. Grouped RAW+JPEG files and their eligible XMP
+packets form one rollback group. `.acr`, unsupported, hidden, and unrelated
+files remain untouched. A successful result rescans the same source folder and
+places one `.restoreOrganization` plan on the ordinary session undo stack;
+⌘Z runs that reverse journal and rescans again. Neither direction removes
+directories. Crash recovery treats completed groups as committed at their
+destination and restores only incomplete groups, matching Export Move.
+
+The plan records the source filesystem type. ExFAT uses one deliberately
+scoped reduced-durability policy because macOS may return `EINVAL`, `ENOTSUP`,
+or `ENOTTY` when syncing a directory descriptor and does not implement
+`RENAME_EXCL`. The confirmation sheet warns before enabling that policy. After
+journal activation and before moving media, the worker creates two random
+operation-owned probe files and proves Foundation's documented move contract
+refuses an occupied destination. It then proves a move to a free destination
+preserves the exact inode and bytes before removing the probes. Only ExFAT
+Source Organization, its rollback, undo, and recovery use that Foundation
+no-overwrite path; source and destination devices are rechecked before every
+move and the existing post-move identity checks remain mandatory. Only
+unsupported directory-sync results are tolerated. APFS and every
+non-organization operation retain `RENAME_EXCL` and required directory syncing.
 
 ## Prepared session index
 

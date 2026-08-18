@@ -796,16 +796,22 @@ enum ExportWorker {
         xmpPlan: XMPExportPreparedPlan? = nil,
         preparedPlan: Plan? = nil,
         journalDirectory: URL? = nil,
+        journalKind: FileOperationJournal.Kind = .exportMove,
+        directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
+        renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
+            .exclusivePOSIX,
+        prepareDestinationDirectories: @escaping () throws -> Void = {},
         progress: @escaping Progress
     ) -> MoveResult {
         var xmpSummary = xmpPlan.map(XMPResultSummary.init(plan:))
         // Defense in depth: the dialog preflight explains this limitation,
         // while the worker independently refuses any caller that would make
         // FileManager perform an implicit, uncheckpointed copy/delete move.
-        guard ExportDestinationValidator.moveCanUseAtomicRename(
-            items: items,
-            destination: destination
-        ) else {
+        guard journalKind != .exportMove
+                || ExportDestinationValidator.moveCanUseAtomicRename(
+                    items: items,
+                    destination: destination
+                ) else {
             return MoveResult(
                 movedItemIDs: [],
                 movedFiles: 0,
@@ -895,7 +901,7 @@ enum ExportWorker {
         let writer: FileOperationJournal.Writer
         do {
             writer = try FileOperationJournal.start(
-                kind: .exportMove,
+                kind: journalKind,
                 seeds: plan.items.flatMap { item in
                     item.files.map {
                         FileOperationJournal.Seed(
@@ -929,12 +935,31 @@ enum ExportWorker {
                 xmpSummary: xmpSummary
             )
         }
+        do {
+            try prepareDestinationDirectories()
+        } catch {
+            let journalFinalized = FileOperationJournal.finalize(
+                writer,
+                operationIsConsistent: true
+            )
+            return MoveResult(
+                movedItemIDs: [],
+                movedFiles: 0,
+                failedPhotos: items.count,
+                inconsistentPhotos: 0,
+                journalFailure: !journalFinalized,
+                requiresRecovery: !journalFinalized,
+                failureMessage: "No photos were moved. \(error.localizedDescription)",
+                xmpSummary: xmpSummary
+            )
+        }
         var reporter = ThrottledProgress(total: plan.totalFiles, callback: progress)
         var movedItemIDs: [String] = []
         var movedFiles = 0
         var failedPhotos = 0
         var inconsistentPhotos = 0
         var journalFailure = false
+        var failureMessage: String?
         var globalFileIndex = 0
 
         itemLoop: for (itemOffset, item) in plan.items.enumerated() {
@@ -954,10 +979,11 @@ enum ExportWorker {
                 )
                 // "Moving" a file into the folder it already lives in would
                 // only rename the original with a collision suffix.
-                if ExportDestinationValidator.directoriesReferToSameEntry(
-                    file.source.deletingLastPathComponent(),
-                    destination
-                ) {
+                if journalKind == .exportMove,
+                   ExportDestinationValidator.directoriesReferToSameEntry(
+                       file.source.deletingLastPathComponent(),
+                       destination
+                   ) {
                     failed = true
                     reporter.advance()
                     touchedForItem.append(touched)
@@ -966,6 +992,8 @@ enum ExportWorker {
                 guard let temporary = writer.temporaryURL(at: fileIndex) else {
                     journalFailure = true
                     failed = true
+                    failureMessage = failureMessage
+                        ?? "Louppe could not reserve a safe temporary path for \(file.source.lastPathComponent)."
                     touchedForItem.append(touched)
                     reporter.advance()
                     break
@@ -975,6 +1003,11 @@ enum ExportWorker {
                 } catch {
                     journalFailure = true
                     failed = true
+                    failureMessage = failureMessage ?? moveFailureMessage(
+                        for: error,
+                        phase: .safetyRecord,
+                        filename: file.source.lastPathComponent
+                    )
                 }
                 if !failed {
                     if let preparedContents = file.preparedContents {
@@ -1018,21 +1051,29 @@ enum ExportWorker {
                                 }
                             }
                             failed = true
+                            failureMessage = failureMessage
+                                ?? moveFailureMessage(
+                                    for: error,
+                                    phase: .staging,
+                                    filename: file.source.lastPathComponent
+                                )
                         }
                     } else {
                         var renamedToTemporary = false
                         do {
                             try writer.requireUnchangedSource(at: fileIndex)
-                            try atomicExclusiveRename(
+                            try DurableFileIO.renameWithoutOverwrite(
                                 from: file.source,
-                                to: temporary
+                                to: temporary,
+                                strategy: renameStrategy
                             )
                             renamedToTemporary = true
                             touched.location = .temporary(temporary)
                             try DurableFileIO.syncRenameDirectories(
                                 from: file.source,
                                 to: temporary,
-                                fullSync: true
+                                fullSync: true,
+                                policy: directorySyncPolicy
                             )
                             touched.identity = try verifiedIdentity(
                                 matching: writer.plannedIdentity(at: fileIndex),
@@ -1050,6 +1091,12 @@ enum ExportWorker {
                                 touched.identity = reconciled.identity
                             }
                             failed = true
+                            failureMessage = failureMessage
+                                ?? moveFailureMessage(
+                                    for: error,
+                                    phase: .staging,
+                                    filename: file.source.lastPathComponent
+                                )
                         }
                     }
                 }
@@ -1079,6 +1126,11 @@ enum ExportWorker {
                     } catch {
                         journalFailure = true
                         failed = true
+                        failureMessage = failureMessage ?? moveFailureMessage(
+                            for: error,
+                            phase: .safetyRecord,
+                            filename: file.source.lastPathComponent
+                        )
                     }
                 }
                 if !failed {
@@ -1092,16 +1144,18 @@ enum ExportWorker {
                             at: temporary,
                             includeStatusChange: file.role != .preparedXMP
                         )
-                        try atomicExclusiveRename(
+                        try DurableFileIO.renameWithoutOverwrite(
                             from: temporary,
-                            to: file.target
+                            to: file.target,
+                            strategy: renameStrategy
                         )
                         renamedToDestination = true
                         touched.location = .destination
                         try DurableFileIO.syncRenameDirectories(
                             from: temporary,
                             to: file.target,
-                            fullSync: true
+                            fullSync: true,
+                            policy: directorySyncPolicy
                         )
                         touched.identity = try verifiedIdentity(
                             matching: identity,
@@ -1129,6 +1183,11 @@ enum ExportWorker {
                             touched.location = .ambiguous
                         }
                         failed = true
+                        failureMessage = failureMessage ?? moveFailureMessage(
+                            for: error,
+                            phase: .publishing,
+                            filename: file.source.lastPathComponent
+                        )
                     }
                 }
                 if !failed {
@@ -1151,6 +1210,11 @@ enum ExportWorker {
                     } catch {
                         journalFailure = true
                         failed = true
+                        failureMessage = failureMessage ?? moveFailureMessage(
+                            for: error,
+                            phase: .safetyRecord,
+                            filename: file.source.lastPathComponent
+                        )
                     }
                 }
                 touchedForItem.append(touched)
@@ -1172,7 +1236,12 @@ enum ExportWorker {
                             temporary: writer.temporaryURL(at: touched.index),
                             fileManager: fm
                         )
-                        : rollbackMove(touched, fileManager: fm)
+                        : rollbackMove(
+                            touched,
+                            fileManager: fm,
+                            directorySyncPolicy: directorySyncPolicy,
+                            renameStrategy: renameStrategy
+                        )
                     if !rolledBack {
                         rollbackFailed = true
                     } else {
@@ -1249,7 +1318,8 @@ enum ExportWorker {
             journalFailure: journalFailure,
             requiresRecovery: inconsistentPhotos > 0 || !journalFinalized,
             failureMessage: failedPhotos > 0 || journalFailure
-                ? "A source, destination, or file-safety checkpoint became unavailable during the move"
+                ? failureMessage
+                    ?? "A source, destination, or file-safety checkpoint became unavailable during the move"
                 : nil,
             xmpSummary: xmpSummary
         )
@@ -1504,7 +1574,10 @@ enum ExportWorker {
 
     private static func rollbackMove(
         _ touched: TouchedExportFile,
-        fileManager: FileManager
+        fileManager: FileManager,
+        directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
+        renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
+            .exclusivePOSIX
     ) -> Bool {
         let movedURL: URL?
         switch touched.location {
@@ -1523,7 +1596,9 @@ enum ExportWorker {
             from: movedURL,
             to: touched.file.source,
             expectedIdentity: identity,
-            fileManager: fileManager
+            fileManager: fileManager,
+            directorySyncPolicy: directorySyncPolicy,
+            renameStrategy: renameStrategy
         )
     }
 
@@ -1534,7 +1609,10 @@ enum ExportWorker {
         from movedURL: URL,
         to source: URL,
         expectedIdentity: FileOperationJournal.FileIdentity? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
+        renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
+            .exclusivePOSIX
     ) -> Bool {
         guard pathEntryExists(movedURL),
               !pathEntryExists(source) else {
@@ -1548,11 +1626,16 @@ enum ExportWorker {
                     includeStatusChange: true
                 )
             }
-            try atomicExclusiveRename(from: movedURL, to: source)
+            try DurableFileIO.renameWithoutOverwrite(
+                from: movedURL,
+                to: source,
+                strategy: renameStrategy
+            )
             try DurableFileIO.syncRenameDirectories(
                 from: movedURL,
                 to: source,
-                fullSync: true
+                fullSync: true,
+                policy: directorySyncPolicy
             )
             if let expectedIdentity {
                 try requireIdentity(
@@ -1850,6 +1933,43 @@ enum ExportWorker {
         case readingSource
         case publishingDestination
         case safetyRecord
+    }
+
+    private enum MoveFailurePhase {
+        case staging
+        case publishing
+        case safetyRecord
+    }
+
+    private static func moveFailureMessage(
+        for error: Error,
+        phase: MoveFailurePhase,
+        filename: String
+    ) -> String {
+        let chain = errorChain(error)
+        let posixCodes = Set(chain.compactMap { candidate -> Int? in
+            candidate.domain == NSPOSIXErrorDomain ? candidate.code : nil
+        })
+        if posixCodes.contains(Int(EEXIST)) {
+            return "The destination for \(filename) was claimed after confirmation. Louppe stopped without overwriting it."
+        }
+        if !posixCodes.isDisjoint(with: [Int(ENOTSUP), Int(EOPNOTSUPP)]) {
+            return "This storage does not support the collision-safe rename needed to move \(filename)."
+        }
+        if posixCodes.contains(Int(ENOSPC)) {
+            return "The storage ran out of free space while moving \(filename)."
+        }
+        if !posixCodes.isDisjoint(with: [Int(EACCES), Int(EPERM), Int(EROFS)]) {
+            return "The storage stopped allowing changes while Louppe was moving \(filename)."
+        }
+        switch phase {
+        case .staging:
+            return "Louppe could not safely begin moving \(filename): \(error.localizedDescription)"
+        case .publishing:
+            return "Louppe could not place \(filename) at its confirmed destination: \(error.localizedDescription)"
+        case .safetyRecord:
+            return "Louppe could not update the file-safety record for \(filename): \(error.localizedDescription)"
+        }
     }
 
     private static func copyFailureMessage(

@@ -12,6 +12,7 @@ swiftc \
     -D LOUPPE_TESTING \
     -parse-as-library \
     Sources/Louppe/Models.swift \
+    Sources/Louppe/XMP/XMPExactFileSystemPath.swift \
     Sources/Louppe/PreparedSessionIndex.swift \
     Sources/Louppe/SelectionState.swift \
     Sources/Louppe/AppDateFormat.swift \
@@ -28,8 +29,11 @@ swiftc \
     Sources/Louppe/CleanUpWorker.swift \
     Sources/Louppe/ExportWorker.swift \
     Sources/Louppe/ExportDestinationValidator.swift \
+    Sources/Louppe/SourceOrganization.swift \
+    Sources/Louppe/SourceOrganizationWorker.swift \
     Sources/Louppe/SessionPersistence.swift \
     Tests/PerformanceChecks/XMPPublicationStubs.swift \
+    Sources/Louppe/XMP/XMPSidecarResolver.swift \
     Sources/Louppe/SessionStore.swift \
     Tests/PerformanceChecks/main.swift \
     -o .build/performance-checks/LouppePerformanceChecks

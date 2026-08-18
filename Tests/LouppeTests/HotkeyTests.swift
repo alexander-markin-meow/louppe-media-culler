@@ -169,6 +169,48 @@ final class HotkeyTests: XCTestCase {
         )
     }
 
+    func testSessionEventSurvivesTransientMissingKeyWindow() {
+        let sessionWindow = NSWindow()
+        let otherWindow = NSWindow()
+
+        let exactEventContext = SessionKeyRoutingContext(
+            eventWindow: sessionWindow,
+            eventWindowNumber: sessionWindow.windowNumber,
+            sessionWindow: sessionWindow,
+            keyWindow: nil,
+            modalWindow: nil
+        )
+        XCTAssertTrue(exactEventContext.sessionOwnsEvent)
+
+        let numberOnlyContext = SessionKeyRoutingContext(
+            eventWindow: nil,
+            eventWindowNumber: sessionWindow.windowNumber,
+            sessionWindow: sessionWindow,
+            keyWindow: nil,
+            modalWindow: nil
+        )
+        XCTAssertTrue(numberOnlyContext.sessionOwnsEvent)
+
+        let inactiveNumberOnlyContext = SessionKeyRoutingContext(
+            eventWindow: nil,
+            eventWindowNumber: sessionWindow.windowNumber,
+            sessionWindow: sessionWindow,
+            keyWindow: nil,
+            modalWindow: nil,
+            applicationIsActive: false
+        )
+        XCTAssertFalse(inactiveNumberOnlyContext.sessionOwnsEvent)
+
+        let otherKeyWindowContext = SessionKeyRoutingContext(
+            eventWindow: sessionWindow,
+            eventWindowNumber: sessionWindow.windowNumber,
+            sessionWindow: sessionWindow,
+            keyWindow: otherWindow,
+            modalWindow: nil
+        )
+        XCTAssertFalse(otherKeyWindowContext.sessionOwnsEvent)
+    }
+
     func testHostedSwiftUIButtonFocusStillAllowsCullingHotkeys() throws {
         let hostingView = NSHostingView(
             rootView: Button("Focused control") {}
@@ -290,7 +332,110 @@ final class HotkeyTests: XCTestCase {
         Self.retainedHostingWindows.append(window)
     }
 
+    func testWindowRootFocusDoesNotInheritNestedSelectableText() {
+        let hostingView = NSHostingView(
+            rootView: VStack {
+                Text("Selectable metadata")
+                    .textSelection(.enabled)
+                Button("Ordinary control") {}
+            }
+            .frame(width: 260, height: 100)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(window.makeFirstResponder(hostingView))
+        XCTAssertTrue(window.firstResponder === window.contentView)
+        let context = SessionKeyRoutingContext(
+            eventWindow: window,
+            eventWindowNumber: window.windowNumber,
+            sessionWindow: window,
+            keyWindow: window,
+            modalWindow: nil
+        )
+        XCTAssertFalse(context.focusedResponderOwnsText)
+        XCTAssertFalse(context.focusedResponderOwnsNavigation)
+        XCTAssertTrue(context.acceptsReviewShortcuts)
+        XCTAssertTrue(context.acceptsNavigationShortcuts)
+
+        let store = readyStore(itemCount: 2, firstItemIsVideo: false)
+        let view = SessionView(store: store)
+        XCTAssertTrue(
+            view.handleKey(
+                keyEvent(code: 3, characters: "f"),
+                context: context
+            )
+        )
+        XCTAssertEqual(store.items[0].rating, .yes)
+        XCTAssertEqual(store.currentIndex, 1)
+
+        window.orderOut(nil)
+        Self.retainedHostingWindows.append(window)
+    }
+
 #if DEBUG
+    func testRootPhaseTransitionReinstallsLiveSessionMonitor() {
+        _ = NSApplication.shared
+        let baselineMonitorCount =
+            SessionKeyMonitorTestProbe.activeMonitorCount
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 620)
+        let host = NSHostingView(rootView: RootView(store: store))
+        host.frame = frame
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        SessionKeyMonitorTestProbe.overrideKeyWindow(with: window)
+        defer {
+            window.contentView = nil
+            window.orderOut(nil)
+            SessionKeyMonitorTestProbe.overrideKeyWindow(with: nil)
+        }
+
+        XCTAssertTrue(waitForCondition {
+            SessionKeyMonitorTestProbe.activeMonitorCount
+                == baselineMonitorCount + 1
+        })
+
+        store.isOrganizePresented = true
+        XCTAssertTrue(waitForCondition { window.attachedSheet != nil })
+        XCTAssertEqual(
+            SessionKeyMonitorTestProbe.activeMonitorCount,
+            baselineMonitorCount + 1
+        )
+        store.phase = .scanning(found: 1)
+        XCTAssertTrue(waitForCondition {
+            SessionKeyMonitorTestProbe.activeMonitorCount
+                == baselineMonitorCount
+        })
+        XCTAssertTrue(store.isOrganizePresented)
+        XCTAssertTrue(waitForCondition { window.attachedSheet == nil })
+        store.phase = .ready
+        XCTAssertTrue(waitForCondition {
+            SessionKeyMonitorTestProbe.activeMonitorCount
+                == baselineMonitorCount + 1
+        })
+        XCTAssertTrue(waitForCondition { window.attachedSheet != nil })
+        store.isOrganizePresented = false
+        XCTAssertTrue(waitForCondition { window.attachedSheet == nil })
+
+        sendKeyEvent(code: 3, characters: "f", in: window)
+        XCTAssertEqual(store.items[0].rating, .yes)
+        XCTAssertEqual(store.currentIndex, 1)
+    }
+
     func testInstalledMonitorRoutesWindowEventsAndIsRemovedWithSessionView() throws {
         _ = NSApplication.shared
         let baselineMonitorCount =
@@ -575,6 +720,44 @@ final class HotkeyTests: XCTestCase {
             )
         )
         XCTAssertFalse(store.isExportPresented)
+    }
+
+    func testCommandPaletteUsesFocusedSessionGateAndRunsAfterDismissal() {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let view = SessionView(store: store)
+        let commandK = keyEvent(
+            code: 40,
+            characters: "k",
+            modifiers: [.command]
+        )
+
+        XCTAssertFalse(view.handleKey(commandK, context: .blocked))
+        XCTAssertFalse(store.isActionPalettePresented)
+
+        XCTAssertTrue(view.handleKey(commandK, context: .focusedSession))
+        XCTAssertTrue(store.isActionPalettePresented)
+        XCTAssertTrue(store.isSessionCommandPresentationActive)
+
+        var didRunFollowUp = false
+        store.dismissActionPalette {
+            didRunFollowUp = true
+        }
+        XCTAssertFalse(didRunFollowUp)
+        store.finishActionPaletteDismissal()
+        XCTAssertTrue(didRunFollowUp)
+
+        store.isExportPresented = true
+        XCTAssertFalse(view.handleKey(commandK, context: .focusedSession))
+        store.isExportPresented = false
+
+        let textEditing = SessionKeyRoutingContext(
+            sessionOwnsEvent: true,
+            hasModalPresentation: false,
+            focusedResponderOwnsText: true,
+            focusedResponderOwnsNavigation: true
+        )
+        XCTAssertFalse(view.handleKey(commandK, context: textEditing))
+        XCTAssertFalse(store.isActionPalettePresented)
     }
 
     func testAppCommandsRemainAvailableFromNonTextControlFocus() {

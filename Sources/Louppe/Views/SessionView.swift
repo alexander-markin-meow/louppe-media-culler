@@ -13,6 +13,7 @@ import AppKit
 ///   ↑/↓ prev/next in the Gallery view · same-column photo in the Grid view
 ///   Tab/G switch view · Z/⌘Z undo · ⌘+/⌘− grid size
 ///   ⌘A select all · ⌘⇧←/→ select to first/last · Esc clear selection
+///   ⌘K Command Palette
 ///   ⌘⌫ trash selection (no confirmation — ⌘Z restores)
 ///   (⇧-click range and ⌘-click add/remove live in the thumbnail views)
 struct SessionView: View {
@@ -35,6 +36,15 @@ struct SessionView: View {
             }
             .sheet(isPresented: $store.isExportPresented) {
                 ExportView(store: store)
+            }
+            .sheet(isPresented: $store.isOrganizePresented) {
+                OrganizeSourceView(store: store)
+            }
+            .sheet(
+                isPresented: $store.isActionPalettePresented,
+                onDismiss: { store.finishActionPaletteDismissal() }
+            ) {
+                ActionPaletteView(store: store)
             }
             .alert("Clear All Decisions?", isPresented: $store.isClearAllRatingsConfirmationPresented) {
                 Button("Clear All Decisions", role: .destructive) {
@@ -585,6 +595,10 @@ struct SessionView: View {
         // key equivalents so another window or a focused editor owns its keys.
         if acceptsAppCommand, modifiers == [.command] {
             switch event.charactersIgnoringModifiers?.lowercased() {
+            case "k":
+                store.presentActionPalette()
+                return store.isActionPalettePresented
+
             case "e":
                 guard store.canExport else { return false }
                 store.presentExport()
@@ -780,7 +794,8 @@ struct SessionView: View {
             eventWindowNumber: event.windowNumber,
             sessionWindow: sessionWindow,
             keyWindow: keyWindow,
-            modalWindow: NSApp.modalWindow
+            modalWindow: NSApp.modalWindow,
+            applicationIsActive: NSApp.isActive
         )
     }
 
@@ -843,30 +858,55 @@ struct SessionKeyRoutingContext: Equatable {
         eventWindowNumber: Int,
         sessionWindow: NSWindow?,
         keyWindow: NSWindow?,
-        modalWindow: NSWindow?
+        modalWindow: NSWindow?,
+        applicationIsActive: Bool = true
     ) {
         guard let sessionWindow else {
             self = .blocked
             return
         }
 
+        let eventCarriesExactSessionWindow = eventWindow === sessionWindow
+        let eventCarriesSessionWindowNumber =
+            eventWindow == nil
+                && eventWindowNumber != 0
+                && eventWindowNumber == sessionWindow.windowNumber
         let eventBelongsToSession =
-            eventWindow === sessionWindow
-            || (
-                eventWindow == nil
-                    && eventWindowNumber != 0
-                    && eventWindowNumber == sessionWindow.windowNumber
-            )
+            eventCarriesExactSessionWindow
+                || eventCarriesSessionWindowNumber
+        // AppKit can briefly clear NSApp.keyWindow while the same live window
+        // is becoming key again after activation or a SwiftUI presentation or
+        // rescan transition. It can also omit NSEvent.window while retaining
+        // the event's exact, nonzero window number. A local monitor receives
+        // only this active app's events, so accept either exact session
+        // identity during that nil gap. Never accept the gap while Louppe is
+        // inactive or while another window is actually key.
+        let sessionIsConfirmedKeyWindow =
+            keyWindow === sessionWindow
+                || (
+                    keyWindow == nil
+                        && applicationIsActive
+                        && eventBelongsToSession
+                )
         let firstResponder = sessionWindow.firstResponder
+        // SwiftUI makes its whole window-hosting content view first responder
+        // after activation and some presentation transitions. That root may
+        // contain selectable metadata many levels below it, but none of that
+        // text is focused. Descendant inspection is only appropriate for an
+        // actual SwiftUI focus proxy, never for the window's entire root.
+        let focusedResponder: NSResponder? =
+            (firstResponder as? NSView) === sessionWindow.contentView
+                ? nil
+                : firstResponder
         self.init(
             sessionOwnsEvent:
-                eventBelongsToSession && keyWindow === sessionWindow,
+                eventBelongsToSession && sessionIsConfirmedKeyWindow,
             hasModalPresentation:
                 modalWindow != nil || sessionWindow.attachedSheet != nil,
             focusedResponderOwnsText:
-                Self.responderOwnsText(firstResponder),
+                Self.responderOwnsText(focusedResponder),
             focusedResponderOwnsNavigation:
-                Self.responderOwnsNavigation(firstResponder),
+                Self.responderOwnsNavigation(focusedResponder),
             isVoiceOverEnabled: NSWorkspace.shared.isVoiceOverEnabled
         )
     }

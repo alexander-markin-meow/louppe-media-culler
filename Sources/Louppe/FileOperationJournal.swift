@@ -13,8 +13,19 @@ enum FileOperationJournal {
     enum Kind: String, Codable, Sendable {
         case exportCopy
         case exportMove
+        case organizeSource
+        case restoreOrganization
         case moveToTrash
         case restoreFromTrash
+
+        var isAtomicMove: Bool {
+            switch self {
+            case .exportMove, .organizeSource, .restoreOrganization:
+                return true
+            case .exportCopy, .moveToTrash, .restoreFromTrash:
+                return false
+            }
+        }
     }
 
     enum StepState: String, Codable, Sendable {
@@ -502,7 +513,8 @@ enum FileOperationJournal {
                 let destination = seed.destination
                 let temporary: URL?
                 switch kind {
-                case .exportCopy, .exportMove:
+                case .exportCopy, .exportMove, .organizeSource,
+                     .restoreOrganization:
                     guard let destination else {
                         throw JournalError.unsafePlan(creating)
                     }
@@ -653,7 +665,7 @@ enum FileOperationJournal {
     private static func cleanupRetiredOperation(at url: URL) {
         do {
             try FileManager.default.removeItem(at: url)
-            try? DurableFileIO.syncRemoval(of: url, fullSync: false)
+            _ = try? DurableFileIO.syncRemoval(of: url, fullSync: false)
         } catch {
             // The durable `.retired` rename is the correctness boundary.
             // Cleanup is intentionally retryable and never makes an operation
@@ -801,7 +813,7 @@ enum FileOperationJournal {
                 }
 
                 let completedMoveItemIDs: Set<String>
-                if plan.kind == .exportMove {
+                if plan.kind.isAtomicMove {
                     let grouped = Dictionary(
                         grouping: plan.files.indices,
                         by: { plan.files[$0].itemID }
@@ -955,7 +967,7 @@ enum FileOperationJournal {
         preserveCompletedMove: Bool
     ) throws -> RecoveredFileCounts {
         if file.effectiveRole == .preparedXMP {
-            if kind == .exportMove, !preserveCompletedMove {
+            if kind.isAtomicMove, !preserveCompletedMove {
                 return try rollbackPreparedMoveCopy(
                     file,
                     state: state,
@@ -973,7 +985,7 @@ enum FileOperationJournal {
             )
         }
         if file.effectiveRole == .retiredXMPSource,
-           kind == .exportMove {
+           kind.isAtomicMove {
             return try recoverRetiredXMPSource(
                 file,
                 state: state,
@@ -992,14 +1004,22 @@ enum FileOperationJournal {
                 fileIndex: fileIndex,
                 planVersion: planVersion
             )
-        case .exportMove:
+        case .exportMove, .organizeSource, .restoreOrganization:
             return try recoverMove(
                 file,
                 state: state,
                 operationID: operationID,
                 fileIndex: fileIndex,
                 planVersion: planVersion,
-                preserveDestination: preserveCompletedMove
+                preserveDestination: preserveCompletedMove,
+                directorySyncPolicy: organizationDirectorySyncPolicy(
+                    kind: kind,
+                    file: file
+                ),
+                renameStrategy: organizationRenameStrategy(
+                    kind: kind,
+                    file: file
+                )
             )
         case .moveToTrash:
             // Clean Up already had the photographer's explicit intent to move
@@ -1578,7 +1598,10 @@ enum FileOperationJournal {
         operationID: String,
         fileIndex: Int,
         planVersion: Int,
-        preserveDestination: Bool
+        preserveDestination: Bool,
+        directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
+        renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
+            .exclusivePOSIX
     ) throws -> RecoveredFileCounts {
         let source = try plannedURL(
             for: file,
@@ -1638,7 +1661,8 @@ enum FileOperationJournal {
                 )
                 try DurableFileIO.syncDirectory(
                     source.deletingLastPathComponent(),
-                    fullSync: true
+                    fullSync: true,
+                    policy: directorySyncPolicy
                 )
                 return RecoveredFileCounts()
             }
@@ -1712,14 +1736,16 @@ enum FileOperationJournal {
                 let quarantine = location.isTemporary
                     ? destination
                     : temporary
-                try DurableFileIO.atomicExclusiveRename(
+                try DurableFileIO.renameWithoutOverwrite(
                     from: location.url,
-                    to: quarantine
+                    to: quarantine,
+                    strategy: renameStrategy
                 )
                 try DurableFileIO.syncRenameDirectories(
                     from: location.url,
                     to: quarantine,
-                    fullSync: true
+                    fullSync: true,
+                    policy: directorySyncPolicy
                 )
                 let quarantinedIdentity = try fileIdentity(at: quarantine)
                 guard identitiesMatch(
@@ -1745,7 +1771,8 @@ enum FileOperationJournal {
                 try DurableFileIO.unlinkRegularFile(at: quarantine)
                 try DurableFileIO.syncRemoval(
                     of: quarantine,
-                    fullSync: true
+                    fullSync: true,
+                    policy: directorySyncPolicy
                 )
             }
             return RecoveredFileCounts()
@@ -1761,8 +1788,43 @@ enum FileOperationJournal {
             isTemporary: location.isTemporary
         )
         try requireIdentity(identity, at: location.url)
-        try restoreWithoutOverwrite(from: location.url, to: source)
+        try restoreWithoutOverwrite(
+            from: location.url,
+            to: source,
+            directorySyncPolicy: directorySyncPolicy,
+            renameStrategy: renameStrategy
+        )
         return RecoveredFileCounts(restoredFiles: 1)
+    }
+
+    private static func organizationDirectorySyncPolicy(
+        kind: Kind,
+        file: PlannedFile
+    ) -> DurableFileIO.DirectorySyncPolicy {
+        guard kind == .organizeSource || kind == .restoreOrganization else {
+            return .required
+        }
+        let volumeRoot = URL(
+            fileURLWithPath: file.identity.volumeRootPath,
+            isDirectory: true
+        )
+        return SourceOrganizationStorageSafety.detect(at: volumeRoot)
+            .directorySyncPolicy
+    }
+
+    private static func organizationRenameStrategy(
+        kind: Kind,
+        file: PlannedFile
+    ) -> DurableFileIO.NoOverwriteRenameStrategy {
+        guard kind == .organizeSource || kind == .restoreOrganization else {
+            return .exclusivePOSIX
+        }
+        let volumeRoot = URL(
+            fileURLWithPath: file.identity.volumeRootPath,
+            isDirectory: true
+        )
+        return SourceOrganizationStorageSafety.detect(at: volumeRoot)
+            .noOverwriteRenameStrategy
     }
 
     private static func movedArtifactIdentity(
@@ -1839,7 +1901,10 @@ enum FileOperationJournal {
     private static func restoreWithoutOverwrite(
         from: URL,
         to: URL,
-        syncRemovedSourceDirectory: Bool = true
+        syncRemovedSourceDirectory: Bool = true,
+        directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
+        renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
+            .exclusivePOSIX
     ) throws {
         let fm = FileManager()
         guard !pathEntryExists(to) else {
@@ -1849,12 +1914,17 @@ enum FileOperationJournal {
             at: to.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try DurableFileIO.atomicExclusiveRename(from: from, to: to)
+        try DurableFileIO.renameWithoutOverwrite(
+            from: from,
+            to: to,
+            strategy: renameStrategy
+        )
         if syncRemovedSourceDirectory {
             try DurableFileIO.syncRenameDirectories(
                 from: from,
                 to: to,
-                fullSync: true
+                fullSync: true,
+                policy: directorySyncPolicy
             )
         } else {
             // macOS protects Trash directories from ordinary directory opens
@@ -1865,7 +1935,8 @@ enum FileOperationJournal {
             // which the still-active journal will preserve as an ambiguity.
             try DurableFileIO.syncDirectory(
                 to.deletingLastPathComponent(),
-                fullSync: true
+                fullSync: true,
+                policy: directorySyncPolicy
             )
         }
     }
@@ -2727,7 +2798,8 @@ enum FileOperationJournal {
             }
 
             switch plan.kind {
-            case .exportCopy, .exportMove:
+            case .exportCopy, .exportMove, .organizeSource,
+                 .restoreOrganization:
                 guard let destinationPath = file.destinationPath,
                       let temporaryPath = file.temporaryPath else {
                     throw JournalError.corruptPlan(operationURL)

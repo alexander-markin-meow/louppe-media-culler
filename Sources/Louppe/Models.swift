@@ -2,7 +2,7 @@ import Foundation
 
 enum SessionConstants {
     static let sidecarName = ".louppe_session.json"
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
     static let supportedSchemaVersions = 1...currentSchemaVersion
 }
 
@@ -1804,6 +1804,9 @@ struct SessionEntry: Codable, Sendable {
     /// migration, but current ratings are restored only onto this exact
     /// scanned physical file rather than whichever file now owns the path.
     var fileIdentity: FileOperationJournal.FileIdentity? = nil
+    /// Added in schema 6. Exact relative parent-directory bytes captured
+    /// before Louppe first organizes this physical file.
+    var organizationOriginFolderPathBytes: Data? = nil
 }
 
 struct SessionFile: Codable, Sendable {
@@ -1837,6 +1840,7 @@ struct SessionRatingIndex {
         let colorLabel: PhotoColorLabel?
         let colorChangedAt: Date?
         let fileIdentity: FileOperationJournal.FileIdentity?
+        let organizationOriginFolderPathBytes: Data?
     }
 
     struct Match: Equatable {
@@ -1926,7 +1930,10 @@ struct SessionRatingIndex {
                 colorChangedAt: supportsNativeMetadata
                     ? entry.colorChangedAt
                     : nil,
-                fileIdentity: entry.fileIdentity
+                fileIdentity: entry.fileIdentity,
+                organizationOriginFolderPathBytes: session.version >= 6
+                    ? entry.organizationOriginFolderPathBytes
+                    : nil
             )
             if usesExactIDs {
                 // Exact IDs contain ASCII percent escapes, so Swift's

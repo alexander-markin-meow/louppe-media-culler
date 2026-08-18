@@ -5,7 +5,44 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.7.1 (10) — 2026-08-14
+## 1.8.0 (10) — 2026-08-18
+
+- Added a searchable **Command Palette** (⌘K). It provides a quick, keyboard-
+  driven route to export, source-folder organization, Clean Up, XMP metadata,
+  filters and sorting, RAW+JPEG pairing, stars, color labels, and view tools.
+  Existing confirmation and preview screens still guard actions that can alter
+  files. **Organize by Date Taken Only…** opens the organizer with Full date as
+  its sole enabled folder level for a faster chronological workflow, while
+  retaining the normal scope, preview, and move confirmation.
+
+- Added **Organize Source Folder…** to the File menu. It previews and moves
+  All, Filtered, or Selected items into nested, draggable-priority folder
+  levels built from the existing folder, decision, date, stars, color, camera,
+  lens, file type, or media type. Date folders follow the Mac's regional and
+  custom short-date formatting at full-date, year-and-month, or year
+  granularity. Existing structure can be flattened, kept at top-level depth,
+  or preserved in full; old and unrelated folders/files are never deleted.
+  Grouped RAW+JPEG and recognized XMP files move atomically while `.acr`
+  companions stay put. Exact preflight blocks filename and sidecar-family
+  conflicts without overwriting or inventing suffixes. The operation uses the
+  durable file journal, survives interruption conservatively, remembers the
+  files' original relative folders across future reorganizations, and supports
+  ⌘Z restoration during the open session. ExFAT camera cards remain supported
+  behind an explicit reduced-crash-protection warning: Louppe first proves a
+  disposable Foundation move refuses an occupied destination and preserves the
+  same physical file identity, then uses that no-overwrite fallback for the
+  journaled move, undo, and recovery. It also tolerates only the directory-sync
+  operation ExFAT does not implement. Other storage and other errors remain on
+  the stricter POSIX boundary.
+
+- Fixed session hotkeys stopping after app activation, an organizer sheet, or
+  a source-folder refresh when SwiftUI focused the whole window-hosting root.
+  Louppe no longer mistakes selectable metadata nested somewhere inside that
+  root for actively focused text. It also tolerates macOS briefly omitting the
+  key-window and event-window objects when the event's nonzero window number
+  still exactly identifies Louppe's live photo window. That fallback applies
+  only while Louppe is active; genuinely focused text, other windows, and
+  modal UI remain excluded.
 
 - Fixed the release-quality gate so routine builds validate their own app and
   archive without comparing a freshly created ZIP to the immutable signed

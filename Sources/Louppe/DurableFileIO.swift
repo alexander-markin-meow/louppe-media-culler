@@ -11,6 +11,20 @@ private func louppeFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 /// JSON, but it does not express the required file-sync -> rename ->
 /// directory-sync ordering for sudden power loss.
 enum DurableFileIO {
+    /// Some removable filesystems implement atomic renames but reject fsync
+    /// on directory descriptors. Source Organization may opt into the weaker
+    /// boundary only after identifying that exact filesystem and warning the
+    /// photographer. Every other file operation remains strict by default.
+    enum DirectorySyncPolicy: Equatable, Sendable {
+        case required
+        case allowUnsupported
+    }
+
+    enum NoOverwriteRenameStrategy: Equatable, Sendable {
+        case exclusivePOSIX
+        case foundation
+    }
+
     enum IOError: LocalizedError {
         case system(operation: String, path: String, code: Int32)
 
@@ -223,7 +237,8 @@ enum DurableFileIO {
     static func writeNewFile(
         _ data: Data,
         to destination: URL,
-        fullSync: Bool
+        fullSync: Bool,
+        directorySyncPolicy: DirectorySyncPolicy = .required
     ) throws {
         let descriptor = try openFileForCreation(destination)
         var closeNeeded = true
@@ -248,8 +263,34 @@ enum DurableFileIO {
         }
         try syncDirectory(
             destination.deletingLastPathComponent(),
-            fullSync: fullSync
+            fullSync: fullSync,
+            policy: directorySyncPolicy
         )
+    }
+
+    /// Capability probes are disposable and deliberately do not claim power-
+    /// loss durability. They exist only to prove the volume's rename behavior
+    /// before any photographer-owned file is touched.
+    static func writeCapabilityProbeFile(
+        _ data: Data,
+        to destination: URL
+    ) throws {
+        let descriptor = try openFileForCreation(destination)
+        var closeNeeded = true
+        defer {
+            if closeNeeded { Darwin.close(descriptor) }
+        }
+        try writeAll(data, descriptor: descriptor, path: destination.path)
+        let closeResult = Darwin.close(descriptor)
+        let closeFailure = errno
+        closeNeeded = false
+        guard closeResult == 0 else {
+            throw IOError.system(
+                operation: "close capability probe",
+                path: destination.path,
+                code: closeFailure
+            )
+        }
     }
 
     static func syncFile(at url: URL, fullSync: Bool) throws {
@@ -272,7 +313,12 @@ enum DurableFileIO {
         )
     }
 
-    static func syncDirectory(_ url: URL, fullSync: Bool = false) throws {
+    @discardableResult
+    static func syncDirectory(
+        _ url: URL,
+        fullSync: Bool = false,
+        policy: DirectorySyncPolicy = .required
+    ) throws -> Bool {
         let descriptor = try openDescriptor(
             url,
             flags: O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW,
@@ -285,41 +331,85 @@ enum DurableFileIO {
             path: url.path,
             operation: "verify directory"
         )
-        try syncDescriptor(
-            descriptor,
-            path: url.path,
-            fullSync: fullSync
-        )
+        do {
+            try syncDescriptor(
+                descriptor,
+                path: url.path,
+                fullSync: fullSync
+            )
+            return true
+        } catch {
+            guard shouldIgnoreUnsupportedDirectorySync(
+                error,
+                policy: policy
+            ) else { throw error }
+            return false
+        }
     }
 
     /// Persists both directory-entry changes made by a successful rename.
     /// Call this immediately after the rename syscall and before checkpointing
     /// the new journal state.
+    @discardableResult
     static func syncRenameDirectories(
         from source: URL,
         to destination: URL,
-        fullSync: Bool = false
-    ) throws {
+        fullSync: Bool = false,
+        policy: DirectorySyncPolicy = .required
+    ) throws -> Bool {
         let sourceParent = source.deletingLastPathComponent()
         let destinationParent = destination.deletingLastPathComponent()
         if destinationParent.path(percentEncoded: true)
             == sourceParent.path(percentEncoded: true) {
-            try syncDirectory(destinationParent, fullSync: fullSync)
+            return try syncDirectory(
+                destinationParent,
+                fullSync: fullSync,
+                policy: policy
+            )
         } else {
             // Make the new name durable before the old name's removal. If
             // sudden power loss lands between these flushes, two names are a
             // recoverable ambiguity; zero names could lose the only path to an
             // original photograph.
-            try syncDirectory(destinationParent, fullSync: fullSync)
-            try syncDirectory(sourceParent, fullSync: fullSync)
+            let destinationSynced = try syncDirectory(
+                destinationParent,
+                fullSync: fullSync,
+                policy: policy
+            )
+            let sourceSynced = try syncDirectory(
+                sourceParent,
+                fullSync: fullSync,
+                policy: policy
+            )
+            return destinationSynced && sourceSynced
         }
     }
 
-    static func syncRemoval(of url: URL, fullSync: Bool = false) throws {
+    @discardableResult
+    static func syncRemoval(
+        of url: URL,
+        fullSync: Bool = false,
+        policy: DirectorySyncPolicy = .required
+    ) throws -> Bool {
         try syncDirectory(
             url.deletingLastPathComponent(),
-            fullSync: fullSync
+            fullSync: fullSync,
+            policy: policy
         )
+    }
+
+    static func shouldIgnoreUnsupportedDirectorySync(
+        _ error: Error,
+        policy: DirectorySyncPolicy
+    ) -> Bool {
+        guard policy == .allowUnsupported else { return false }
+        let unsupportedCodes = [Int(EINVAL), Int(ENOTSUP), Int(ENOTTY)]
+        if case IOError.system(_, _, let code) = error {
+            return unsupportedCodes.contains(Int(code))
+        }
+        let cocoa = error as NSError
+        return cocoa.domain == NSPOSIXErrorDomain
+            && unsupportedCodes.contains(cocoa.code)
     }
 
     /// Exclusive, same-volume rename syscall. Directory syncing stays
@@ -351,6 +441,39 @@ enum DurableFileIO {
             throw POSIXError(
                 POSIXErrorCode(rawValue: failure) ?? .EIO
             )
+        }
+    }
+
+    /// Moves one same-volume entry without replacing an existing destination.
+    /// APFS and other capable filesystems use the race-free POSIX primitive.
+    /// ExFAT uses Foundation's documented no-overwrite move contract after a
+    /// disposable probe has proved that it is an inode-preserving rename on
+    /// the exact mounted volume.
+    static func renameWithoutOverwrite(
+        from source: URL,
+        to destination: URL,
+        strategy: NoOverwriteRenameStrategy
+    ) throws {
+        switch strategy {
+        case .exclusivePOSIX:
+            try atomicExclusiveRename(from: source, to: destination)
+        case .foundation:
+            let sourceDevice = try deviceNumber(
+                at: source,
+                expectedType: mode_t(S_IFREG)
+            )
+            let destinationDevice = try deviceNumber(
+                at: destination.deletingLastPathComponent(),
+                expectedType: mode_t(S_IFDIR)
+            )
+            guard sourceDevice == destinationDevice else {
+                throw IOError.system(
+                    operation: "verify same-volume move",
+                    path: destination.path,
+                    code: EXDEV
+                )
+            }
+            try FileManager().moveItem(at: source, to: destination)
         }
     }
 
@@ -481,6 +604,41 @@ enum DurableFileIO {
             )
         }
         return descriptor
+    }
+
+    private static func deviceNumber(
+        at url: URL,
+        expectedType: mode_t
+    ) throws -> dev_t {
+        var info = Darwin.stat()
+        var failure: Int32 = 0
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                failure = EINVAL
+                return Int32(-1)
+            }
+            var value: Int32
+            repeat {
+                value = Darwin.lstat(path, &info)
+            } while value != 0 && errno == EINTR
+            if value != 0 { failure = errno }
+            return value
+        }
+        guard result == 0 else {
+            throw IOError.system(
+                operation: "inspect move volume",
+                path: url.path,
+                code: failure
+            )
+        }
+        guard info.st_mode & mode_t(S_IFMT) == expectedType else {
+            throw IOError.system(
+                operation: "verify move entry type",
+                path: url.path,
+                code: EFTYPE
+            )
+        }
+        return info.st_dev
     }
 
     private static func openLockFile(_ url: URL) throws -> Int32 {

@@ -1247,6 +1247,11 @@ actor SessionPersistence: SessionPersistenceClient {
                         && entry.starsChangedAt == nil
                         && entry.colorLabel == nil
                         && entry.colorChangedAt == nil),
+                  session.version >= 6
+                    || entry.organizationOriginFolderPathBytes == nil,
+                  entry.organizationOriginFolderPathBytes.map(
+                    organizationOriginPathIsValid
+                  ) ?? true,
                   session.version < 4 || entry.pairedFilename == nil,
                   session.version < 4
                     || entry.fileIdentity.map(
@@ -1280,6 +1285,23 @@ actor SessionPersistence: SessionPersistenceClient {
             }
         }
         return true
+    }
+
+    private static func organizationOriginPathIsValid(_ path: Data) -> Bool {
+        if path.isEmpty { return true }
+        guard path.count <= 16_384,
+              !path.contains(0),
+              path.first != UInt8(ascii: "/"),
+              path.last != UInt8(ascii: "/") else {
+            return false
+        }
+        let components = [UInt8](path)
+            .split(separator: UInt8(ascii: "/"))
+        return !components.isEmpty && components.allSatisfy {
+            !$0.isEmpty
+                && Data($0) != Data(".".utf8)
+                && Data($0) != Data("..".utf8)
+        }
     }
 
     private static func physicalFileIdentityIsValid(

@@ -8,8 +8,9 @@ Louppe helps review a folder or memory card, mark the shots you want to
 keep, and export them.
 
 Your photos stay in their original quality. Export copies them by default.
-Louppe only moves originals when you deliberately choose **Move to…** or send
-photos to the macOS Trash. It never permanently deletes a file.
+Louppe only moves originals when you deliberately choose **Move to…**, send
+photos to the macOS Trash, or confirm **Organize Source Folder**. It never
+permanently deletes a file.
 
 macOS 14 or newer.
 
@@ -35,6 +36,14 @@ cannot verify the developer. Right-click Louppe, choose **Open**, then choose
 Most photo and video formats are supported; support for more file types is
 planned. Filters and sorting cover decisions, star ratings, color labels,
 dates, folders, file types, camera details, media type, and video length.
+
+Choose **File → Organize Source Folder…** to move All, Filtered, or Selected
+items into nested folders such as Decision → Date. Check the folder levels you
+want and drag them into priority order. Existing folder, date, stars, color,
+camera, lens, file type, and media type can all be levels; date folder names
+follow the Mac's language, region, and custom short-date format. The Command
+Palette includes **Organize by Date Taken Only…** to open this screen with Full
+date as the sole enabled folder level, ready for preview and confirmation.
 
 Matching RAW+JPEG files are separate photos by default. In Filter → File types,
 **Treat matching RAW + JPEG as one photo** groups an unambiguous match, including
@@ -72,9 +81,10 @@ histogram, and clipping information. Press **X** to mark clipped areas.
 |---|---|
 | **E** or **⌘E** | Open Export |
 | **R** | Clear all Yes/No decisions. Large sets ask for confirmation; **Return** confirms |
-| **Z** or **⌘Z** | Undo the last decision, star, color-label, decision reset, or Trash action |
+| **Z** or **⌘Z** | Undo the last decision, star, color-label, decision reset, Trash action, or source-folder organization |
 | **⌘O** | Open a different folder |
 | **⌘R** | Scan the current folder again |
+| **⌘K** | Open the Command Palette to search actions, metadata tools, filters, and folder operations |
 | **⌘A** | Select every item currently shown by the filter |
 | **⌘⇧← / ⌘⇧→** | Select from the current item to the first / last |
 | **Esc** | Cancel a scan or clear the current selection |
@@ -145,14 +155,31 @@ alone, so the main review workflow can be completed with the keyboard.
   It asks for confirmation unless you use **⌘⌫**. Immediately afterward,
   **⌘Z** can restore the whole batch during the open session while the files
   remain in the Trash. Emptying the Trash deletes them permanently.
+- **Organize Source Folder** previews every destination before moving anything.
+  All, Filtered, and Selected scopes show live counts. Checked folder levels
+  are applied in draggable priority order, so Decision → Date and Date →
+  Decision create different layouts. **Existing folder** preserves either the
+  old top-level folder or its full relative path; turning it off flattens that
+  structure into the chosen new levels. Old folders are not deleted, even when
+  they become empty, and hidden, unrelated, unsupported, and `.acr` files
+  remain where they are. Grouped RAW+JPEG files and recognized XMP sidecars
+  follow together. Any filename, sidecar-family, or destination conflict blocks
+  the complete move—Louppe never adds a suffix or overwrites. **⌘Z** restores
+  the previous file locations during the same open session. ExFAT camera cards
+  show an extra reduced-crash-protection warning because macOS cannot durably
+  flush their folder entries like APFS. After confirmation, Louppe first tests
+  a pair of disposable files to prove macOS refuses an occupied destination,
+  preserves the same physical file during a move, and keeps the bytes intact;
+  it moves no photo if that check fails. Keep the card connected and the Mac
+  awake until the operation finishes.
 - Matching RAW+JPEG files, if grouped, move or copy together.
 - Louppe keeps a small safety record during file operations. If the app is
   interrupted, Louppe checks the exact files and never overwrites an existing
   file. A completed Trash action stays in Trash—it is never silently undone on
   the next launch. If an unusual file action still needs attention, reviewing,
   rating, opening folders, saving, and quitting remain available; only another
-  Copy, Move, Clean Up, or Trash undo waits. Retry when the relevant drive is
-  available, or choose **Keep Files As They Are** to set aside only Louppe's
+  Copy, Move, Organize, Clean Up, or Trash undo waits. Retry when the relevant
+  drive is available, or choose **Keep Files As They Are** to set aside only Louppe's
   recovery record—without deleting its contents—and continue with the files
   exactly where they are.
 - Ratings are saved automatically in `.louppe_session.json` inside the opened

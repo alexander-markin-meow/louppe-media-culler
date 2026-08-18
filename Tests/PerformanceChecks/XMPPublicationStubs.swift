@@ -7,13 +7,31 @@ import Foundation
 /// the real planner/worker lives in XCTest where the full package is linked.
 enum XMPApplicationProfile: Sendable {
     case universal
+
+    var usesVisibleDecisionKeywordsByDefault: Bool { false }
 }
 
-struct XMPExactFileSystemPath: Hashable, Sendable {
-    let url: URL
+struct XMPPublicationMetadata: Equatable, Hashable, Sendable {
+    let decision: Rating
+    let stars: StarRating?
+    let colorLabel: PhotoColorLabel?
+    let profile: XMPApplicationProfile
+    let visibleDecisionKeywords: Bool
+    let allowExternalLabelRemoval: Bool
 
-    init(url: URL) throws {
-        self.url = url
+    init(
+        snapshot: PhotoFileMetadataSnapshot,
+        profile: XMPApplicationProfile,
+        visibleDecisionKeywords: Bool? = nil,
+        allowExternalLabelRemoval: Bool = false
+    ) {
+        decision = snapshot.rating
+        stars = snapshot.starRating
+        colorLabel = snapshot.colorLabel
+        self.profile = profile
+        self.visibleDecisionKeywords = visibleDecisionKeywords
+            ?? profile.usesVisibleDecisionKeywordsByDefault
+        self.allowExternalLabelRemoval = allowExternalLabelRemoval
     }
 }
 

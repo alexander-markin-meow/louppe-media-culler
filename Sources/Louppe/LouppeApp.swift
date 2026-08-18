@@ -135,6 +135,15 @@ private struct FocusedLouppeSessionCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            Button("Command Palette…") {
+                actionableStore?.presentActionPalette()
+            }
+            .disabled(
+                actionableStore?.isFileOperationRunning != false
+            )
+
+            Divider()
+
             Button("Rescan Folder") {
                 actionableStore?.rescan()
             }
@@ -171,6 +180,13 @@ private struct FocusedLouppeSessionCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
+            Button("Organize Source Folder…") {
+                actionableStore?.presentSourceOrganization()
+            }
+            .disabled(
+                actionableStore?.canOrganizeSource != true
+            )
+
             Button("Export…") {
                 actionableStore?.presentExport()
             }
@@ -241,6 +257,9 @@ private final class LouppeApplicationDelegate: NSObject, NSApplicationDelegate {
             case .exportMove:
                 alert.messageText = "Export is still moving files"
                 alert.informativeText = "Wait for the move to finish, then quit Louppe."
+            case .organizeSource:
+                alert.messageText = "The source folder is still being organized"
+                alert.informativeText = "Wait for Louppe to finish moving or restoring the files, then quit."
             case .cleanUp:
                 alert.messageText = "Clean Up is still running"
                 alert.informativeText = "Wait for the Trash or restore progress to finish, then quit Louppe."

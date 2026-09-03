@@ -1,24 +1,36 @@
 import SwiftUI
 import AppKit
+#if !APP_STORE
 import Sparkle
+#endif
 
 @main
 struct LouppeApp: App {
     @NSApplicationDelegateAdaptor(LouppeApplicationDelegate.self) private var appDelegate
+    #if APP_STORE
+    @StateObject private var store = SessionStore(
+        automaticallyRecoversInterruptedOperations: false
+    )
+    #else
     @StateObject private var store = SessionStore(
         automaticallyRecoversInterruptedOperations: true
     )
+    #endif
+    #if !APP_STORE
     private let updaterController: SPUStandardUpdaterController
+    #endif
 
     init() {
         // Initialize the bundled XMPCore runtime once before any explicit
         // Metadata (XMP), Copy-with-XMP, or Move-with-XMP request reaches it.
         _ = XMPFieldMapping.runtimeIsAvailable
+        #if !APP_STORE
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        #endif
     }
 
     var body: some Scene {
@@ -32,10 +44,12 @@ struct LouppeApp: App {
                     // Flag-style on purpose: a bare path argument makes macOS
                     // treat the launch as a document-open request and suppress
                     // the app's default window entirely.
+                    #if !APP_STORE
                     if let path = UserDefaults.standard.string(forKey: "openFolder"),
                        FileManager.default.fileExists(atPath: path) {
                         store.openFolder(URL(fileURLWithPath: path))
                     }
+                    #endif
                 }
         }
         // Keep the system-owned macOS window chrome. This adopts the current
@@ -50,12 +64,14 @@ struct LouppeApp: App {
                     NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.aboutCredits])
                 }
             }
+            #if !APP_STORE
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(
                     updater: updaterController.updater,
                     isFileOperationRunning: store.isFileOperationRunning
                 )
             }
+            #endif
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
                     store.promptForSourceFolder()
@@ -70,7 +86,11 @@ struct LouppeApp: App {
         }
 
         Settings {
-            UpdaterSettingsView(updater: updaterController.updater)
+            #if !APP_STORE
+            LouppeSettingsView(updater: updaterController.updater)
+            #else
+            LouppeSettingsView()
+            #endif
         }
     }
 
@@ -88,7 +108,7 @@ struct LouppeApp: App {
         let credits = NSMutableAttributedString()
 
         credits.append(NSAttributedString(
-            string: "Fast photo and video culling for photographers.\n\n", attributes: base))
+            string: "Fast photo, video, and audio culling for photographers.\n\n", attributes: base))
 
         link[.link] = URL(string: "https://louppe.eu")!
         credits.append(NSAttributedString(string: "louppe.eu", attributes: link))
@@ -216,6 +236,50 @@ private struct FocusedLouppeSessionCommands: Commands {
                 actionableStore?.zoomGrid(larger: false)
             }
             .disabled(actionableStore?.viewMode != .grid)
+
+            Divider()
+
+            Menu("Review Groups") {
+                Button("Analyze Folder Locally") {
+                    actionableStore?.analyzeDuplicateAndBurstGroups()
+                }
+                .disabled(
+                    actionableStore?.items.isEmpty != false
+                        || actionableStore?.isFileOperationRunning != false
+                        || actionableStore?.isXMPPublicationRunning == true
+                )
+
+                Divider()
+
+                Group {
+                    Button("Exact Duplicates") {
+                        actionableStore?.enterGroupedReview(.exactDuplicates)
+                    }
+                    Button("Likely Similar Photos") {
+                        actionableStore?.enterGroupedReview(.likelySimilarPhotos)
+                    }
+                    Button("Capture Bursts") {
+                        actionableStore?.enterGroupedReview(.captureBursts)
+                    }
+                }
+                .disabled(
+                    actionableStore?.items.isEmpty != false
+                        || actionableStore?.isFileOperationRunning != false
+                        || actionableStore?.isXMPPublicationRunning == true
+                )
+
+                Divider()
+
+                Button("Return to Normal Review") {
+                    actionableStore?.exitGroupedReview()
+                }
+                .disabled(actionableStore?.isGroupedReviewActive != true)
+
+                Button("Review Group Settings…") {
+                    actionableStore?.isSortPresented = true
+                }
+                .disabled(actionableStore?.isFileOperationRunning != false)
+            }
         }
     }
 }

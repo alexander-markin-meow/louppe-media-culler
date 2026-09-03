@@ -1,5 +1,9 @@
 # Automatic updates
 
+This guide applies only to Louppe’s direct-download product. Never embed or
+enable Sparkle in the Mac App Store build; its separate sandbox, signing, and
+submission procedure is documented in [APP_STORE.md](APP_STORE.md).
+
 Louppe uses Sparkle 2.9.4 for daily update checks, secure background downloads,
 installation on quit, and the manual **Louppe → Check for Updates…** command.
 Photographers can turn automatic checks and downloads on or off in

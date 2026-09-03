@@ -32,6 +32,82 @@ final class HotkeyTests: XCTestCase {
         XCTAssertEqual(store.currentIndex, 0)
     }
 
+    func testHorizontalReviewKeysKeepJLForItemsAndArrowsForVideoSeeking() {
+        let photoStore = readyStore(itemCount: 3, firstItemIsVideo: false)
+        photoStore.setIndex(1)
+        let photoView = SessionView(store: photoStore)
+
+        XCTAssertTrue(photoView.handleKey(keyEvent(code: 38, characters: "j")))
+        XCTAssertEqual(photoStore.currentIndex, 0)
+        XCTAssertTrue(photoView.handleKey(keyEvent(code: 37, characters: "l")))
+        XCTAssertEqual(photoStore.currentIndex, 1)
+
+        let videoStore = readyStore(itemCount: 3, firstItemIsVideo: true)
+        let videoView = SessionView(store: videoStore)
+
+        XCTAssertTrue(videoView.handleKey(keyEvent(code: 123)))
+        XCTAssertEqual(videoStore.currentIndex, 0)
+        XCTAssertTrue(videoStore.videoPlayback.isActive(videoStore.items[0]))
+        XCTAssertTrue(videoView.handleKey(keyEvent(code: 37, characters: "l")))
+        XCTAssertEqual(videoStore.currentIndex, 1)
+        XCTAssertTrue(videoView.handleKey(keyEvent(code: 38, characters: "j")))
+        XCTAssertEqual(videoStore.currentIndex, 0)
+
+        let focusedPlayer = SessionKeyRoutingContext(
+            sessionOwnsEvent: true,
+            hasModalPresentation: false,
+            focusedResponderOwnsText: false,
+            focusedResponderOwnsNavigation: true
+        )
+        XCTAssertTrue(
+            videoView.handleKey(
+                keyEvent(code: 37, characters: "l"),
+                context: focusedPlayer
+            ),
+            "J/L must stay review-navigation keys after the native player has focus"
+        )
+        XCTAssertEqual(videoStore.currentIndex, 1)
+        videoStore.setIndex(0)
+
+        XCTAssertTrue(
+            videoView.handleKey(keyEvent(code: 124, modifiers: [.shift]))
+        )
+        XCTAssertEqual(
+            videoStore.currentIndex,
+            0,
+            "Shift-right seeks within the video instead of changing the item"
+        )
+    }
+
+    func testCommandArrowsAdjustMediaSpeedAndNavigatePhotos() {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: true)
+        let view = SessionView(store: store)
+        store.selectAllVisible()
+
+        XCTAssertTrue(
+            view.handleKey(
+                keyEvent(code: 124, modifiers: [.command])
+            )
+        )
+        XCTAssertEqual(store.currentIndex, 0)
+        XCTAssertEqual(store.videoPlayback.playbackRate, 1.5)
+        XCTAssertFalse(store.selectedIndices.isEmpty)
+
+        XCTAssertTrue(
+            view.handleKey(
+                keyEvent(code: 123, modifiers: [.command])
+            )
+        )
+        XCTAssertEqual(store.videoPlayback.playbackRate, 1)
+
+        let photoStore = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let photoView = SessionView(store: photoStore)
+        XCTAssertTrue(
+            photoView.handleKey(keyEvent(code: 124, modifiers: [.command]))
+        )
+        XCTAssertEqual(photoStore.currentIndex, 1)
+    }
+
     func testReviewHotkeysStillRateAndAdvance() {
         let store = readyStore(itemCount: 3, firstItemIsVideo: true)
         let view = SessionView(store: store)
@@ -67,7 +143,7 @@ final class HotkeyTests: XCTestCase {
         XCTAssertEqual(store.items[0].starRatingState, .unrated)
     }
 
-    func testSpaceTogglesVideoButAdvancesFromPhoto() {
+    func testSpaceTogglesPlayableMediaButAdvancesFromPhoto() {
         let videoStore = readyStore(itemCount: 3, firstItemIsVideo: true)
         let videoView = SessionView(store: videoStore)
 
@@ -76,12 +152,47 @@ final class HotkeyTests: XCTestCase {
         XCTAssertEqual(videoStore.videoPlayback.itemID, videoStore.items[0].id)
         XCTAssertTrue(videoStore.videoPlayback.isActive(videoStore.items[0]))
 
+        let audioStore = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let audioID = "ITEM_0.WAV"
+        audioStore.items[0] = PhotoItem(
+            id: audioID,
+            primaryURL: URL(fileURLWithPath: "/tmp/\(audioID)"),
+            pairedURL: nil,
+            captureDate: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            mediaKind: .audio,
+            duration: 2,
+            audioIsPlayable: true,
+            fileSize: 1
+        )
+        let audioView = SessionView(store: audioStore)
+
+        XCTAssertTrue(audioView.handleKey(keyEvent(code: 49, characters: " ")))
+        XCTAssertEqual(audioStore.currentIndex, 0)
+        XCTAssertEqual(audioStore.videoPlayback.itemID, audioStore.items[0].id)
+        XCTAssertTrue(audioStore.videoPlayback.isActive(audioStore.items[0]))
+
         let photoStore = readyStore(itemCount: 3, firstItemIsVideo: false)
         let photoView = SessionView(store: photoStore)
 
         XCTAssertTrue(photoView.handleKey(keyEvent(code: 49, characters: " ")))
         XCTAssertEqual(photoStore.currentIndex, 1)
         XCTAssertNil(photoStore.videoPlayback.itemID)
+    }
+
+    func testKTogglesPlayableMediaWithoutChangingPhotoNavigation() {
+        let videoStore = readyStore(itemCount: 3, firstItemIsVideo: true)
+        let videoView = SessionView(store: videoStore)
+
+        XCTAssertTrue(videoView.handleKey(keyEvent(code: 40, characters: "k")))
+        XCTAssertEqual(videoStore.currentIndex, 0)
+        XCTAssertTrue(videoStore.videoPlayback.isActive(videoStore.items[0]))
+
+        let photoStore = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let photoView = SessionView(store: photoStore)
+        XCTAssertFalse(photoView.handleKey(keyEvent(code: 40, characters: "k")))
+        XCTAssertEqual(photoStore.currentIndex, 0)
     }
 
     func testXTogglesClippingWarningsOnlyForSingleGalleryPhoto() {
@@ -760,6 +871,153 @@ final class HotkeyTests: XCTestCase {
         XCTAssertFalse(store.isActionPalettePresented)
     }
 
+    func testCommandPaletteIncludesWorkingMediaAndAdjacentItemActions() throws {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: true)
+        store.rebuildDerivedDataForTesting()
+        let palette = ActionPaletteView(store: store)
+        let actions = palette.actions
+
+        let ids = Set(actions.map(\.id))
+        XCTAssertTrue(ids.isSuperset(of: [
+            "select-previous-item",
+            "select-next-item",
+            "decrease-playback-rate",
+            "increase-playback-rate",
+            "seek-video-backward",
+            "seek-video-forward",
+            "seek-video-backward-large",
+            "seek-video-forward-large",
+            "toggle-current-media",
+            "set-playback-rate-1x",
+            "set-playback-rate-1-5x",
+            "set-playback-rate-2x",
+            "set-playback-rate-2-5x",
+            "show-videos-only",
+            "sort-by-video-resolution",
+            "sort-by-video-frame-rate",
+            "sort-by-video-codec",
+        ]))
+
+        let seekForward = try XCTUnwrap(
+            actions.first(where: { $0.id == "seek-video-forward" })
+        )
+        XCTAssertTrue(seekForward.isEnabled)
+        seekForward.perform()
+        XCTAssertTrue(store.videoPlayback.isActive(store.items[0]))
+
+        let fasterPlayback = try XCTUnwrap(
+            actions.first(where: { $0.id == "set-playback-rate-2x" })
+        )
+        XCTAssertTrue(fasterPlayback.isEnabled)
+        fasterPlayback.perform()
+        XCTAssertEqual(store.videoPlayback.playbackRate, 2)
+
+        let increasePlayback = try XCTUnwrap(
+            actions.first(where: { $0.id == "increase-playback-rate" })
+        )
+        XCTAssertEqual(increasePlayback.shortcut, "⌘→")
+        increasePlayback.perform()
+        XCTAssertEqual(store.videoPlayback.playbackRate, 2.5)
+
+        let selectNext = try XCTUnwrap(
+            actions.first(where: { $0.id == "select-next-item" })
+        )
+        XCTAssertEqual(selectNext.shortcut, "L")
+        XCTAssertTrue(selectNext.isEnabled)
+        selectNext.perform()
+        XCTAssertEqual(store.currentIndex, 1)
+
+        let videosOnly = try XCTUnwrap(
+            actions.first(where: { $0.id == "show-videos-only" })
+        )
+        XCTAssertTrue(videosOnly.isEnabled)
+        videosOnly.perform()
+        XCTAssertEqual(store.visibleIndices, [0])
+
+        let audioStore = readyStore(
+            itemCount: 1,
+            firstItemIsVideo: false,
+            firstItemIsAudio: true
+        )
+        audioStore.rebuildDerivedDataForTesting()
+        let audioPlayback = try XCTUnwrap(
+            ActionPaletteView(store: audioStore).actions.first(where: {
+                $0.id == "set-playback-rate-2-5x"
+            })
+        )
+        XCTAssertTrue(audioPlayback.isEnabled)
+        audioPlayback.perform()
+        XCTAssertEqual(audioStore.videoPlayback.playbackRate, 2.5)
+
+        let photoPalette = ActionPaletteView(
+            store: readyStore(itemCount: 2, firstItemIsVideo: false)
+        )
+        XCTAssertFalse(
+            try XCTUnwrap(
+                photoPalette.actions.first(where: {
+                    $0.id == "seek-video-forward"
+                })
+            ).isEnabled
+        )
+    }
+
+    func testCommandPaletteIncludesPairedComponentCleanUpActions() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "Louppe-Palette-Pair-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("PAIR.NEF")
+        let jpeg = root.appendingPathComponent("PAIR.JPG")
+        try Data("raw".utf8).write(to: raw)
+        try Data("jpeg".utf8).write(to: jpeg)
+
+        let store = SessionStore()
+        store.items = [PhotoItem(
+            id: "PAIR.NEF",
+            primaryURL: raw,
+            pairedURL: jpeg,
+            captureDate: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            fileSize: 3,
+            pairedFileSize: 4
+        )]
+        store.phase = .ready
+        store.cleanUpScope = .all
+        store.rebuildDerivedDataForTesting(sourceFolder: root)
+
+        let actions = ActionPaletteView(store: store).actions
+        let jpegAction = try XCTUnwrap(actions.first {
+            $0.id == "trash-paired-jpegs"
+        })
+        let rawAction = try XCTUnwrap(actions.first {
+            $0.id == "trash-paired-raws"
+        })
+        XCTAssertEqual(jpegAction.title, "Move Paired JPEGs to Trash…")
+        XCTAssertEqual(rawAction.title, "Move Paired RAWs to Trash…")
+        XCTAssertTrue(jpegAction.isEnabled)
+        XCTAssertTrue(rawAction.isEnabled)
+        jpegAction.perform()
+        XCTAssertEqual(store.pendingCleanUp, .pairedJPEGs)
+        store.pendingCleanUp = nil
+        rawAction.perform()
+        XCTAssertEqual(store.pendingCleanUp, .pairedRAWs)
+
+        let ordinary = readyStore(itemCount: 2, firstItemIsVideo: false)
+        let ordinaryActions = ActionPaletteView(store: ordinary).actions
+        XCTAssertFalse(try XCTUnwrap(ordinaryActions.first {
+            $0.id == "trash-paired-jpegs"
+        }).isEnabled)
+        XCTAssertFalse(try XCTUnwrap(ordinaryActions.first {
+            $0.id == "trash-paired-raws"
+        }).isEnabled)
+    }
+
     func testAppCommandsRemainAvailableFromNonTextControlFocus() {
         let store = readyStore(itemCount: 3, firstItemIsVideo: false)
         let view = SessionView(store: store)
@@ -995,12 +1253,17 @@ final class HotkeyTests: XCTestCase {
         XCTAssertNotEqual(store.viewMode, initialMode)
     }
 
-    private func readyStore(itemCount: Int, firstItemIsVideo: Bool) -> SessionStore {
+    private func readyStore(
+        itemCount: Int,
+        firstItemIsVideo: Bool,
+        firstItemIsAudio: Bool = false
+    ) -> SessionStore {
         _ = NSApplication.shared
         let store = SessionStore()
         store.items = (0..<itemCount).map { index in
             let isVideo = firstItemIsVideo && index == 0
-            let ext = isVideo ? "MOV" : "JPG"
+            let isAudio = firstItemIsAudio && index == 0
+            let ext = isVideo ? "MOV" : (isAudio ? "WAV" : "JPG")
             let id = "ITEM_\(index).\(ext)"
             return PhotoItem(
                 id: id,
@@ -1009,9 +1272,10 @@ final class HotkeyTests: XCTestCase {
                 captureDate: nil,
                 cameraModel: nil,
                 lensModel: nil,
-                mediaKind: isVideo ? .video : .photo,
-                duration: isVideo ? 2 : nil,
+                mediaKind: isVideo ? .video : (isAudio ? .audio : .photo),
+                duration: (isVideo || isAudio) ? 2 : nil,
                 videoIsPlayable: isVideo,
+                audioIsPlayable: isAudio,
                 fileSize: 1
             )
         }

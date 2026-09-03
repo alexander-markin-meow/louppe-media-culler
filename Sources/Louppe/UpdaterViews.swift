@@ -1,6 +1,8 @@
+import SwiftUI
+
+#if !APP_STORE
 import Combine
 import Sparkle
-import SwiftUI
 
 /// Publishes Sparkle's KVO state so the application-menu command is disabled
 /// while another check is already running.
@@ -75,5 +77,36 @@ struct UpdaterSettingsView: View {
         .frame(width: 440)
         .fixedSize(horizontal: false, vertical: true)
         .tint(Color.louppeAccent)
+    }
+}
+#endif
+
+/// Keeps the two independent app-wide preference areas together without
+/// mixing updater controls into the photographer's quality-cue choices.
+struct LouppeSettingsView: View {
+    #if !APP_STORE
+    let updater: SPUUpdater
+    #endif
+
+    var body: some View {
+        #if !APP_STORE
+        TabView {
+            CameraQualityWarningsSettingsView()
+                .tabItem {
+                    Label("Quality Cues", systemImage: "waveform.path.ecg")
+                }
+
+            UpdaterSettingsView(updater: updater)
+                .tabItem {
+                    Label("Updates", systemImage: "arrow.down.circle")
+                }
+        }
+        .frame(width: 480, height: 380)
+        .tint(Color.louppeAccent)
+        #else
+        CameraQualityWarningsSettingsView()
+            .frame(width: 480, height: 380)
+            .tint(Color.louppeAccent)
+        #endif
     }
 }

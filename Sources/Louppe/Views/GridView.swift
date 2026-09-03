@@ -58,6 +58,14 @@ struct GridView: View {
                         )
                         .padding(.top, 80)
                     } else if store.visibleIndices.isEmpty
+                                && store.isGroupedReviewActive {
+                        ContentUnavailableView(
+                            store.groupedReviewEmptyTitle,
+                            systemImage: "rectangle.3.group",
+                            description: Text(store.groupedReviewEmptyDescription)
+                        )
+                        .padding(.top, 80)
+                    } else if store.visibleIndices.isEmpty
                                 && store.filter.isActive {
                         ContentUnavailableView(
                             "No items match the filter",
@@ -232,8 +240,7 @@ struct GridView: View {
         let playableVideoIndices = Set(
             tileFrames.frames.keys.filter { index in
                 store.items.indices.contains(index)
-                    && store.items[index].isVideo
-                    && store.items[index].videoIsPlayable
+                    && store.items[index].isPlayableMedia
             }
         )
         return GridRubberBandHitTest.shouldTrackCanvasDrag(
@@ -327,7 +334,7 @@ private struct GridCell: View {
                             )
                         }
 
-                    if item.isVideo, item.videoIsPlayable {
+                    if item.isPlayableMedia {
                         Button {
                             if index != store.currentIndex { store.setIndex(index) }
                             store.videoPlayback.toggle(item)
@@ -343,11 +350,11 @@ private struct GridCell: View {
                         .foregroundStyle(.white)
                         .controlSize(.large)
                         .help(store.videoPlayback.isActive(item) && store.videoPlayback.isPlaying
-                            ? "Pause video"
-                            : "Play video")
+                            ? "Pause \(item.mediaKind.singularLabel)"
+                            : "Play \(item.mediaKind.singularLabel)")
                         .accessibilityLabel(store.videoPlayback.isActive(item) && store.videoPlayback.isPlaying
-                            ? "Pause video"
-                            : "Play video")
+                            ? "Pause \(item.mediaKind.singularLabel)"
+                            : "Play \(item.mediaKind.singularLabel)")
                     }
                 }
                 // Keep the rating control above the photo's selection gesture

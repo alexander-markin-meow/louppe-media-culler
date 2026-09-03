@@ -52,71 +52,90 @@ struct OrganizeSourceView: View {
     }
 
     private var setupView: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 0) {
             sheetHeader(
                 title: "Organize Source Folder",
                 subtitle: "Move media into folders built from review and capture metadata."
             )
-
-            section("Apply to") {
-                Picker("Apply to", selection: $scope) {
-                    ForEach(SourceOrganizationScope.allCases, id: \.self) {
-                        value in
-                        Text("\(value.label) \(store.organizationScopeCount(for: value))")
-                            .tag(value)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 18)
 
             Divider()
 
-            section("Folder order") {
-                Text("Checked rows become folder levels. Drag them into priority order; the top row comes first.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    section("Apply to") {
+                        Picker("Apply to", selection: $scope) {
+                            ForEach(SourceOrganizationScope.allCases, id: \.self) {
+                                value in
+                                Text("\(value.label) \(store.organizationScopeCount(for: value))")
+                                    .tag(value)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
 
-                VStack(spacing: 0) {
-                    ForEach(configuration.levels) { level in
-                        levelRow(level)
-                        if level.id != configuration.levels.last?.id {
-                            Divider().padding(.leading, 34)
+                    Divider()
+
+                    section("Folder order") {
+                        Text("Choose the folder levels, then drag enabled rows into priority order. The top row comes first.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        VStack(spacing: 0) {
+                            ForEach(configuration.levels) { level in
+                                levelRow(level)
+                                if level.id != configuration.levels.last?.id {
+                                    Divider().padding(.leading, 44)
+                                }
+                            }
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(
+                                    Color(nsColor: .separatorColor),
+                                    lineWidth: 1
+                                )
+                        }
+
+                        additionalMetadataMenu
+
+                        if !levelBinding(.existingFolder).wrappedValue {
+                            Label(
+                                "Existing folder is off, so files are flattened into the new levels. Previous folders remain in place, even when empty.",
+                                systemImage: "info.circle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(
-                            Color(nsColor: .separatorColor),
-                            lineWidth: 1
-                        )
-                }
 
-                additionalMetadataMenu
+                    Divider()
 
-                if !levelBinding(.existingFolder).wrappedValue {
-                    Text("Existing folder is off: files are flattened into the new levels. Their previous folders remain in place, even when empty.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    section("Place inside source folder") {
+                        TextField("Folder name", text: $configuration.containerName)
+                            .textFieldStyle(.roundedBorder)
+                        Text("Louppe leaves previous folders and unrelated files untouched.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Divider()
+
+                    previewSection
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
             }
 
             Divider()
-
-            section("Place inside source folder") {
-                TextField("Folder name", text: $configuration.containerName)
-                    .textFieldStyle(.roundedBorder)
-                Text("Louppe leaves previous folders and unrelated files untouched.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            previewSection
-
-            Spacer(minLength: 0)
 
             HStack {
                 if isPlanning {
@@ -134,10 +153,13 @@ struct OrganizeSourceView: View {
                     isReviewingMove = true
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(Color.louppeAccent)
                 .disabled(!canReviewMove)
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
-        .padding(22)
     }
 
     private func levelRow(
@@ -200,8 +222,9 @@ struct OrganizeSourceView: View {
                 .accessibilityLabel("Remove \(level.kind.label)")
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 42)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
         .onDrag {
             guard level.isEnabled else { return NSItemProvider() }
@@ -259,7 +282,9 @@ struct OrganizeSourceView: View {
                     Text(example.path)
                         .font(.body.monospaced())
                         .lineLimit(2)
+                        .truncationMode(.middle)
                         .textSelection(.enabled)
+                        .help(example.path)
                 }
                 HStack(spacing: 10) {
                     summaryValue("\(plan.previewGroups.count) folders")
@@ -271,25 +296,23 @@ struct OrganizeSourceView: View {
                 }
 
                 if plan.previewGroups.count > 1 {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 5) {
-                            ForEach(plan.previewGroups.prefix(6)) { group in
-                                HStack {
-                                    Text(group.path)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(group.itemCount)")
-                                        .foregroundStyle(.secondary)
-                                        .monospacedDigit()
-                                }
-                            }
-                            if plan.previewGroups.count > 6 {
-                                Text("…and \(plan.previewGroups.count - 6) more")
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(plan.previewGroups.prefix(6)) { group in
+                            HStack {
+                                Text(group.path)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Text("\(group.itemCount)")
                                     .foregroundStyle(.secondary)
+                                    .monospacedDigit()
                             }
                         }
+                        if plan.previewGroups.count > 6 {
+                            Text("…and \(plan.previewGroups.count - 6) more")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .frame(maxHeight: 95)
                 }
 
                 if !plan.collisions.isEmpty {
@@ -320,12 +343,14 @@ struct OrganizeSourceView: View {
                     Text("\(plan.movingItemCount) items will move out of \(oldFolderCount) existing folder\(oldFolderCount == 1 ? "" : "s"). Recognized XMP sidecars and grouped RAW+JPEG files follow their media. Nothing is overwritten.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if plan.excludedACRCompanionCount > 0 {
                     Text("\(plan.excludedACRCompanionCount) Lightroom .acr companion\(plan.excludedACRCompanionCount == 1 ? "" : "s") will remain in place.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 Text("Choose at least one folder level.")
@@ -337,42 +362,53 @@ struct OrganizeSourceView: View {
     private func confirmationView(
         _ plan: SourceOrganizationPlan
     ) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(spacing: 0) {
             sheetHeader(
                 title: "Move \(plan.movingFileCount) files?",
                 subtitle: "Review the exact source-folder change before Louppe moves anything."
             )
-
-            VStack(alignment: .leading, spacing: 10) {
-                confirmationRow("Items", "\(plan.movingItemCount)")
-                confirmationRow("Media files", "\(plan.movingFileCount - plan.sidecarFileCount)")
-                confirmationRow("XMP sidecars", "\(plan.sidecarFileCount)")
-                confirmationRow("Destination folders", "\(plan.previewGroups.count)")
-                confirmationRow("Already organized", "\(plan.alreadyOrganizedItemCount)")
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 18)
 
             Divider()
 
-            Text("Louppe will move these files inside “\(plan.configuration.containerName)” without changing their contents or filenames. Existing files are never overwritten. Previous folders and unrelated files remain. You can undo this organization with ⌘Z during this open session.")
-                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        confirmationRow("Items", "\(plan.movingItemCount)")
+                        confirmationRow("Media files", "\(plan.movingFileCount - plan.sidecarFileCount)")
+                        confirmationRow("XMP sidecars", "\(plan.sidecarFileCount)")
+                        confirmationRow("Destination folders", "\(plan.previewGroups.count)")
+                        confirmationRow("Already organized", "\(plan.alreadyOrganizedItemCount)")
+                    }
 
-            if plan.storageSafety.usesReducedDirectoryDurability {
-                Divider()
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("ExFAT card — reduced crash protection")
-                            .font(.headline)
-                        Text("macOS cannot make folder changes on ExFAT as crash-resistant as on APFS. Louppe will first test that collision-safe moves work, will never overwrite an existing file, and will keep its recovery record. Do not eject the card, close the Mac, or remove power until the move finishes.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+
+                    Text("Louppe will move these files inside “\(plan.configuration.containerName)” without changing their contents or filenames. Existing files are never overwritten. Previous folders and unrelated files remain. You can undo this organization with ⌘Z during this open session.")
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if plan.storageSafety.usesReducedDirectoryDurability {
+                        Divider()
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.title3)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("ExFAT card — reduced crash protection")
+                                    .font(.headline)
+                                Text("macOS cannot make folder changes on ExFAT as crash-resistant as on APFS. Louppe will first test that collision-safe moves work, will never overwrite an existing file, and will keep its recovery record. Do not eject the card, close the Mac, or remove power until the move finishes.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
+                .padding(24)
             }
 
-            Spacer()
+            Divider()
 
             HStack {
                 Button("Back") { isReviewingMove = false }
@@ -389,8 +425,9 @@ struct OrganizeSourceView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Color.louppeAccent)
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
-        .padding(24)
     }
 
     private func progressView(
@@ -460,6 +497,7 @@ struct OrganizeSourceView: View {
                 .font(.title2.weight(.semibold))
             Text(subtitle)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

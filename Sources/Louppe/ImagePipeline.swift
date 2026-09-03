@@ -152,6 +152,7 @@ final class ImagePipeline: @unchecked Sendable {
     }
 
     func thumbnail(for item: PhotoItem) async -> NSImage? {
+        guard !item.isAudio else { return nil }
         let key = Self.cacheKey(for: item)
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
         return await decodeOnce(
@@ -259,6 +260,7 @@ final class ImagePipeline: @unchecked Sendable {
     // MARK: - Decoding
 
     private func loadThumbnailSync(item: PhotoItem, key: String) -> NSImage? {
+        guard !item.isAudio else { return nil }
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
 
         // Try the on-disk thumbnail cache first.

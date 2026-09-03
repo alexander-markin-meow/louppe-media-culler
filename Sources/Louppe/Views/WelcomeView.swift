@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Louppe logo — the same 3×3 grid as the app icon, with the middle
 /// "keeper" tile filled — drawn natively so it stays crisp at any size and
@@ -35,6 +36,8 @@ struct LouppeLogo: View {
 /// The start screen: pick a folder (or a recent one) to begin a session.
 struct WelcomeView: View {
     @ObservedObject var store: SessionStore
+    @State private var isFolderDropTarget = false
+    @State private var folderDropError: String?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -42,25 +45,82 @@ struct WelcomeView: View {
             Text("Louppe")
                 .font(.largeTitle.bold())
                 .foregroundStyle(Color.louppeAccent)
-            Text("Pick a folder of photos and videos, mark each one Yes or No,\nthen export the keepers. Export copies by default. Originals move only when you explicitly choose Move or Trash.")
+            Text("Pick a folder of photos, videos, and audio, mark each one Yes or No,\nthen export the keepers. Export copies by default. Originals move only when you explicitly choose Move or Trash.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
-            Button {
-                store.promptForSourceFolder()
-            } label: {
-                Label("Choose Photo Folder…", systemImage: "folder")
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-            }
-            .controlSize(.large)
-            .keyboardShortcut("o")
+            VStack(spacing: 10) {
+                Button {
+                    store.promptForSourceFolder()
+                } label: {
+                    Label("Choose Photo Folder…", systemImage: "folder")
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                }
+                .controlSize(.large)
+                .keyboardShortcut("o")
 
-            if let error = store.scanError {
-                Text(error)
+                Label(
+                    isFolderDropTarget
+                        ? "Release to open this folder"
+                        : "or drag a photo folder here",
+                    systemImage: isFolderDropTarget
+                        ? "folder.badge.plus"
+                        : "arrow.down.doc"
+                )
+                .font(.callout)
+                .foregroundStyle(
+                    isFolderDropTarget ? Color.louppeAccent : .secondary
+                )
+            }
+            .frame(maxWidth: 360)
+            .padding(16)
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        isFolderDropTarget
+                            ? Color.louppeAccent
+                            : Color.secondary.opacity(0.45),
+                        style: StrokeStyle(lineWidth: isFolderDropTarget ? 2 : 1, dash: [6])
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .onDrop(
+                of: [UTType.fileURL.identifier],
+                isTargeted: $isFolderDropTarget,
+                perform: openDroppedFolder
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Open a photo folder")
+            .accessibilityHint("Choose a folder or drag a folder here to start reviewing it")
+
+            if let folderDropError {
+                Text(folderDropError)
                     .font(.callout)
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
+            }
+
+            if let error = store.scanError {
+                VStack(spacing: 8) {
+                    Text(error)
+                        .font(.callout)
+                        .foregroundStyle(
+                            store.canOpenMismatchedSessionAnyway
+                                ? Color.secondary
+                                : Color.orange
+                        )
+                        .multilineTextAlignment(.center)
+
+                    if store.canOpenMismatchedSessionAnyway {
+                        Button("Open Anyway") {
+                            store.openMismatchedSessionAnyway()
+                        }
+                        .accessibilityHint(
+                            "Verifies saved filenames, then uses this legacy session with the current folder"
+                        )
+                    }
+                }
             }
 
             if !store.recentFolders.isEmpty {
@@ -86,6 +146,50 @@ struct WelcomeView: View {
         .padding(40)
         .toolbar { LaunchToolbarTitle() }
         .navigationTitle("")
+    }
+
+    private func openDroppedFolder(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }) else {
+            return false
+        }
+
+        provider.loadItem(
+            forTypeIdentifier: UTType.fileURL.identifier,
+            options: nil
+        ) { item, _ in
+            let url: URL?
+            if let urlItem = item as? URL {
+                url = urlItem
+            } else if let urlItem = item as? NSURL {
+                url = urlItem as URL
+            } else if let data = item as? Data {
+                url = URL(dataRepresentation: data, relativeTo: nil)
+            } else {
+                url = nil
+            }
+
+            Task { @MainActor in
+                guard let url else {
+                    folderDropError = "Louppe couldn't read the dropped folder. Please try again."
+                    return
+                }
+
+                var isDirectory = ObjCBool(false)
+                guard FileManager.default.fileExists(
+                    atPath: url.path,
+                    isDirectory: &isDirectory
+                ), isDirectory.boolValue else {
+                    folderDropError = "Drop a folder containing photos, videos, or audio, not an individual file."
+                    return
+                }
+
+                folderDropError = nil
+                store.openFolder(url)
+            }
+        }
+        return true
     }
 }
 

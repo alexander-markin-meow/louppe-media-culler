@@ -22,6 +22,12 @@ struct GalleryView: View {
                         reason: store.emptySessionReason,
                         canUndo: store.canUndo
                     )
+                } else if store.visibleIndices.isEmpty && store.isGroupedReviewActive {
+                    ContentUnavailableView(
+                        store.groupedReviewEmptyTitle,
+                        systemImage: "rectangle.3.group",
+                        description: Text(store.groupedReviewEmptyDescription)
+                    )
                 } else if store.visibleIndices.isEmpty && store.filter.isActive {
                     ContentUnavailableView(
                         "No items match the filter",
@@ -31,6 +37,8 @@ struct GalleryView: View {
                 } else if let item = store.currentItem {
                     if item.isVideo {
                         GalleryVideoPlayerView(item: item, playback: store.videoPlayback)
+                    } else if item.isAudio {
+                        GalleryAudioPlayerView(item: item, playback: store.videoPlayback)
                     } else {
                         FullImageView(
                             item: item,

@@ -2,7 +2,7 @@
 
 (˶ᵔ ᵕ ᵔ˶)
 
-**A fast, open-source photo and video culling app for Mac.**
+**A fast, open-source photo, video, and audio culling app for Mac.**
 
 Louppe helps review a folder or memory card, mark the shots you want to
 keep, and export them.
@@ -33,9 +33,17 @@ cannot verify the developer. Right-click Louppe, choose **Open**, then choose
 3. Filter, sort, or select several photos when needed.
 4. Press **⌘E** to copy your chosen photos to another folder.
 
-Most photo and video formats are supported; support for more file types is
+When one copy folder is not enough, turn on **Route copies to multiple
+folders** in Export. Add an explicit route for a decision, stars, color label,
+file type, or media type, then choose a separate destination for each route.
+Louppe previews every source and destination before copying. Items that do not
+match a route stay in the source folder; routes that overlap, match nothing,
+lack a folder, or collectively exceed a shared drive's space cannot start.
+
+Most photo, video, and audio formats are supported; support for more file types is
 planned. Filters and sorting cover decisions, star ratings, color labels,
-dates, folders, file types, camera details, media type, and video length.
+dates, folders, file types, camera details, media type, media length, and—when
+videos are present—resolution, frame rate, and codec.
 
 Choose **File → Organize Source Folder…** to move All, Filtered, or Selected
 items into nested folders such as Decision → Date. Check the folder levels you
@@ -51,9 +59,59 @@ across subfolders. RAW and JPEG always keep their own decision, stars, and color
 label; while grouped, ratings, selection, Export, Move, and Clean Up apply to
 both files.
 
+For archiving, **Clean Up → Move Paired JPEGs to Trash…** keeps the RAW member
+of every matching pair in the chosen All Media, Filtered, or Selected scope.
+**Move Paired RAWs to Trash…** does the reverse. These actions recognize the
+same unambiguous pairs whether files are currently reviewed together or
+separately, never touch standalone files or XMP sidecars, ask for confirmation,
+and can be undone with **⌘Z** while the files remain in the Trash. Both actions
+are also searchable in the **⌘K** Command Palette.
+
 For close inspection, Gallery offers a fast Fit view, a phone-sized preview
-(**A**), and true 100% zoom (**S**). The Info panel includes metadata, a
-histogram, and clipping information. Press **X** to mark clipped areas.
+(**A**), and true 100% zoom (**S**). Video and audio positions are remembered
+while the folder stays open, and the Info panel offers 1×, 1.5×, 2×, or 2.5×
+playback for both video and audio recordings. Standalone audio fills the
+Gallery with its whole-file waveform and moving playhead. For video and audio,
+Info shows independent live loudness meters for every channel, with green,
+orange, and red level zones. The Info panel includes metadata, a histogram,
+and clipping information. Press **X** to show or hide the red preview clipping
+overlay.
+
+The Info panel can show optional **Quality cues** for high ISO, slow shutter
+speeds, and substantial near-black or near-white luminance areas. When cues
+exist, one quiet row beneath the shooting metadata opens their exact values and
+sources. The defaults are ISO 6400 or above, 1/30 s or slower, and 10% or more
+near black or white; choose **Louppe → Settings → Quality Cues** to adjust
+them. They never change ratings, filters, selection, exports, sidecars, or
+files.
+
+The histogram appears immediately from the rendered preview. For a supported
+RAW primary file, a delayed, bounded Core Image RAW decode replaces the
+histogram and clipping cues when ready; its small `Rendered` / `RAW` label
+makes the source clear. This is a scaled RGB decode from RAW sensor data, not a
+camera-maker proprietary per-photosite histogram. If RAW decoding is not
+available, the rendered estimate remains. **X** always controls a preview
+clipping overlay, because a RAW-derived mask would not align honestly with the
+displayed rendering.
+
+## Duplicate and burst review
+
+Choose **Sort → Review groups → Analyze Folder Locally**, or use the Command
+Palette, to review candidate groups without changing anything. Louppe keeps
+this analysis on your Mac and never automatically rates, exports, moves, or
+trashes a file.
+
+- **Exact duplicates** require matching local SHA-256 file fingerprints.
+- **Likely similar photos** use small local preview fingerprints. They are a
+  conservative starting point for your review, not a certainty; the
+  Similarity control makes suggestions stricter or broader.
+- **Capture bursts** group consecutive still photos taken close together; the
+  Burst interval controls that capture-time gap.
+
+Grouped review respects the current filter and is easy to leave with **Normal
+Review**. Matching RAW+JPEG files remain one review item when that option is
+enabled; videos and audio recordings can be found as exact byte duplicates but
+are not treated as visually similar photos or still-photo bursts.
 
 ## Keyboard shortcuts
 
@@ -64,12 +122,14 @@ histogram, and clipping information. Press **X** to mark clipped areas.
 | **F** | Mark Yes and move to the next undecided item |
 | **D** | Mark No and move to the next undecided item |
 | **0–5** | Clear stars or assign 1–5 stars without changing the Yes/No decision |
-| **← / →** | Go to the previous / next item |
+| **← / →** | Go to the previous / next item. In Gallery on a playable video, seek backward / forward by 0.5 seconds instead |
+| **⇧← / ⇧→** | In Gallery on a playable video, seek backward / forward by 5 seconds |
+| **J / L** | Go to the previous / next item, including when a video is open |
 | **↑ / ↓** | Gallery: previous / next item. Grid: previous / next row |
-| **Space** | Play or pause a video. On a photo, go to the next item |
+| **Space** or **K** | Play or pause a video or audio file. On a photo, Space goes to the next item |
 | **S** | Gallery: switch between Fit and true 100% zoom |
 | **A** | Gallery: switch between Fit and a phone-sized preview |
-| **X** | Gallery: show or hide red clipping warnings on the photo |
+| **X** | Gallery: show or hide the red preview clipping overlay |
 | **Tab** or **G** | Switch between Gallery and Grid |
 | **Q** | Show or hide the thumbnail browser in Gallery |
 | **W** | Show or hide the info panel |
@@ -86,12 +146,13 @@ histogram, and clipping information. Press **X** to mark clipped areas.
 | **⌘R** | Scan the current folder again |
 | **⌘K** | Open the Command Palette to search actions, metadata tools, filters, and folder operations |
 | **⌘A** | Select every item currently shown by the filter |
+| **⌘← / ⌘→** | Choose a slower / faster speed for playable video or audio. On a photo, select the previous / next visible item |
 | **⌘⇧← / ⌘⇧→** | Select from the current item to the first / last |
 | **Esc** | Cancel a scan or clear the current selection |
 | **⌘⌫** | Move the selection to the Trash immediately, without a dialog. **⌘Z** restores it |
 
 Letter review shortcuts such as F, D, and G stay active after clicking Decision,
-View, toolbar, or video controls. When a control has keyboard focus, Space,
+View, toolbar, or media controls. When a control has keyboard focus, Space,
 Tab, Escape, and the arrow keys remain available to that control. Louppe also
 leaves every shortcut alone while you are editing or selecting text, or
 responding to a dialog, sheet, or popover.
@@ -111,8 +172,11 @@ alone, so the main review workflow can be completed with the keyboard.
 
 ## Keeping your files safe
 
-- Export combines decisions, stars, and colors, so only items matching all
-  selected metadata are included. It uses **Copy** by default. **Move** is
+- Export first limits its work to **All Media**, **Filtered**, or **Selected**
+  items, then combines decisions, stars, and colors so only items inside that
+  scope matching all selected metadata are included. **Filtered** is the safe
+  default, and Selected means the explicit selection or the current item when
+  there is no multi-selection. Export uses **Copy** by default. **Move** is
   available when the destination is
   on the same storage volume and uses atomic filesystem renames; use Copy for
   another drive or card. **Metadata (XMP)** safely writes or merges sidecars
@@ -151,10 +215,19 @@ alone, so the main review workflow can be completed with the keyboard.
   after wake and safely retries an untouched in-progress file once. Completed
   copies remain at the destination; a failed in-progress temporary is removed
   only after Louppe verifies that exact physical file belongs to the operation.
+- **Route copies to multiple folders** is Copy-only. Every route has one
+  explicit condition and a separately chosen destination—there is no hidden
+  “any” route. Louppe blocks overlapping or empty routes, duplicate or unsafe
+  folders, split XMP families, and insufficient combined capacity on a shared
+  drive, then shows the complete source-to-destination plan along with media
+  that will not be copied. All route copies share the same durable recovery
+  record and collision handling as normal Copy.
 - **Clean Up** sends files to the macOS Trash, never to permanent deletion.
   It asks for confirmation unless you use **⌘⌫**. Immediately afterward,
   **⌘Z** can restore the whole batch during the open session while the files
-  remain in the Trash. Emptying the Trash deletes them permanently.
+  remain in the Trash. It can also remove only the JPEG or only the RAW member
+  of unambiguous pairs while retaining the other file. Emptying the Trash
+  deletes moved files permanently.
 - **Organize Source Folder** previews every destination before moving anything.
   All, Filtered, and Selected scopes show live counts. Checked folder levels
   are applied in draggable priority order, so Decision → Date and Date →
@@ -192,12 +265,14 @@ alone, so the main review workflow can be completed with the keyboard.
   applied to a same-named replacement. Louppe also refuses to overwrite a session file changed by
   another app and will not confuse two cards or folders that later use the
   same path. An older filename-only session upgrades automatically when every
-  saved filename is still present in its original folder. If old saved items
-  are missing, you can explicitly forget only their ratings and open the rest
-  of the folder without restoring intentionally deleted files.
+  saved filename is still present. If its saved folder path differs, Louppe
+  first asks you to **Open Anyway**, rechecks the exact session file and saved
+  filenames, then binds the migrated session to the current folder. If old
+  saved items are missing, you can explicitly forget only their ratings and
+  open the rest of the folder without restoring intentionally deleted files.
 
 Louppe recognises common camera RAW files, JPEG, TIFF, PNG, HEIC, WebP, AVIF,
-and the photo and video formats supported by macOS. An unsupported file still
+and the photo, video, and audio formats supported by macOS. An unsupported file still
 appears in the review, so it can be rated and exported.
 
 ---
@@ -205,7 +280,9 @@ appears in the review, so it can be rated and exported.
 For architecture, safety rules, and contributor notes, see
 [AGENTS.md](AGENTS.md). Performance details are in
 [Docs/PERFORMANCE.md](Docs/PERFORMANCE.md), and release instructions are in
-[Docs/UPDATES.md](Docs/UPDATES.md).
+[Docs/UPDATES.md](Docs/UPDATES.md). The separate Mac App Store build, signing,
+privacy, reviewer-note, and submission checklist is in
+[Docs/APP_STORE.md](Docs/APP_STORE.md).
 
 ---
 

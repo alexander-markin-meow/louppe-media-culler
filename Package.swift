@@ -1,5 +1,10 @@
 // swift-tools-version:6.0
 import PackageDescription
+import Foundation
+
+/// The Mac App Store requires Store-delivered updates, so its product must not
+/// link Sparkle at all. The direct-download product retains its signed updater.
+let isAppStoreBuild = ProcessInfo.processInfo.environment["LOUPPE_APP_STORE"] == "1"
 
 let package = Package(
     name: "Louppe",
@@ -78,7 +83,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Louppe",
-            dependencies: ["Sparkle", "XMPBridge"],
+            dependencies: isAppStoreBuild ? ["XMPBridge"] : ["Sparkle", "XMPBridge"],
             path: "Sources/Louppe",
             linkerSettings: [
                 // The release executable lives in Louppe.app/Contents/MacOS

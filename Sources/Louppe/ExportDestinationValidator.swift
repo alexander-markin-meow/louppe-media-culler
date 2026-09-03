@@ -20,6 +20,7 @@ enum ExportDestinationValidator {
         case crossVolumeMove
         case notDirectory
         case notWritable
+        case duplicateMultiDestination
         case insufficientSpace(required: Int64, available: Int64)
 
         var errorDescription: String? {
@@ -36,6 +37,8 @@ enum ExportDestinationValidator {
                 return "The selected destination is not a folder."
             case .notWritable:
                 return "Louppe does not have permission to write to that destination."
+            case .duplicateMultiDestination:
+                return "Each routing rule needs its own destination folder. Choose separate folders so Louppe can show one unambiguous copy plan."
             case .insufficientSpace(let required, let available):
                 let formatter = ByteCountFormatter()
                 formatter.countStyle = .file
@@ -44,6 +47,15 @@ enum ExportDestinationValidator {
                 return "The destination does not have enough free space. \(requiredText) is required, but only \(availableText) is available."
             }
         }
+    }
+
+    /// One independently selected destination in the copy-only routing flow.
+    /// Route IDs preserve the UI's explicit mapping while this validator
+    /// resolves aliases and returns the exact directory the worker must use.
+    struct MultiDestinationRequest: Sendable {
+        let routeID: UUID
+        let destination: URL
+        let items: [PhotoItem]
     }
 
     @discardableResult
@@ -131,6 +143,92 @@ enum ExportDestinationValidator {
             )
         }
         return validatedDestination
+    }
+
+    /// Validates every route before a multi-destination journal can be
+    /// planned. Each route carries its own capacity requirement, and two
+    /// aliases to the same folder are refused: allowing them would make two
+    /// visible routes share a collision namespace.
+    static func validateMultiple(
+        sourceFolder: URL?,
+        requests: [MultiDestinationRequest]
+    ) throws -> [URL] {
+        var validated: [URL] = []
+        validated.reserveCapacity(requests.count)
+        for request in requests {
+            let destination = try validate(
+                sourceFolder: sourceFolder,
+                destination: request.destination,
+                items: request.items,
+                mode: .copy
+            )
+            if validated.contains(where: {
+                FileOperationJournal.exactPathsEqual($0, destination)
+                    || directoriesReferToSameEntry($0, destination)
+            }) {
+                throw ValidationError.duplicateMultiDestination
+            }
+            validated.append(destination)
+        }
+        try validateCombinedCopyCapacity(
+            requests: requests,
+            destinations: validated
+        )
+        return validated
+    }
+
+    /// Routes can deliberately target different directories on the same
+    /// storage volume. Per-route checks alone would let two individually
+    /// affordable copies collectively overfill that volume, so the routing
+    /// preflight also reserves their combined media size wherever macOS can
+    /// identify the destination volume and report usable capacity.
+    private static func validateCombinedCopyCapacity(
+        requests: [MultiDestinationRequest],
+        destinations: [URL]
+    ) throws {
+        var requiredByVolume: [AnyHashable: Int64] = [:]
+        var sampleDestinationByVolume: [AnyHashable: URL] = [:]
+        for (request, destination) in zip(requests, destinations) {
+            guard let volume = volumeIdentifier(at: destination) else { continue }
+            let required = requiredCapacity(for: request.items)
+            let current = requiredByVolume[volume, default: 0]
+            requiredByVolume[volume] = combinedRequiredCapacity([current, required])
+            sampleDestinationByVolume[volume] = destination
+        }
+        for (volume, required) in requiredByVolume {
+            guard required > 0,
+                  let destination = sampleDestinationByVolume[volume]
+            else { continue }
+            let values = try? destination.resourceValues(forKeys: [
+                .volumeAvailableCapacityForImportantUsageKey,
+            ])
+            let available = effectiveAvailableCapacity(
+                importantUsage: values?.volumeAvailableCapacityForImportantUsage,
+                fileSystem: fileSystemAvailableCapacity(at: destination)
+            )
+            if let available, available < required {
+                throw ValidationError.insufficientSpace(
+                    required: required,
+                    available: available
+                )
+            }
+        }
+    }
+
+    private static func requiredCapacity(for items: [PhotoItem]) -> Int64 {
+        items.reduce(Int64(0)) { partial, item in
+            let (sum, overflowed) = partial.addingReportingOverflow(item.totalFileSize)
+            return overflowed ? Int64.max : sum
+        }
+    }
+
+    /// Kept separate from filesystem probing so multi-route capacity arithmetic
+    /// stays deterministic and covers overflow without ever wrapping smaller.
+    static func combinedRequiredCapacity(_ requirements: [Int64]) -> Int64 {
+        requirements.reduce(Int64(0)) { partial, next in
+            let (sum, overflowed) = partial.addingReportingOverflow(next)
+            return overflowed ? Int64.max : sum
+        }
     }
 
     /// `volumeAvailableCapacityForImportantUsage` can transiently report zero

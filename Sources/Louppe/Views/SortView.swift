@@ -7,7 +7,8 @@ struct SortView: View {
     @ObservedObject var store: SessionStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
             section("Sort by") {
                 keyRow("Date taken", .captureDate)
                 keyRow("Name", .name)
@@ -22,7 +23,22 @@ struct SortView: View {
                 keyRow("Aperture", .aperture, disabled: store.apertureRange == nil)
                 keyRow("Shutter speed", .shutterSpeed, disabled: store.shutterRange == nil)
                 keyRow("ISO", .iso, disabled: store.isoRange == nil)
-                keyRow("Video duration", .duration, disabled: store.durationRange == nil)
+                keyRow("Media duration", .duration, disabled: store.durationRange == nil)
+                keyRow(
+                    "Video resolution",
+                    .videoResolution,
+                    disabled: store.availableVideoResolutions.count <= 1
+                )
+                keyRow(
+                    "Video frame rate",
+                    .videoFrameRate,
+                    disabled: store.videoFrameRateRange == nil
+                )
+                keyRow(
+                    "Video codec",
+                    .videoCodec,
+                    disabled: store.availableVideoCodecs.count <= 1
+                )
             }
 
             Divider()
@@ -41,9 +57,65 @@ struct SortView: View {
                     .disabled(store.sort.key == .name)
                     .opacity(store.sort.key == .name ? 0.4 : 1)
             }
+
+            Divider()
+
+            section("Review groups") {
+                if store.isDuplicateBurstAnalysisRunning {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Analyzing locally…")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") {
+                            store.cancelDuplicateBurstAnalysis()
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                } else {
+                    Button(
+                        store.duplicateBurstAnalysisState == .ready
+                            ? "Refresh Local Analysis"
+                            : "Analyze Folder Locally"
+                    ) {
+                        store.analyzeDuplicateAndBurstGroups()
+                    }
+                    .disabled(store.items.isEmpty || store.isFileOperationRunning)
+                }
+
+                reviewModeRow(.exactDuplicates)
+                reviewModeRow(.likelySimilarPhotos)
+                reviewModeRow(.captureBursts)
+
+                if store.isGroupedReviewActive {
+                    Button("Return to Normal Review") {
+                        store.exitGroupedReview()
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                if store.groupedReviewMode == .likelySimilarPhotos {
+                    similarityControl
+                }
+                if store.groupedReviewMode == .captureBursts {
+                    burstControl
+                }
+
+                Text(store.duplicateBurstAnalysisSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Review-only: ratings, Clean Up, Export, and originals stay under your control.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            }
+            .padding(14)
+            .padding(.trailing, 5)
         }
-        .padding(14)
-        .frame(width: 240)
+        .frame(width: 300, height: 560)
     }
 
     private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
@@ -63,6 +135,74 @@ struct SortView: View {
     private func orderRow(_ label: String, ascending: Bool) -> some View {
         checkRow(label, isSelected: store.sort.ascending == ascending, disabled: false) {
             store.sort.ascending = ascending
+        }
+    }
+
+    private func reviewModeRow(_ mode: DuplicateBurstAnalysis.ReviewMode) -> some View {
+        checkRow(
+            mode.displayName,
+            isSelected: store.groupedReviewMode == mode,
+            disabled: store.items.isEmpty || store.isFileOperationRunning
+        ) {
+            store.enterGroupedReview(mode)
+        }
+    }
+
+    private var similarityControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Similarity")
+                Spacer()
+                Text(similarityLabel)
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(store.visualSimilarityDistance) },
+                    set: { store.setVisualSimilarityDistance(Int($0.rounded())) }
+                ),
+                in: 3...16,
+                step: 1
+            )
+            .accessibilityLabel("Likely-similar photo sensitivity")
+            .accessibilityValue(similarityLabel)
+            Text("Lower is stricter. Similarity is a local preview cue, not a certainty.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 2)
+    }
+
+    private var burstControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Burst interval")
+                Spacer()
+                Text(String(format: "%.1f s", store.burstGroupingInterval))
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { store.burstGroupingInterval },
+                    set: { store.setBurstGroupingInterval($0) }
+                ),
+                in: 0.5...10,
+                step: 0.5
+            )
+            .accessibilityLabel("Capture burst interval")
+            .accessibilityValue(String(format: "%.1f seconds", store.burstGroupingInterval))
+            Text("Photos are grouped when consecutive capture times are within this gap.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 2)
+    }
+
+    private var similarityLabel: String {
+        switch store.visualSimilarityDistance {
+        case ...5: return "Strict"
+        case 6...10: return "Balanced"
+        default: return "Broad"
         }
     }
 

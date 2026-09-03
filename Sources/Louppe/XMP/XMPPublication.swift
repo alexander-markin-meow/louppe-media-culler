@@ -537,7 +537,7 @@ enum XMPPublicationPlanner {
         case .unsupportedMedia:
             return base.entry(
                 category: .unsupportedMedia,
-                message: "Video files do not support XMP publication."
+                message: "Video and audio files do not support XMP publication."
             )
         case .metadataConflict:
             return base.entry(

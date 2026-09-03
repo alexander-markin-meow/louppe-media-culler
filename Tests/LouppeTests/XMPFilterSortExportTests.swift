@@ -206,6 +206,17 @@ final class XMPFilterSortExportTests: XCTestCase {
         XCTAssertEqual(mixedDecisionSnapshot.itemIndices, [3])
         XCTAssertEqual(mixedDecisionSnapshot.mixedDecisionCount, 1)
         XCTAssertEqual(mixedDecisionSnapshot.physicalFileCount, 2)
+
+        let scopedSnapshot = ExportSelectionSnapshot(
+            items: items,
+            candidateIndices: [1, 3, 4, 99],
+            predicate: ExportSelectionPredicate(
+                decisions: [.yes, .undecided]
+            )
+        )
+        XCTAssertEqual(scopedSnapshot.itemIndices, [1, 3, 4])
+        XCTAssertEqual(scopedSnapshot.physicalFileCount, 5)
+        XCTAssertEqual(scopedSnapshot.mixedDecisionCount, 1)
     }
 
     @MainActor

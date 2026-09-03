@@ -91,6 +91,120 @@ final class HistogramTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testAnalysisSourceLabelsAreExplicit() {
+        XCTAssertEqual(
+            HistogramAnalysisSource.renderedPreview.shortLabel,
+            "Rendered"
+        )
+        XCTAssertEqual(HistogramAnalysisSource.rawDecode.shortLabel, "RAW")
+        XCTAssertEqual(
+            HistogramAnalysisSource.rawDecode.detailLabel,
+            "RAW decode"
+        )
+    }
+
+    func testRawProcessorUsesLinearClippingThresholdsAndBoundedBins() throws {
+        let analysis = try XCTUnwrap(
+            RawHistogramProcessor.analyze(
+                rgba: [
+                    0, 0, 0, 1,
+                    0.001, 0.001, 0.001, 1,
+                    0.5, 0.5, 0.5, 1,
+                    0.995, 0.995, 0.995, 1,
+                    1.2, 1.2, 1.2, 1,
+                    .nan, 0, 0, 1,
+                    0, 0, 0, 0,
+                ],
+                width: 7,
+                height: 1
+            )
+        )
+
+        XCTAssertEqual(analysis.sampleCount, 5)
+        XCTAssertEqual(analysis.shadowCount, 2)
+        XCTAssertEqual(analysis.highlightCount, 2)
+        XCTAssertEqual(analysis.bins[0], 2)
+        XCTAssertEqual(analysis.bins[127], 1)
+        XCTAssertEqual(analysis.bins[253], 1)
+        XCTAssertEqual(analysis.bins[255], 1)
+    }
+
+    func testRawPipelineEligibilityUsesTheDisplayedPrimaryFile() {
+        XCTAssertTrue(
+            RawHistogramPipeline.supportsAnalysis(
+                for: photo(path: "/tmp/capture.NEF")
+            )
+        )
+        XCTAssertFalse(
+            RawHistogramPipeline.supportsAnalysis(
+                for: photo(path: "/tmp/capture.JPG")
+            )
+        )
+    }
+
+    func testRawPipelineCoalescesAndCachesContentRevision() async throws {
+        let counter = RawDecodeCounter()
+        let pipeline = RawHistogramPipeline(
+            delayNanoseconds: 0,
+            decoder: { _ in counter.decode() }
+        )
+        let item = photo(path: "/tmp/coalesced.NEF")
+
+        async let first = pipeline.analysis(for: item)
+        async let second = pipeline.analysis(for: item)
+        let results = await (first, second)
+
+        XCTAssertNotNil(results.0)
+        XCTAssertNotNil(results.1)
+        XCTAssertEqual(counter.value, 1)
+        let cached = await pipeline.analysis(for: item)
+        XCTAssertNotNil(cached)
+        XCTAssertEqual(counter.value, 1)
+
+        let replacement = PhotoItem(
+            id: item.id,
+            primaryURL: item.primaryURL,
+            pairedURL: nil,
+            captureDate: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            primaryModificationDate: Date(timeIntervalSince1970: 1),
+            fileSize: 2
+        )
+        XCTAssertNotEqual(item.contentRevision, replacement.contentRevision)
+        let replacementResult = await pipeline.analysis(for: replacement)
+        XCTAssertNotNil(replacementResult)
+        XCTAssertEqual(counter.value, 2)
+    }
+
+    func testRawPipelineCancelsDuringItsDelayWithoutDecoding() async {
+        let counter = RawDecodeCounter()
+        let pipeline = RawHistogramPipeline(
+            delayNanoseconds: 500_000_000,
+            decoder: { _ in counter.decode() }
+        )
+        let item = photo(path: "/tmp/cancelled.NEF")
+        let task = Task { await pipeline.analysis(for: item) }
+
+        task.cancel()
+
+        let result = await task.value
+        XCTAssertNil(result)
+        XCTAssertEqual(counter.value, 0)
+    }
+
+    private func photo(path: String) -> PhotoItem {
+        PhotoItem(
+            id: URL(fileURLWithPath: path).lastPathComponent,
+            primaryURL: URL(fileURLWithPath: path),
+            pairedURL: nil,
+            captureDate: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            fileSize: 1
+        )
+    }
+
     private func makeImage(
         _ pixels: [(UInt8, UInt8, UInt8)]
     ) throws -> CGImage {
@@ -162,5 +276,29 @@ final class HistogramTests: XCTestCase {
         return stride(from: 0, to: bytes.count, by: 4).map {
             (Int(bytes[$0]), Int(bytes[$0 + 1]), Int(bytes[$0 + 2]))
         }
+    }
+}
+
+private final class RawDecodeCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func decode() -> HistogramAnalysis {
+        lock.lock()
+        count += 1
+        lock.unlock()
+        Thread.sleep(forTimeInterval: 0.05)
+        return HistogramAnalysis(
+            bins: Array(repeating: 0, count: 256),
+            sampleCount: 1,
+            shadowCount: 0,
+            highlightCount: 0
+        )
     }
 }

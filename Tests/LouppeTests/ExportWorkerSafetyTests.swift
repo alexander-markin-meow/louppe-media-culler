@@ -4,6 +4,78 @@ import XCTest
 @testable import Louppe
 
 final class ExportWorkerSafetyTests: XCTestCase {
+    func testCopyReportsProgressByTransferredBytes() throws {
+        let root = try makeTemporaryDirectory(named: "CopyByteProgress")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceFolder = try makeDirectory(named: "Source", in: root)
+        let destination = try makeDirectory(named: "Destination", in: root)
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        let small = sourceFolder.appendingPathComponent("SMALL.JPG")
+        let large = sourceFolder.appendingPathComponent("LARGE.MP4")
+        try Data(repeating: 0x01, count: 2).write(to: small)
+        try Data(repeating: 0x02, count: 8).write(to: large)
+        let recorder = ByteProgressRecorder()
+
+        let result = ExportWorker.copy(
+            [
+                makeItem(id: "SMALL.JPG", primaryURL: small),
+                makeItem(id: "LARGE.MP4", primaryURL: large),
+            ],
+            to: destination,
+            journalDirectory: journals,
+            progress: { _, _ in },
+            byteProgress: recorder.record
+        )
+
+        XCTAssertEqual(result.copiedFiles, 2)
+        XCTAssertEqual(
+            recorder.values,
+            [
+                .init(completed: 2, total: 10),
+                .init(completed: 10, total: 10),
+            ],
+            "The visible export progress must be weighted by data size, not item count."
+        )
+    }
+
+    func testCopyCarriesConfirmedCancellationReason() throws {
+        let root = try makeTemporaryDirectory(named: "CopyCancellationReason")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceFolder = try makeDirectory(named: "Source", in: root)
+        let destination = try makeDirectory(named: "Destination", in: root)
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        let first = sourceFolder.appendingPathComponent("FIRST.JPG")
+        let second = sourceFolder.appendingPathComponent("SECOND.JPG")
+        try Data(repeating: 0x01, count: 32).write(to: first)
+        try Data(repeating: 0x02, count: 32).write(to: second)
+        let cancellation = ExportWorker.CancelFlag()
+
+        let result = ExportWorker.copy(
+            [
+                makeItem(id: "FIRST.JPG", primaryURL: first),
+                makeItem(id: "SECOND.JPG", primaryURL: second),
+            ],
+            to: destination,
+            journalDirectory: journals,
+            isCancelled: { cancellation.isSet },
+            cancellationReason: { cancellation.reason },
+            afterStagedFile: { index in
+                if index == 0 {
+                    XCTAssertTrue(cancellation.request(.userConfirmed))
+                }
+            },
+            progress: { _, _ in }
+        )
+
+        XCTAssertTrue(result.cancelled)
+        XCTAssertEqual(result.cancellationReason, .userConfirmed)
+        XCTAssertEqual(result.copiedFiles, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination
+            .appendingPathComponent("FIRST.JPG").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination
+            .appendingPathComponent("SECOND.JPG").path))
+    }
+
     func testCopyRetriesOnceAfterTransientSourceIOFailure() throws {
         let root = try makeTemporaryDirectory(named: "CopyTransientRetry")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -579,6 +651,26 @@ final class ExportWorkerSafetyTests: XCTestCase {
             fileSize: fileSize,
             pairedFileSize: pairedURL == nil ? 0 : 1
         )
+    }
+}
+
+private final class ByteProgressRecorder: @unchecked Sendable {
+    struct Value: Equatable {
+        let completed: Int64
+        let total: Int64
+    }
+
+    private let lock = NSLock()
+    private var storedValues: [Value] = []
+
+    func record(completed: Int64, total: Int64) {
+        lock.withLock {
+            storedValues.append(.init(completed: completed, total: total))
+        }
+    }
+
+    var values: [Value] {
+        lock.withLock { storedValues }
     }
 }
 

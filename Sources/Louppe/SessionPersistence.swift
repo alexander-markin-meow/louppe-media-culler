@@ -15,7 +15,9 @@ protocol SessionPersistenceClient: Sendable {
 
     func read(
         for folder: URL,
-        folderIdentity: SessionPersistence.SourceFolderIdentity
+        folderIdentity: SessionPersistence.SourceFolderIdentity,
+        legacySidecarRelocationAuthorization:
+            SessionPersistence.LegacySidecarRelocationAuthorization?
     ) async -> SessionPersistence.ReadResult
 }
 
@@ -261,6 +263,15 @@ actor SessionPersistence: SessionPersistenceClient {
         case unavailable
     }
 
+    /// One-use-in-practice acknowledgement for a legacy sidecar whose saved
+    /// folder path differs from the folder that currently contains it. The
+    /// exact content revision and recorded path bind an Open Anyway click to
+    /// the file the photographer was shown, rather than any later replacement.
+    struct LegacySidecarRelocationAuthorization: Sendable, Equatable {
+        fileprivate let revision: SidecarRevision
+        fileprivate let recordedSourcePath: String
+    }
+
     struct AccessContext: Sendable, Equatable {
         let id: UUID
         let folderIdentity: SourceFolderIdentity
@@ -350,6 +361,11 @@ actor SessionPersistence: SessionPersistenceClient {
         let origin: SnapshotLocation?
         let problems: [ReadProblem]
         let access: AccessContext?
+        /// Present only when the folder-owned sidecar is a structurally valid
+        /// schema 1–3 session whose recorded folder path differs. The UI can
+        /// offer Open Anyway, then pass this exact token into a fresh read.
+        let legacySidecarRelocationAuthorization:
+            LegacySidecarRelocationAuthorization?
         /// True only for the obsolete path-keyed backup format. Schema-4
         /// ratings from that unowned location must prove at least one exact
         /// physical file in SessionStore before the snapshot is trusted.
@@ -360,12 +376,16 @@ actor SessionPersistence: SessionPersistenceClient {
             origin: SnapshotLocation?,
             problems: [ReadProblem],
             access: AccessContext? = nil,
+            legacySidecarRelocationAuthorization:
+                LegacySidecarRelocationAuthorization? = nil,
             requiresPhysicalIdentityProof: Bool = false
         ) {
             self.session = session
             self.origin = origin
             self.problems = problems
             self.access = access
+            self.legacySidecarRelocationAuthorization =
+                legacySidecarRelocationAuthorization
             self.requiresPhysicalIdentityProof =
                 requiresPhysicalIdentityProof
         }
@@ -392,8 +412,9 @@ actor SessionPersistence: SessionPersistenceClient {
                 if case .differentSourceFolder(.sidecar) = $0 { return true }
                 return false
             }) {
-                return "This folder's session file belongs to a different folder. "
-                    + "It was left untouched so ratings are never applied to the wrong photos."
+                return "This folder contains a Louppe session created for a different folder path. "
+                    + "If you recognize it as this folder's session, you can open it anyway. "
+                    + "Nothing has been changed."
             }
             if problems.contains(where: {
                 if case .invalidEntry(.sidecar) = $0 { return true }
@@ -425,6 +446,20 @@ actor SessionPersistence: SessionPersistenceClient {
     private struct CandidateRead {
         let candidate: Candidate
         let revision: SidecarRevision
+        let legacySidecarRelocationAuthorization:
+            LegacySidecarRelocationAuthorization?
+
+        init(
+            candidate: Candidate,
+            revision: SidecarRevision,
+            legacySidecarRelocationAuthorization:
+                LegacySidecarRelocationAuthorization? = nil
+        ) {
+            self.candidate = candidate
+            self.revision = revision
+            self.legacySidecarRelocationAuthorization =
+                legacySidecarRelocationAuthorization
+        }
     }
 
     private enum SaveGuardError: Error {
@@ -968,7 +1003,9 @@ actor SessionPersistence: SessionPersistenceClient {
 
     func read(
         for folder: URL,
-        folderIdentity: SourceFolderIdentity
+        folderIdentity: SourceFolderIdentity,
+        legacySidecarRelocationAuthorization:
+            LegacySidecarRelocationAuthorization? = nil
     ) async -> ReadResult {
         let sourceFolder = folder
         guard folderIdentity.matches(folder: sourceFolder) else {
@@ -983,7 +1020,9 @@ actor SessionPersistence: SessionPersistenceClient {
         let sidecarRead = readCandidate(
             at: sidecar,
             location: .sidecar,
-            sourceFolder: sourceFolder
+            sourceFolder: sourceFolder,
+            legacySidecarRelocationAuthorization:
+                legacySidecarRelocationAuthorization
         )
         afterSidecarReadForTesting?()
         let sidecarCandidate = sidecarRead.candidate
@@ -1072,6 +1111,8 @@ actor SessionPersistence: SessionPersistenceClient {
             origin: newest?.location,
             problems: problems,
             access: access,
+            legacySidecarRelocationAuthorization:
+                sidecarRead.legacySidecarRelocationAuthorization,
             requiresPhysicalIdentityProof:
                 usesLegacyPathBackup && newest?.location == .backup
         )
@@ -1085,14 +1126,20 @@ actor SessionPersistence: SessionPersistenceClient {
                 problems: [.sourceFolderChanged]
             )
         }
-        return await read(for: folder, folderIdentity: identity)
+        return await read(
+            for: folder,
+            folderIdentity: identity,
+            legacySidecarRelocationAuthorization: nil
+        )
     }
 
     private func readCandidate(
         at url: URL,
         location: SnapshotLocation,
         sourceFolder: URL,
-        allowsVerifiedRelocation: Bool = false
+        allowsVerifiedRelocation: Bool = false,
+        legacySidecarRelocationAuthorization:
+            LegacySidecarRelocationAuthorization? = nil
     ) -> CandidateRead {
         let data: Data
         do {
@@ -1146,24 +1193,41 @@ actor SessionPersistence: SessionPersistenceClient {
             .resolvingSymlinksInPath().standardizedFileURL
         let requestedFolder = sourceFolder
             .resolvingSymlinksInPath().standardizedFileURL
-        // A schema-4 sidecar travels with a renamed/moved folder. Defer that
-        // one path mismatch to SessionStore, which has the fresh scan and can
-        // require at least one exact physical-file identity match. Backups and
-        // legacy path-only sessions never receive this exception.
-        let isVerifiedRelocationCandidate =
-            (location == .sidecar || allowsVerifiedRelocation)
-            && session.version >= 4
-        guard recordedFolder.path == requestedFolder.path
-                || isVerifiedRelocationCandidate else {
-            return CandidateRead(
-                candidate: .problem(.differentSourceFolder(location)),
-                revision: revision
-            )
-        }
         guard Self.entriesAreValid(in: session) else {
             return CandidateRead(
                 candidate: .problem(.invalidEntry(location)),
                 revision: revision
+            )
+        }
+        // A schema-4 sidecar travels with a renamed/moved folder. Defer that
+        // one path mismatch to SessionStore, which has the fresh scan and can
+        // require at least one exact physical-file identity match. A legacy
+        // path-only sidecar receives an exception only after the photographer
+        // acknowledges this exact file revision with Open Anyway; backups do
+        // not receive that path exception.
+        let isVerifiedRelocationCandidate =
+            (location == .sidecar || allowsVerifiedRelocation)
+            && session.version >= 4
+        let isAuthorizedLegacySidecar = location == .sidecar
+            && session.version < 4
+            && legacySidecarRelocationAuthorization ==
+                LegacySidecarRelocationAuthorization(
+                    revision: revision,
+                    recordedSourcePath: session.sourcePath
+                )
+        guard recordedFolder.path == requestedFolder.path
+                || isVerifiedRelocationCandidate
+                || isAuthorizedLegacySidecar else {
+            let authorization = location == .sidecar && session.version < 4
+                ? LegacySidecarRelocationAuthorization(
+                    revision: revision,
+                    recordedSourcePath: session.sourcePath
+                )
+                : nil
+            return CandidateRead(
+                candidate: .problem(.differentSourceFolder(location)),
+                revision: revision,
+                legacySidecarRelocationAuthorization: authorization
             )
         }
         return CandidateRead(

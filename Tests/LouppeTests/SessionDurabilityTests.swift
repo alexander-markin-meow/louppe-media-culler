@@ -1023,6 +1023,7 @@ final class SessionDurabilityTests: XCTestCase {
         }
         XCTAssertTrue(store.items.isEmpty)
         XCTAssertTrue(store.scanError?.contains("another location") == true)
+        XCTAssertFalse(store.canOpenMismatchedSessionAnyway)
         XCTAssertEqual(try Data(contentsOf: copiedSidecar), preservedData)
     }
 
@@ -2664,6 +2665,150 @@ final class SessionDurabilityTests: XCTestCase {
         XCTAssertEqual(migrated.entries.first?.rating, Rating.yes.rawValue)
     }
 
+    func testLegacyDifferentPathOffersOpenAnywayAndMigratesExactMatches() async throws {
+        let fixtureRoot = URL(
+            fileURLWithPath:
+                "/private/tmp/Louppe-LegacyDifferentPath-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let fixture = Fixture(
+            root: fixtureRoot,
+            photos: fixtureRoot.appendingPathComponent(
+                "Photos",
+                isDirectory: true
+            ),
+            backup: fixtureRoot.appendingPathComponent(
+                "Backup",
+                isDirectory: true
+            )
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try FileManager.default.createDirectory(
+            at: fixture.photos,
+            withIntermediateDirectories: true
+        )
+        let nestedFolder = fixture.photos.appendingPathComponent(
+            "textures",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: nestedFolder,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            contentsOf: URL(
+                fileURLWithPath: "AppIcon/AppIcon.iconset/icon_16x16.png"
+            )
+        ).write(
+            to: nestedFolder.appendingPathComponent("A.png")
+        )
+        let openedFolder = fixture.photos
+        let scanned = try FolderScanner.scan(openedFolder) { _ in }
+        XCTAssertEqual(
+            scanned.first?.individualFiles.first?.legacyPersistenceID,
+            "textures/A.png"
+        )
+        let sidecar = openedFolder.appendingPathComponent(
+            SessionConstants.sidecarName
+        )
+        let legacy = SessionFile(
+            version: 2,
+            sourcePath: fixture.root
+                .appendingPathComponent("Previous Photos")
+                .path,
+            scannedAt: Date(timeIntervalSince1970: 1),
+            entries: [
+                SessionEntry(
+                    filename: "textures/A.png",
+                    pairedFilename: nil,
+                    rating: Rating.yes.rawValue,
+                    ratedAt: nil
+                )
+            ]
+        )
+        try writeSession(legacy, to: sidecar)
+        let originalSidecar = try Data(contentsOf: sidecar)
+        let store = SessionStore(
+            persistence: SessionPersistence(backupDirectory: fixture.backup)
+        )
+
+        store.openFolder(openedFolder)
+        try await waitForScanError(
+            containing: "different folder path",
+            in: store
+        )
+        XCTAssertTrue(store.canOpenMismatchedSessionAnyway)
+        XCTAssertEqual(try Data(contentsOf: sidecar), originalSidecar)
+
+        store.openMismatchedSessionAnyway()
+        do {
+            try await waitForReadySession(store)
+        } catch {
+            XCTFail(
+                "Open Anyway did not reach one-item ready state; phase=\(store.phase), "
+                    + "items=\(store.items.count), error=\(store.scanError ?? "none"), "
+                    + "legacyConfirmation=\(store.isLegacySessionMigrationConfirmationPresented)"
+            )
+            return
+        }
+        XCTAssertEqual(store.items.first?.rating, .yes)
+        XCTAssertFalse(store.canOpenMismatchedSessionAnyway)
+
+        let migrated = try await waitForSidecar(in: openedFolder) {
+            $0.version == SessionConstants.currentSchemaVersion
+                && $0.sourcePath == openedFolder.standardizedFileURL.path
+                && $0.entries.first?.fileIdentity != nil
+        }
+        XCTAssertEqual(migrated.entries.first?.rating, Rating.yes.rawValue)
+    }
+
+    func testLegacyOpenAnywayAuthorizationRejectsChangedSidecar() async throws {
+        let fixture = try makeFixture(named: "LegacyAuthorizationRevision")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sidecar = fixture.photos.appendingPathComponent(
+            SessionConstants.sidecarName
+        )
+        var legacy = SessionFile(
+            version: 2,
+            sourcePath: fixture.root.appendingPathComponent("Old").path,
+            scannedAt: Date(timeIntervalSince1970: 1),
+            entries: [
+                SessionEntry(
+                    filename: "A.png",
+                    pairedFilename: nil,
+                    rating: Rating.yes.rawValue,
+                    ratedAt: nil
+                )
+            ]
+        )
+        try writeSession(legacy, to: sidecar)
+        let persistence = SessionPersistence(backupDirectory: fixture.backup)
+        let folderIdentity = try SessionPersistence.SourceFolderIdentity
+            .capture(at: fixture.photos)
+        let firstRead = await persistence.read(
+            for: fixture.photos,
+            folderIdentity: folderIdentity
+        )
+        let authorization = try XCTUnwrap(
+            firstRead.legacySidecarRelocationAuthorization
+        )
+
+        legacy.scannedAt = Date(timeIntervalSince1970: 2)
+        try writeSession(legacy, to: sidecar)
+        let secondRead = await persistence.read(
+            for: fixture.photos,
+            folderIdentity: folderIdentity,
+            legacySidecarRelocationAuthorization: authorization
+        )
+
+        XCTAssertNil(secondRead.session)
+        XCTAssertNotNil(secondRead.blockingMessage)
+        XCTAssertNotEqual(
+            secondRead.legacySidecarRelocationAuthorization,
+            authorization
+        )
+    }
+
     func testLegacyPathBackupCanBeReviewedAndClosedWithoutMigration() async throws {
         let fixture = try makeFixture(named: "LegacyPathBackup")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -3118,7 +3263,9 @@ private actor GatedSessionPersistence: SessionPersistenceClient {
 
     func read(
         for folder: URL,
-        folderIdentity: SessionPersistence.SourceFolderIdentity
+        folderIdentity: SessionPersistence.SourceFolderIdentity,
+        legacySidecarRelocationAuthorization:
+            SessionPersistence.LegacySidecarRelocationAuthorization?
     ) async -> SessionPersistence.ReadResult {
         SessionPersistence.ReadResult(
             session: nil,

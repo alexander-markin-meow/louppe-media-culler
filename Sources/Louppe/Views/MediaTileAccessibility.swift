@@ -81,7 +81,7 @@ enum MediaTileAccessibility {
         if item.fileTypeLabel == "RAW + JPEG" {
             return "RAW and JPEG photo"
         }
-        return "\(item.fileTypeLabel) \(item.isVideo ? "video" : "photo")"
+        return "\(item.fileTypeLabel) \(item.mediaKind.singularLabel)"
     }
 }
 

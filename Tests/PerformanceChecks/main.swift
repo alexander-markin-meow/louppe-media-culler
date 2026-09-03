@@ -9,8 +9,9 @@ struct PerformanceChecks {
         try preparedFilterUsesSpecificDateCheckboxes()
         try preparedFilterUsesInclusiveExposureRanges()
         try neutralFullRangesKeepUnknownMetadataVisible()
-        try mediaKindFilterSeparatesPhotosAndVideos()
+        try mediaKindFilterSeparatesPhotosVideosAndAudio()
         try durationFilterAndSortHandleImagesAsMissingValues()
+        try videoMetadataFiltersAndSortsUseCachedScanValues()
         try durationFormattingCoversShortAndLongMovies()
         try selectionSummaryKeepsEveryDistinctMetadataValue()
         try pairedMetadataReportsEveryFileSize()
@@ -21,7 +22,7 @@ struct PerformanceChecks {
         try folderScannerFindsDeepMediaWithoutFollowingSymlinkLoop()
         try rawJPEGPairingIsDeterministic()
         try caseSensitivePairingKeepsDistinctBasenames()
-        try videoNeverBecomesThePairForSameNamedRaw()
+        try nonPhotoMediaNeverBecomesThePairForSameNamedRaw()
         try rawAndTiffStayIndependent()
         try rawJPEGPairingDefaultsToSeparate()
         try separateRAWJPEGInitialScanBaseline()
@@ -75,12 +76,12 @@ struct PerformanceChecks {
         try batchRatingUndoRestoresEveryRating()
         try exportMoveRemovalUpdatesSessionState()
         if ProcessInfo.processInfo.environment["LOUPPE_SKIP_REAL_TRASH"] == "1" {
-            print("Performance checks passed (70/73; 3 real Trash checks explicitly skipped)")
+            print("Performance checks passed (71/74; 3 real Trash checks explicitly skipped)")
         } else {
             try cleanUpPairRoundTripsThroughTrash()
             try cleanUpPairFailureRollsBackFirstFile()
             try cleanUpRollbackPreservesRacingSourceReplacement()
-            print("Performance checks passed (73/73)")
+            print("Performance checks passed (74/74)")
         }
     }
 
@@ -176,14 +177,16 @@ struct PerformanceChecks {
         )
     }
 
-    private static func mediaKindFilterSeparatesPhotosAndVideos() throws {
+    private static func mediaKindFilterSeparatesPhotosVideosAndAudio() throws {
         let photo = makeItem(id: "PHOTO.JPG")
         let video = makeItem(id: "VIDEO.MOV", mediaKind: .video, duration: 12, videoIsPlayable: true)
+        let audio = makeItem(id: "AUDIO.WAV", mediaKind: .audio, duration: 12, audioIsPlayable: true)
         var filter = PhotoFilter()
         filter.excludedMediaKinds = [.photo]
         let prepared = PreparedPhotoFilter(filter)
         try expect(!prepared.matches(photo), "media filter should exclude switched-off photos")
         try expect(prepared.matches(video), "media filter should keep enabled videos")
+        try expect(prepared.matches(audio), "media filter should keep enabled audio")
     }
 
     private static func durationFilterAndSortHandleImagesAsMissingValues() throws {
@@ -202,6 +205,55 @@ struct PerformanceChecks {
         let ascending = PhotoSort(key: .duration, ascending: true)
         let ordered = [photo, long, short].sorted(by: ascending.areInOrder)
         try expect(ordered.map(\.id) == ["SHORT.MOV", "LONG.MP4", "PHOTO.JPG"], "duration sort should keep missing values last")
+    }
+
+    private static func videoMetadataFiltersAndSortsUseCachedScanValues() throws {
+        let photo = makeItem(id: "PHOTO.JPG")
+        let HD = makeItem(
+            id: "HD.MOV",
+            mediaKind: .video,
+            videoDimensions: CGSize(width: 1_920, height: 1_080),
+            videoCodec: "H.264",
+            videoFrameRate: 23.976,
+            videoIsPlayable: true
+        )
+        let UHD = makeItem(
+            id: "UHD.MOV",
+            mediaKind: .video,
+            videoDimensions: CGSize(width: 3_840, height: 2_160),
+            videoCodec: "HEVC",
+            videoFrameRate: 59.94,
+            videoIsPlayable: true
+        )
+
+        var filter = PhotoFilter()
+        filter.videoFrameRateEnabled = true
+        filter.videoFrameRateFrom = 50
+        filter.videoFrameRateTo = 60
+        var prepared = PreparedPhotoFilter(filter)
+        try expect(!prepared.matches(photo), "an active video frame-rate filter should exclude photos")
+        try expect(!prepared.matches(HD), "frame-rate filter should exclude the slower video")
+        try expect(prepared.matches(UHD), "frame-rate filter should use scan-cached video metadata")
+
+        filter = PhotoFilter()
+        filter.excludedVideoCodecs = ["H.264"]
+        prepared = PreparedPhotoFilter(filter)
+        try expect(!prepared.matches(photo), "a video codec facet should narrow to video items")
+        try expect(!prepared.matches(HD), "unchecked codec should be excluded")
+        try expect(prepared.matches(UHD), "other scan-cached codecs should remain visible")
+
+        let resolutionSort = PhotoSort(key: .videoResolution, ascending: true)
+        try expect(
+            [photo, UHD, HD].sorted(by: resolutionSort.areInOrder).map(\.id)
+                == ["HD.MOV", "UHD.MOV", "PHOTO.JPG"],
+            "video resolution sort should order cached dimensions and keep missing values last"
+        )
+        let frameRateSort = PhotoSort(key: .videoFrameRate, ascending: false)
+        try expect(
+            [photo, HD, UHD].sorted(by: frameRateSort.areInOrder).map(\.id)
+                == ["UHD.MOV", "HD.MOV", "PHOTO.JPG"],
+            "video frame-rate sort should keep missing values last"
+        )
     }
 
     private static func durationFormattingCoversShortAndLongMovies() throws {
@@ -256,7 +308,7 @@ struct PerformanceChecks {
         let summary = PhotoSelectionSummary(items: items)
         try expect(summary.count == 4, "selection summary should retain the selected item count")
         try expect(summary.fileCount == 5, "selection summary should count both members of a paired photo")
-        try expect(summary.photoCount == 4 && summary.videoCount == 0,
+        try expect(summary.photoCount == 4 && summary.videoCount == 0 && summary.audioCount == 0,
                    "selection summary should retain the selected media kinds")
         try expect(
             Set(summary.cameras) == ["Nikon Z8", "Sony α1", "Canon EOS R5", "Fujifilm GFX100 II"],
@@ -289,9 +341,11 @@ struct PerformanceChecks {
         let mixed = PhotoSelectionSummary(items: [
             makeItem(id: "PHOTO.JPG"),
             makeItem(id: "VIDEO.MOV", mediaKind: .video, videoIsPlayable: true),
+            makeItem(id: "AUDIO.WAV", mediaKind: .audio, audioIsPlayable: true),
         ])
         try expect(
-            mixed.fileCount == 2 && mixed.photoCount == 1 && mixed.videoCount == 1,
+            mixed.fileCount == 3 && mixed.photoCount == 1
+                && mixed.videoCount == 1 && mixed.audioCount == 1,
             "mixed selections should report both media kinds and filesystem entries"
         )
     }
@@ -383,11 +437,11 @@ struct PerformanceChecks {
         let selected: Set<Int> = [4, 2]
         try expect(
             CleanUpScope.all.candidateIndices(all: all, filtered: filtered, selected: selected) == [0, 1, 2, 3, 4, 5],
-            "all-photo Clean Up scope should consider the whole folder"
+            "all-media scope should consider the whole folder"
         )
         try expect(
             CleanUpScope.filtered.candidateIndices(all: all, filtered: filtered, selected: selected) == filtered,
-            "filtered Clean Up scope should consider only visible photos"
+            "filtered scope should consider only visible media"
         )
         try expect(
             CleanUpScope.selected.candidateIndices(all: all, filtered: filtered, selected: selected) == [2, 4],
@@ -514,27 +568,31 @@ struct PerformanceChecks {
         )
     }
 
-    private static func videoNeverBecomesThePairForSameNamedRaw() throws {
+    private static func nonPhotoMediaNeverBecomesThePairForSameNamedRaw() throws {
         let folder = try disposableFolder(named: "VideoPairing")
         defer { try? FileManager.default.removeItem(at: folder) }
         let raw = folder.appendingPathComponent("CLIP.NEF")
         let jpeg = folder.appendingPathComponent("CLIP.JPG")
         let video = folder.appendingPathComponent("CLIP.MOV")
+        let audio = folder.appendingPathComponent("CLIP.WAV")
         try Data().write(to: raw)
         try Data().write(to: jpeg)
         try Data().write(to: video)
+        try Data().write(to: audio)
 
         let items = try FolderScanner.scan(
             folder,
             pairingMode: .together
         ) { _ in }
-        try expect(items.count == 2, "RAW+JPEG and same-named video should produce two review items")
+        try expect(items.count == 3, "RAW+JPEG and same-named audio/video should produce three review items")
         guard let rawItem = items.first(where: { $0.primaryURL == raw }),
-              let videoItem = items.first(where: { $0.primaryURL == video }) else {
-            throw CheckFailure("scanner dropped RAW or same-named video")
+              let videoItem = items.first(where: { $0.primaryURL == video }),
+              let audioItem = items.first(where: { $0.primaryURL == audio }) else {
+            throw CheckFailure("scanner dropped RAW or same-named audio/video")
         }
         try expect(rawItem.pairedURL == jpeg, "RAW should pair only with its JPEG")
         try expect(videoItem.pairedURL == nil && videoItem.isVideo, "video should remain an independent item")
+        try expect(audioItem.pairedURL == nil && audioItem.isAudio, "audio should remain an independent item")
     }
 
     private static func rawAndTiffStayIndependent() throws {
@@ -3975,7 +4033,11 @@ struct PerformanceChecks {
         iso: Double? = nil,
         mediaKind: MediaKind = .photo,
         duration: TimeInterval? = nil,
+        videoDimensions: CGSize? = nil,
+        videoCodec: String? = nil,
+        videoFrameRate: Double? = nil,
         videoIsPlayable: Bool = false,
+        audioIsPlayable: Bool = false,
         modificationDate: Date? = nil,
         fileSize: Int64 = 1,
         pairedFileSize: Int64 = 0,
@@ -3995,7 +4057,11 @@ struct PerformanceChecks {
             iso: iso,
             mediaKind: mediaKind,
             duration: duration,
+            videoDimensions: videoDimensions,
+            videoCodec: videoCodec,
+            videoFrameRate: videoFrameRate,
             videoIsPlayable: videoIsPlayable,
+            audioIsPlayable: audioIsPlayable,
             primaryModificationDate: modificationDate,
             fileSize: fileSize,
             pairedFileSize: pairedFileSize,

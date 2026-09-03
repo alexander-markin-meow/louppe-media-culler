@@ -5,7 +5,102 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.8.0 (10) — 2026-08-18
+## 1.8.0 (10) — 2026-09-03
+
+- Polished Organize Source Folder with a stable header and action bar, one
+  scrollable setup area, clearer folder-level guidance, and wrapping or
+  middle-truncated previews so long paths and explanations stay inside the
+  sheet. The move-confirmation step now scrolls independently as well.
+
+- Added archival RAW+JPEG cleanup. From the shared Clean Up menu or the **⌘K**
+  Command Palette, photographers can move only the JPEG or only the RAW member
+  of unambiguous pairs to the macOS Trash within the current All Media,
+  Filtered, or Selected scope. Standalone files and XMP sidecars stay untouched,
+  the retained member remains in the session, and one **⌘Z** restores the batch.
+
+- Added All Media, Filtered, and Selected scopes to Export. The chosen scope
+  now bounds regular Copy, Move, Metadata (XMP), and routed Copy operations,
+  while decision, star, and color choices narrow that scope further. Clean Up
+  now also calls its complete-folder choice All Media.
+
+- Improved video review with in-session resume positions, precise half-second
+  Gallery seeks on **←/→**, and five-second seeks on **⇧←/⇧→**. **J/L** always
+  select the adjacent item, including after the native player has focus.
+  **⌘←/⌘→** choose a slower or faster media speed, and the Info indicator now
+  follows native-player speed changes instead of remaining at 1×. Video and
+  audio can play at 1×, 1.5×, 2×, or 2.5×; **K** joins Space as a play/pause
+  key for video and audio. Gallery video now stays at its original brightness
+  when controls appear, with the same gray surround used for photos instead of
+  black letterboxing. The Command Palette includes every matching navigation,
+  transport, and speed action.
+
+- Added independent live playback loudness meters to the Info panel for videos
+  and audio recordings. Each channel gets green, orange, and red dBFS zones,
+  while standalone audio uses its whole-file waveform and moving playhead in
+  the main Gallery area. Video folders can now also filter and sort by
+  resolution, frame rate, and codec.
+
+- Added a separate Mac App Store product: it omits the standalone updater,
+  uses least-privilege sandboxed access only to folders the photographer
+  chooses, remembers those folders with balanced security-scoped bookmarks,
+  and includes a no-tracking privacy manifest. The Store release check rejects
+  a missing entitlement, malformed privacy declaration, or accidental Sparkle
+  framework/link/feed. A new signed-package helper and submission checklist
+  cover the remaining Apple certificate and App Store Connect steps.
+
+- Added native audio review and playback. Common audio recordings and every
+  macOS-advertised audio type now scan as an independent **Audio** media type,
+  with duration, codec details, waveform tiles, Gallery and Grid playback,
+  media filters/sorting, and the same safe rating and export workflow as photos
+  and videos.
+
+- Export Copy and Move progress now measures the amount of media transferred,
+  rather than treating every file equally. The in-progress screen shows the
+  data moved and total size, so a handful of large videos no longer make the
+  progress bar misleading.
+
+- Copy cancellation is now a deliberate two-step action. Louppe records and
+  displays whether the photographer confirmed **Stop Copying**; any
+  unexplained cancellation is logged and reported as an app issue rather than
+  being mistaken for a card failure.
+
+- Fixed Clean Up's stale-scan warning: if a photo file changed after scanning,
+  Louppe reports only the affected review items, moves nothing, and offers a
+  save-first folder rescan before the photographer deliberately confirms Clean
+  Up again.
+
+- Fixed the Clean Up confirmation so Return activates **Move to Trash**, while
+  Escape still cancels.
+
+- Added **Duplicate + Burst Groups**: an optional, local review layout for
+  verified exact duplicates, conservatively labelled likely-similar photos, and
+  nearby capture times. It respects the current filter and never changes a
+  rating, export, original, or Clean Up target automatically.
+
+- Added **Route copies to multiple folders** in Export. This Copy-only
+  workflow previews explicit decision, stars, color, file-type, or media-type
+  routes; unmatched items remain in the source folder. Overlapping/empty
+  routes, duplicate or unsafe folders, split XMP families, and insufficient
+  combined space on a shared destination drive are blocked before Copy starts.
+
+- Added optional **Quality cues** for high ISO, slow shutter, and substantial
+  clipping. One quiet shooting-metadata row opens exact cue values and sources;
+  supported RAW files replace the immediate rendered histogram and clipping
+  estimate after a delayed, bounded Core Image RAW decode. The X overlay stays
+  explicitly preview-based. Adjust the three thresholds in **Louppe → Settings
+  → Quality Cues**; cues never affect ratings, filters, sidecars, exports, or
+  files.
+
+- Added a drag-and-drop target on the start screen: drop a photo or video
+  source folder there to open it for review, alongside **Choose Photo
+  Folder…**. Individual files are politely rejected so the source always
+  remains a folder.
+
+- Replaced the opaque different-folder session warning for older sessions
+  with a neutral explanation and an explicit **Open Anyway** button. Louppe
+  binds that choice to the exact session file shown, rescans, verifies saved
+  filenames, and then quietly migrates a recognized session to the current
+  folder path; unrelated or changed data remains blocked.
 
 - Added a searchable **Command Palette** (⌘K). It provides a quick, keyboard-
   driven route to export, source-folder organization, Clean Up, XMP metadata,

@@ -77,9 +77,32 @@ operations belong elsewhere:
   the current full image never waits behind tile backlog at all.
 - `HistogramPipeline` decodes at most two 1,024-pixel photo previews at once,
   coalesces same-photo requests, and retains only 256 small histogram value
-  results. Videos, unsupported files, and multi-selection summaries do not
-  enqueue analysis. `ClippingPreviewPipeline` reuses `ImagePipeline`'s
-  coalesced full preview and transforms at most two images concurrently.
+  results. A cancelled Info-panel request removes its own waiter and cancels a
+  queued decode when it was the last waiter; a safely finishing in-flight
+  decode cannot publish into that removed request. Videos, audio, unsupported files,
+  and multi-selection summaries do not enqueue analysis.
+  `RawHistogramPipeline` is a separate RAW-primary-only lane. It waits 700 ms,
+  runs one utility-priority Core Image `CIRAWFilter` decode at a time, and uses
+  the filter's native scale plus a final lazy bound so neither dimension of
+  its linear-light RGBA-float analysis buffer exceeds about 1,024 pixels.
+  Duplicate content-revision requests coalesce; cancellation removes stale
+  waiters and queued work. Its 128-entry LRU retains numeric histogram results
+  only, never decoded pixels. Unsupported/unknown RAW decoders return no result
+  and leave the rendered-preview analysis in place.
+  `ClippingPreviewPipeline` reuses `ImagePipeline`'s coalesced full preview and
+  transforms at most two images concurrently.
+- `AudioLevelPipeline` starts only for the selected playable video or audio
+  recording (after the Info-panel dwell, or when the Gallery needs an audio
+  waveform). One utility-priority `AVAssetReader` PCM decode runs at a time,
+  same-content requests coalesce, and cancellation removes stale waiters. Its
+  64-entry LRU retains only per-channel min/max/RMS envelope bins and sample
+  peaks, never decoded samples or on-disk output. Temporal resolution is 20
+  bins per second, clamped to 256...6,000 bins per recording; this keeps the
+  live playback meter responsive while bounding a stereo result to roughly
+  144 KiB of numeric payload. The LRU also has a 768,000-envelope total budget
+  (roughly 9 MiB of three-float result payload), so multichannel recordings
+  evict older results proportionally sooner. Channels are analyzed
+  independently; never mix them down for the Info meter or Gallery waveform.
 - `HighResolutionImagePipeline` is the separate 100% lane. It keeps lazy,
   oriented Core Image source recipes for at most four recent photos, renders
   at most two 1,024-source-pixel tiles concurrently, coalesces identical tile
@@ -161,6 +184,8 @@ coalesce into a single update transaction.
 - Clipping-warning previews: at most 2 objects and 128 MiB decoded cost.
 - Histograms: at most 256 value-only results; analysis bitmaps are temporary
   and no larger than 1,024 pixels.
+- RAW histograms: at most 128 value-only results. One temporary extended-linear
+  RGBA-float bitmap is bounded to about 1,024 pixels on its longest side.
 - Actual-size tiles: 128 MiB decoded cost across 1,024 × 1,024 source-pixel
   tiles, including both normal and clipping-warning variants. The lazy source
   recipe is not a whole decoded bitmap.
@@ -185,7 +210,9 @@ Neighbour prefetch is debounced by 60 ms, and a new full-image view waits 40 ms
 before enqueuing a decode so key repeat does not flood the bounded queue with
 views that have already disappeared. Fit/phone-size clipping previews share
 that same delay, while secondary Info-panel EXIF and histogram work waits
-80 ms. Full and clipping-preview memory-cache hits are still immediate.
+80 ms. RAW histogram work has its own 700 ms dwell and single utility lane;
+it never delays that first rendered histogram. Full and clipping-preview
+memory-cache hits are still immediate.
 
 At 100%, document points are source pixels divided by the window's backing
 scale: one image pixel therefore maps to one physical display pixel on both
@@ -203,26 +230,33 @@ therefore lands under the 100% viewport center (clamped at image edges), while
 double-clicking the 100% image returns to Fit. The surrounding background does
 nothing in either mode, and S retains its centered reset behavior.
 
-Clipping warnings use the same 8-bit sRGB luminance thresholds as the Info
-panel histogram: 0–5 for shadows and 250–255 for highlights. Fit and
-phone-size modes reuse a bounded 4,096-pixel warning preview. Fully
-transparent pixels are excluded from histogram totals rather than counted as
-black. At 100%, the threshold is applied inside the existing two-operation
-tile lane, keyed by
-warning mode, so toggling never constructs a whole source-resolution bitmap.
-Changing photos or warning mode advances the viewport generation before stale
-tile results can display.
+The X preview clipping overlay uses the same 8-bit sRGB luminance thresholds
+as the immediate rendered Info-panel histogram: 0–5 for shadows and 250–255
+for highlights. Fit and phone-size modes reuse a bounded 4,096-pixel warning
+preview. Fully transparent pixels are excluded from histogram totals rather
+than counted as black. At 100%, the threshold is applied inside the existing
+two-operation tile lane, keyed by warning mode, so toggling never constructs a
+whole source-resolution bitmap. Changing photos or warning mode advances the
+viewport generation before stale tile results can display.
+
+For supported RAW primaries, the delayed histogram and clipping Quality cues
+replace that rendered estimate with the scaled Core Image RAW result. The RAW
+processor disables presentation tone curves, renders extended-linear sRGB,
+and uses linear luminance thresholds of 0.002 and 0.995. This is a demosaiced,
+white-balanced RGB decode from RAW sensor data, not a camera-maker proprietary
+per-photosite histogram. It never supplies the X overlay: a RAW-derived mask
+would not register honestly over the differently rendered preview.
 
 Thumbnail cache keys use `PhotoItem.contentRevision`: byte-exact absolute path,
 media kind, size, scan-time physical identity, and captured file timestamps.
-Async thumbnail, full-preview, metadata, histogram, 100% tile, and video state
+Async thumbnail, full-preview, metadata, histogram, 100% tile, and media playback state
 must also follow that revision rather than presentation ID alone. A same-folder
 rescan deliberately preserves item IDs, so item ID cannot prove that the bytes
 are unchanged. Do not put a filesystem metadata lookup back in
 `ImagePipeline.cacheKey`: lazy grid cells can be recreated during scrolling,
 and synchronous `stat` calls there block the UI thread. Reappearing thumbnail
 cells also seed directly from the memory cache to avoid placeholder churn.
-Movie duration, playability, dimensions, codec, and frame rate are likewise
+Movie and audio duration, playability, codec, dimensions, and frame rate are likewise
 captured once by FolderScanner's bounded metadata workers. Filter, sort, and
 Info views must use those values rather than reopening every `AVAsset`.
 
@@ -235,6 +269,29 @@ filesystem facts already returned by enumeration. The first later switch to
 separate review enriches only those missing JPEG records while the ready session
 remains visible. Pairing projections reuse the enriched physical-file records,
 so subsequent toggles neither walk the folder nor reopen metadata.
+
+## Duplicate + burst grouped review
+
+Duplicate and burst analysis is an explicit, review-only utility task; opening,
+filtering, sorting, and normal navigation must never start it. `SessionStore`
+captures stable displayed-item IDs plus scan-time content revisions, runs one
+cancellable utility task off the main actor, and accepts its result only if the
+same item/revision map is still current. Rescan, RAW+JPEG projection changes,
+Close Folder, and every file operation cancel and invalidate it. Results are
+in-memory for the open session only—there is no disk cache, sidecar field,
+network request, or automatic metadata/file action.
+
+Exact matching buckets physical files by size, then streams same-size
+candidates through SHA-256 using one 1 MiB buffer. Each source is
+identity-checked immediately before and after reading, so a changed or replaced
+file becomes no suggestion rather than a stale result. Visual matching applies
+only to supported photo projections: ImageIO creates at most a 160-pixel
+thumbnail, immediately reduced to a 9 × 8 grayscale signature. It skips a
+pathological bucket with more than 256 distinct signatures and performs at most
+50,000 near-hash comparisons per analysis. The UI must continue to call every
+visual group **Likely Similar**. Burst grouping uses cached still-photo capture
+dates and a configurable consecutive gap (0.5–10 seconds), so changing it is
+O(N) and performs no I/O.
 
 Same-name XMP conflict preflight retains typed stable file IDs, scan identities,
 exact metadata snapshots, and exact filesystem paths. Resolution is one small
@@ -286,8 +343,9 @@ tick pays a redundant `tile()` layout on both scroll views.
 ## Filtering and derived data
 
 `PhotoItem.searchableText` is locale-folded once during scanning. Capture-day,
-aperture, shutter-duration, and ISO values are also cached on `PhotoItem`; do
-not reopen files when their filters or sorts change. Group division compares
+aperture, shutter-duration, ISO, video resolution, frame rate, and codec
+values are also cached on `PhotoItem`; do not reopen files when their filters
+or sorts change. Group division compares
 the cached `captureDay` buckets directly — do not reintroduce
 `Calendar.current` calls per adjacent pair in `sameGroup`; a group rebuild
 walks every visible photo. Each filter change creates
@@ -386,12 +444,19 @@ excluded only from persistence matching because Louppe-owned rename/rollback
   once more after persistence I/O.
 
 Schema 1–3 cannot prove physical identity, but an ordinary legacy session in
-its original folder migrates automatically when every saved filename is still
-present. If legacy entries are missing, **Open Folder and Forget Missing
-Items** explicitly excludes only those unmatched ratings from the new
-identity-bound snapshot; Close Folder and Quit leave both legacy copies
-untouched. Obsolete path-keyed backups are considered only when both the
-sidecar and identity-keyed backup are absent; their legacy entries still use
+its recorded folder migrates automatically when every saved filename is still
+present. A structurally valid legacy sidecar whose recorded path differs stays
+blocked until the photographer chooses **Open Anyway**. That acknowledgement
+is bound to the SHA-256 revision and recorded path of the exact sidecar just
+shown; a changed file requires a fresh acknowledgement. Louppe then performs a
+new folder scan and read, applies only exact saved-filename matches, and writes
+the first identity-bound snapshot with the current folder path when every
+entry is present. No filename matches still fail closed. If only some legacy
+entries are missing, **Open Folder and Forget Missing Items** explicitly
+excludes only those unmatched ratings from the new identity-bound snapshot;
+Close Folder and Quit leave both legacy copies untouched. Obsolete path-keyed
+backups are considered only when both the sidecar and identity-keyed backup are
+absent; Open Anyway is never offered for them, their legacy entries still use
 the explicit confirmation because that backup is not owned by the folder, and
 schema-4 entries still require a physical identity match.
 Schema 5 adds independent star and color dimensions. Schema 6 stores each
@@ -597,6 +662,17 @@ its source rollback. A fully selected canonical XMP is transferred only after
 its merged destination is durable; a packet shared with an unselected same-stem
 member is copied and retained at the source.
 
+Multi-destination Export remains Copy-only. `MultiDestinationExportPlanner`
+first performs a pure route-membership pass: every item is either in exactly
+one explicit typed route, shown as unmatched, or reported as an overlap that
+blocks confirmation. It validates and freezes each separately chosen folder,
+rejects duplicate resolved destinations and empty routes, aggregates capacity
+for destinations on the same volume, makes one regular `ExportWorker.Plan` for
+each route, then combines those plans before a single `FileOperationJournal`
+activation. No route has an implicit fallback, so unmatched files never enter
+the worker. When XMP is included, a same-stem family may belong to only one
+route; a split is refused rather than generating competing sidecars.
+
 `SessionStore.activeFileOperation` is the only in-flight authority for Clean
 Up, Copy, Move, and Source Organization. It blocks folder switching, rescan,
 rating/selection mutation, undo, Clear All Ratings, conflicting operations, updater
@@ -728,8 +804,8 @@ Run after performance-sensitive changes:
 
 1. `./Tests/run_performance_checks.sh` (uses disposable files for a real
    Trash/restore pair round trip and rollback check). In a restricted sandbox,
-   `LOUPPE_SKIP_REAL_TRASH=1` runs the other 68 checks; this is not a substitute
-   for the full 71-check verification before installing a build.
+   `LOUPPE_SKIP_REAL_TRASH=1` runs the other 71 checks; this is not a substitute
+   for the full 74-check verification before installing a build.
 2. `swift build`
 3. `./build_app.sh`
 4. Replace `/Applications/Louppe.app` with `dist/Louppe.app`.

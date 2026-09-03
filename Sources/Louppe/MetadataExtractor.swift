@@ -50,6 +50,7 @@ enum MetadataExtractor {
         MetadataExtractorTestProbe.shared.record(item.contentRevision)
 #endif
         if item.isVideo { return videoFields(for: item) }
+        if item.isAudio { return audioFields(for: item) }
         var fields: [MetadataField] = []
         func add(_ label: String, _ value: String?) {
             guard let value, !value.isEmpty else { return }
@@ -170,6 +171,22 @@ enum MetadataExtractor {
         ) {
             add("Frame rate", String(format: "%.2f fps", frameRate).replacingOccurrences(of: ".00 ", with: " "))
         }
+        add("File size", formattedFileSize(item.fileSize))
+        add("Type", item.fileTypeLabel)
+        return fields
+    }
+
+    private static func audioFields(for item: PhotoItem) -> [MetadataField] {
+        var fields: [MetadataField] = [
+            MetadataField(id: "Filename", label: "Filename", value: item.displayName),
+        ]
+        func add(_ label: String, _ value: String?) {
+            guard let value, !value.isEmpty else { return }
+            fields.append(MetadataField(id: label, label: label, value: value))
+        }
+        if let date = item.captureDate { add("Recorded", AppDateFormat.dayAndTime(date)) }
+        add("Duration", MediaDurationFormat.display(item.duration))
+        add("Codec", item.audioCodec)
         add("File size", formattedFileSize(item.fileSize))
         add("Type", item.fileTypeLabel)
         return fields

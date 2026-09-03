@@ -9,6 +9,7 @@ struct ActionPaletteView: View {
 
     @State private var query = ""
     @State private var selectedActionID: String?
+    @State private var selectionRevealGeneration = 0
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
@@ -29,6 +30,7 @@ struct ActionPaletteView: View {
         }
         .onChange(of: query) {
             chooseFirstEnabledAction()
+            revealKeyboardSelection()
         }
     }
 
@@ -68,32 +70,41 @@ struct ActionPaletteView: View {
     }
 
     private var actionList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(filteredActions.enumerated()), id: \.element.id) {
-                    index, action in
-                    if index == 0 || filteredActions[index - 1].category != action.category {
-                        Text(action.category)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, index == 0 ? 10 : 16)
-                            .padding(.horizontal, 18)
+        let visibleActions = filteredActions
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(visibleActions.enumerated()), id: \.element.id) {
+                        index, action in
+                        if index == 0
+                            || visibleActions[index - 1].category != action.category {
+                            Text(action.category)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, index == 0 ? 10 : 16)
+                                .padding(.horizontal, 18)
+                        }
+                        actionRow(action)
+                            .id(action.id)
                     }
-                    actionRow(action)
+                    if visibleActions.isEmpty {
+                        ContentUnavailableView(
+                            "No matching actions",
+                            systemImage: "magnifyingglass",
+                            description: Text("Try a different search term.")
+                        )
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 64)
+                    }
                 }
-                if filteredActions.isEmpty {
-                    ContentUnavailableView(
-                        "No matching actions",
-                        systemImage: "magnifyingglass",
-                        description: Text("Try a different search term.")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 64)
-                }
+                .padding(.bottom, 10)
             }
-            .padding(.bottom, 10)
+            .accessibilityLabel("Command Palette actions")
+            .onChange(of: selectionRevealGeneration) {
+                guard let selectedActionID else { return }
+                proxy.scrollTo(selectedActionID, anchor: .center)
+            }
         }
-        .accessibilityLabel("Command Palette actions")
     }
 
     private func actionRow(_ action: ActionPaletteAction) -> some View {
@@ -176,7 +187,7 @@ struct ActionPaletteView: View {
         }
     }
 
-    private var actions: [ActionPaletteAction] {
+    var actions: [ActionPaletteAction] {
         [
             ActionPaletteAction(
                 id: "export",
@@ -245,11 +256,22 @@ struct ActionPaletteView: View {
                 id: "filter",
                 category: "Find and arrange",
                 title: "Filter Media…",
-                detail: "Filter by metadata, date, type, camera, or lens",
+                detail: "Filter by metadata, date, type, camera, lens, or video details",
                 symbol: "line.3.horizontal.decrease.circle",
-                keywords: ["search", "date", "camera", "lens", "color", "stars"],
+                keywords: ["search", "date", "camera", "lens", "color", "stars", "video", "codec", "resolution", "frame rate"],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.isFilterPresented = true }
+            ),
+            ActionPaletteAction(
+                id: "show-videos-only",
+                category: "Find and arrange",
+                title: "Show Videos Only",
+                detail: "Keep the current criteria and limit the folder to videos",
+                symbol: "film",
+                keywords: ["video", "clip", "movie", "filter", "media"],
+                isEnabled: store.availableMediaKinds.contains(.video)
+                    && !store.isFileOperationRunning,
+                perform: { store.showVideosOnly() }
             ),
             ActionPaletteAction(
                 id: "reset-filter",
@@ -265,11 +287,102 @@ struct ActionPaletteView: View {
                 id: "sort",
                 category: "Find and arrange",
                 title: "Sort Media…",
-                detail: "Choose date, stars, color, camera, and more",
+                detail: "Choose date, stars, color, camera, video details, and more",
                 symbol: "arrow.up.arrow.down",
-                keywords: ["group", "order", "metadata"],
+                keywords: ["group", "order", "metadata", "video", "codec", "resolution", "frame rate"],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.isSortPresented = true }
+            ),
+            ActionPaletteAction(
+                id: "sort-by-video-resolution",
+                category: "Find and arrange",
+                title: "Sort by Video Resolution",
+                detail: "Order videos by their scan-cached pixel dimensions",
+                symbol: "rectangle.on.rectangle",
+                keywords: ["video", "resolution", "dimensions", "sort", "4k", "hd"],
+                isEnabled: store.availableVideoResolutions.count > 1
+                    && !store.isFileOperationRunning,
+                perform: { store.sort.key = .videoResolution }
+            ),
+            ActionPaletteAction(
+                id: "sort-by-video-frame-rate",
+                category: "Find and arrange",
+                title: "Sort by Video Frame Rate",
+                detail: "Order videos by their scan-cached frames per second",
+                symbol: "speedometer",
+                keywords: ["video", "frame rate", "fps", "sort", "slow motion"],
+                isEnabled: store.videoFrameRateRange != nil
+                    && !store.isFileOperationRunning,
+                perform: { store.sort.key = .videoFrameRate }
+            ),
+            ActionPaletteAction(
+                id: "sort-by-video-codec",
+                category: "Find and arrange",
+                title: "Sort by Video Codec",
+                detail: "Order videos by their scan-cached codec",
+                symbol: "film.stack",
+                keywords: ["video", "codec", "h.264", "hevc", "prores", "sort"],
+                isEnabled: store.availableVideoCodecs.count > 1
+                    && !store.isFileOperationRunning,
+                perform: { store.sort.key = .videoCodec }
+            ),
+            ActionPaletteAction(
+                id: "analyze-duplicate-burst-groups",
+                category: "Find and arrange",
+                title: "Analyze Duplicate + Burst Groups",
+                detail: "Read this folder locally; it never changes files or ratings",
+                symbol: "rectangle.3.group",
+                keywords: ["duplicates", "similar", "burst", "local", "review"],
+                isEnabled: !store.items.isEmpty
+                    && !store.isFileOperationRunning
+                    && !store.isXMPPublicationRunning,
+                perform: { store.analyzeDuplicateAndBurstGroups() }
+            ),
+            ActionPaletteAction(
+                id: "review-exact-duplicates",
+                category: "Find and arrange",
+                title: "Review Exact Duplicates",
+                detail: "Show verified byte-identical files as groups",
+                symbol: "doc.on.doc",
+                keywords: ["duplicates", "same", "byte", "groups", "review"],
+                isEnabled: !store.items.isEmpty
+                    && !store.isFileOperationRunning
+                    && !store.isXMPPublicationRunning,
+                perform: { store.enterGroupedReview(.exactDuplicates) }
+            ),
+            ActionPaletteAction(
+                id: "review-likely-similar-photos",
+                category: "Find and arrange",
+                title: "Review Likely Similar Photos",
+                detail: "Group local preview matches; inspect before deciding",
+                symbol: "photo.on.rectangle.angled",
+                keywords: ["duplicates", "similarity", "near", "groups", "review"],
+                isEnabled: !store.items.isEmpty
+                    && !store.isFileOperationRunning
+                    && !store.isXMPPublicationRunning,
+                perform: { store.enterGroupedReview(.likelySimilarPhotos) }
+            ),
+            ActionPaletteAction(
+                id: "review-capture-bursts",
+                category: "Find and arrange",
+                title: "Review Capture Bursts",
+                detail: "Group photos taken close together in time",
+                symbol: "rectangle.stack",
+                keywords: ["burst", "capture", "time", "groups", "review"],
+                isEnabled: !store.items.isEmpty
+                    && !store.isFileOperationRunning
+                    && !store.isXMPPublicationRunning,
+                perform: { store.enterGroupedReview(.captureBursts) }
+            ),
+            ActionPaletteAction(
+                id: "return-normal-review",
+                category: "Find and arrange",
+                title: "Return to Normal Review",
+                detail: "Leave grouped review and restore the normal filtered order",
+                symbol: "arrow.uturn.backward.circle",
+                keywords: ["exit", "groups", "normal", "review", "show all"],
+                isEnabled: store.isGroupedReviewActive && !store.isFileOperationRunning,
+                perform: { store.exitGroupedReview() }
             ),
             ActionPaletteAction(
                 id: "pair-raw-jpeg",
@@ -345,6 +458,157 @@ struct ActionPaletteView: View {
         + colorLabelActions()
         + [
             ActionPaletteAction(
+                id: "select-previous-item",
+                category: "Navigate and play",
+                title: "Select Previous Item",
+                detail: "Choose the previous visible item, including when reviewing a video",
+                symbol: "chevron.left",
+                shortcut: "J",
+                keywords: ["previous", "back", "left", "navigate", "video", "clip"],
+                isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.goPrevious() }
+            ),
+            ActionPaletteAction(
+                id: "select-next-item",
+                category: "Navigate and play",
+                title: "Select Next Item",
+                detail: "Choose the next visible item, including when reviewing a video",
+                symbol: "chevron.right",
+                shortcut: "L",
+                keywords: ["next", "forward", "right", "navigate", "video", "clip"],
+                isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.goNext() }
+            ),
+            ActionPaletteAction(
+                id: "decrease-playback-rate",
+                category: "Navigate and play",
+                title: "Choose Slower Playback Speed",
+                detail: "Step down through the available video or audio playback speeds",
+                symbol: "backward.end",
+                shortcut: "⌘←",
+                keywords: ["video", "audio", "playback", "speed", "slower"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: {
+                    _ = store.adjustCurrentPlayableMediaPlaybackRate(
+                        forward: false
+                    )
+                }
+            ),
+            ActionPaletteAction(
+                id: "increase-playback-rate",
+                category: "Navigate and play",
+                title: "Choose Faster Playback Speed",
+                detail: "Step up through the available video or audio playback speeds",
+                symbol: "forward.end",
+                shortcut: "⌘→",
+                keywords: ["video", "audio", "playback", "speed", "faster"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: {
+                    _ = store.adjustCurrentPlayableMediaPlaybackRate(
+                        forward: true
+                    )
+                }
+            ),
+            ActionPaletteAction(
+                id: "seek-video-backward",
+                category: "Navigate and play",
+                title: "Seek Video Backward 0.5 Seconds",
+                detail: "Inspect the current Gallery video half a second earlier",
+                symbol: "gobackward",
+                shortcut: "←",
+                keywords: ["video", "clip", "scrub", "rewind", "back", "left"],
+                isEnabled: store.canSeekCurrentVideo,
+                perform: { store.seekCurrentVideo(by: -0.5) }
+            ),
+            ActionPaletteAction(
+                id: "seek-video-forward",
+                category: "Navigate and play",
+                title: "Seek Video Forward 0.5 Seconds",
+                detail: "Inspect the current Gallery video half a second later",
+                symbol: "goforward",
+                shortcut: "→",
+                keywords: ["video", "clip", "scrub", "forward", "right"],
+                isEnabled: store.canSeekCurrentVideo,
+                perform: { store.seekCurrentVideo(by: 0.5) }
+            ),
+            ActionPaletteAction(
+                id: "seek-video-backward-large",
+                category: "Navigate and play",
+                title: "Seek Video Backward 5 Seconds",
+                detail: "Jump five seconds earlier in the current Gallery video",
+                symbol: "gobackward.5",
+                shortcut: "⇧←",
+                keywords: ["video", "clip", "scrub", "rewind", "back", "left", "jump"],
+                isEnabled: store.canSeekCurrentVideo,
+                perform: { store.seekCurrentVideo(by: -5) }
+            ),
+            ActionPaletteAction(
+                id: "seek-video-forward-large",
+                category: "Navigate and play",
+                title: "Seek Video Forward 5 Seconds",
+                detail: "Jump five seconds later in the current Gallery video",
+                symbol: "goforward.5",
+                shortcut: "⇧→",
+                keywords: ["video", "clip", "scrub", "forward", "right", "jump"],
+                isEnabled: store.canSeekCurrentVideo,
+                perform: { store.seekCurrentVideo(by: 5) }
+            ),
+            ActionPaletteAction(
+                id: "toggle-current-media",
+                category: "Navigate and play",
+                title: "Play or Pause Current Media",
+                detail: "Play or pause the current video or audio recording",
+                symbol: "playpause",
+                shortcut: "Space or K",
+                keywords: ["video", "audio", "clip", "recording", "play", "pause", "transport", "k"],
+                isEnabled: store.canToggleCurrentPlayableMedia,
+                perform: { _ = store.toggleCurrentPlayableMedia() }
+            ),
+            ActionPaletteAction(
+                id: "set-playback-rate-1x",
+                category: "Navigate and play",
+                title: "Set Playback Speed to 1×",
+                detail: "Review the current video or audio recording at normal speed",
+                symbol: "1.circle",
+                shortcut: nil,
+                keywords: ["video", "audio", "clip", "recording", "playback", "speed", "normal", "1x"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: { store.setCurrentPlayableMediaPlaybackRate(1) }
+            ),
+            ActionPaletteAction(
+                id: "set-playback-rate-1-5x",
+                category: "Navigate and play",
+                title: "Set Playback Speed to 1.5×",
+                detail: "Review the current video or audio recording at one and a half speed",
+                symbol: "1.circle",
+                shortcut: nil,
+                keywords: ["video", "audio", "clip", "recording", "playback", "speed", "1.5x"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: { store.setCurrentPlayableMediaPlaybackRate(1.5) }
+            ),
+            ActionPaletteAction(
+                id: "set-playback-rate-2x",
+                category: "Navigate and play",
+                title: "Set Playback Speed to 2×",
+                detail: "Review the current video or audio recording at double speed",
+                symbol: "2.circle",
+                shortcut: nil,
+                keywords: ["video", "audio", "clip", "recording", "playback", "speed", "double", "2x"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: { store.setCurrentPlayableMediaPlaybackRate(2) }
+            ),
+            ActionPaletteAction(
+                id: "set-playback-rate-2-5x",
+                category: "Navigate and play",
+                title: "Set Playback Speed to 2.5×",
+                detail: "Review the current video or audio recording at two and a half speed",
+                symbol: "2.circle",
+                shortcut: nil,
+                keywords: ["video", "audio", "clip", "recording", "playback", "speed", "2.5x"],
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate,
+                perform: { store.setCurrentPlayableMediaPlaybackRate(2.5) }
+            ),
+            ActionPaletteAction(
                 id: "select-all",
                 category: "Selection and clean up",
                 title: "Select All Visible Media",
@@ -398,6 +662,26 @@ struct ActionPaletteView: View {
                 perform: { store.requestCleanUp(.keepOnlyYes) }
             ),
             ActionPaletteAction(
+                id: "trash-paired-jpegs",
+                category: "Selection and clean up",
+                title: "Move Paired JPEGs to Trash…",
+                detail: "Keep the RAW file from each matching RAW + JPEG pair",
+                symbol: "photo.badge.minus",
+                keywords: ["clean up", "archive", "pair", "raw", "jpeg", "jpg", "keep raw", "delete", "remove"],
+                isEnabled: store.canCleanUp && store.hasCleanUpTargets(for: .pairedJPEGs),
+                perform: { store.requestCleanUp(.pairedJPEGs) }
+            ),
+            ActionPaletteAction(
+                id: "trash-paired-raws",
+                category: "Selection and clean up",
+                title: "Move Paired RAWs to Trash…",
+                detail: "Keep the JPEG file from each matching RAW + JPEG pair",
+                symbol: "photo.badge.minus",
+                keywords: ["clean up", "archive", "pair", "raw", "jpeg", "jpg", "keep jpeg", "delete", "remove"],
+                isEnabled: store.canCleanUp && store.hasCleanUpTargets(for: .pairedRAWs),
+                perform: { store.requestCleanUp(.pairedRAWs) }
+            ),
+            ActionPaletteAction(
                 id: "undo",
                 category: "Selection and clean up",
                 title: "Undo Louppe Action",
@@ -423,7 +707,7 @@ struct ActionPaletteView: View {
                 id: "gallery",
                 category: "View",
                 title: "Switch to Gallery",
-                detail: "Review one photo or video at a time",
+                detail: "Review one photo, video, or audio file at a time",
                 symbol: "photo",
                 shortcut: "G",
                 keywords: ["view", "single"],
@@ -466,11 +750,11 @@ struct ActionPaletteView: View {
             ActionPaletteAction(
                 id: "clipping",
                 category: "View",
-                title: store.showClippingWarnings ? "Hide Clipping Warnings" : "Show Clipping Warnings",
-                detail: "Highlight clipped highlights and shadows on the current photo",
+                title: store.showClippingWarnings ? "Hide Preview Clipping Overlay" : "Show Preview Clipping Overlay",
+                detail: "Mark clipping estimated from the displayed preview",
                 symbol: "exclamationmark.triangle",
                 shortcut: "X",
-                keywords: ["histogram", "exposure", "highlights", "shadows"],
+                keywords: ["preview", "histogram", "exposure", "highlights", "shadows"],
                 isEnabled: store.canToggleClippingWarnings,
                 perform: { _ = store.toggleClippingWarnings() }
             ),
@@ -491,10 +775,16 @@ struct ActionPaletteView: View {
               let index = enabled.firstIndex(where: { $0.id == currentID })
         else {
             self.selectedActionID = enabled[0].id
+            revealKeyboardSelection()
             return
         }
         let next = (index + offset + enabled.count) % enabled.count
         selectedActionID = enabled[next].id
+        revealKeyboardSelection()
+    }
+
+    private func revealKeyboardSelection() {
+        selectionRevealGeneration &+= 1
     }
 
     private func runSelectedAction() {
@@ -561,7 +851,7 @@ struct ActionPaletteView: View {
     }
 }
 
-private struct ActionPaletteAction: Identifiable {
+struct ActionPaletteAction: Identifiable {
     let id: String
     let category: String
     let title: String

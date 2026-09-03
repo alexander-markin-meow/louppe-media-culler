@@ -3,6 +3,74 @@ import XCTest
 @testable import Louppe
 
 final class CleanUpWorkerSafetyTests: XCTestCase {
+    func testPairMemberCleanUpMovesOnlyTargetAndRestoresIt() throws {
+        let root = try makeTemporaryDirectory(named: "PairMember")
+        let trash = root.appendingPathComponent("Trash", isDirectory: true)
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("PAIR.NEF")
+        let jpeg = root.appendingPathComponent("PAIR.JPG")
+        let rawData = Data("raw original".utf8)
+        let jpegData = Data("jpeg shareable".utf8)
+        try rawData.write(to: raw)
+        try jpegData.write(to: jpeg)
+        let pair = makeItem(id: "PAIR.NEF", primaryURL: raw, pairedURL: jpeg)
+        let jpegOnly = PhotoItem(primaryFile: try XCTUnwrap(pair.individualFiles.last))
+
+        let moved = CleanUpWorker.moveToTrash(
+            [CleanUpPhotoSnapshot(
+                index: 0,
+                item: jpegOnly,
+                validationFiles: pair.individualFiles
+            )],
+            journalDirectory: journals,
+            fileManager: ProtectedTrashFileManager(trashDirectory: trash)
+        ) { _, _ in }
+
+        XCTAssertEqual(moved.succeeded.count, 1)
+        XCTAssertEqual(moved.succeeded.first?.files.count, 1)
+        XCTAssertEqual(try Data(contentsOf: raw), rawData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jpeg.path))
+        let restored = CleanUpWorker.restore(
+            moved.succeeded,
+            journalDirectory: journals
+        ) { _, _ in }
+        XCTAssertEqual(restored.restored.count, 1)
+        XCTAssertEqual(try Data(contentsOf: raw), rawData)
+        XCTAssertEqual(try Data(contentsOf: jpeg), jpegData)
+    }
+
+    func testPairMemberCleanUpRejectsStaleRetainedCounterpart() throws {
+        let root = try makeTemporaryDirectory(named: "PairMemberStale")
+        let trash = root.appendingPathComponent("Trash", isDirectory: true)
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("PAIR.NEF")
+        let jpeg = root.appendingPathComponent("PAIR.JPG")
+        try Data("raw".utf8).write(to: raw)
+        try Data("jpeg".utf8).write(to: jpeg)
+        let pair = makeItem(id: "PAIR.NEF", primaryURL: raw, pairedURL: jpeg)
+        let jpegOnly = PhotoItem(primaryFile: try XCTUnwrap(pair.individualFiles.last))
+        try Data("changed retained raw".utf8).write(to: raw)
+
+        let result = CleanUpWorker.moveToTrash(
+            [CleanUpPhotoSnapshot(
+                index: 0,
+                item: jpegOnly,
+                validationFiles: pair.individualFiles
+            )],
+            journalDirectory: journals,
+            fileManager: ProtectedTrashFileManager(trashDirectory: trash)
+        ) { _, _ in }
+
+        XCTAssertEqual(result.stalePhotos.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: raw.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: jpeg.path))
+        XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+    }
+
     func testCleanUpDoesNotRequireOpeningProtectedTrashDirectory() throws {
         let root = try makeTemporaryDirectory(named: "ProtectedTrash")
         let photos = root.appendingPathComponent("Photos", isDirectory: true)
@@ -234,29 +302,178 @@ final class CleanUpWorkerSafetyTests: XCTestCase {
         let root = try makeTemporaryDirectory(named: "ScanReplacement")
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("SOURCE.JPG")
+        let untouched = root.appendingPathComponent("UNTOUCHED.mov")
+        let trash = root.appendingPathComponent("FakeTrash", isDirectory: true)
         let journals = root.appendingPathComponent("Journals", isDirectory: true)
         try Data("original".utf8).write(to: source)
+        try Data("movie".utf8).write(to: untouched)
+        try FileManager.default.createDirectory(
+            at: trash,
+            withIntermediateDirectories: true
+        )
         let scannedItem = makeItem(id: "SOURCE.JPG", primaryURL: source)
+        let untouchedItem = makeItem(
+            id: "UNTOUCHED.mov",
+            primaryURL: untouched,
+            mediaKind: .video
+        )
 
         try FileManager.default.removeItem(at: source)
         let replacement = Data("replacement with a different size".utf8)
         try replacement.write(to: source, options: .withoutOverwriting)
 
         let result = CleanUpWorker.moveToTrash(
-            [CleanUpPhotoSnapshot(index: 0, item: scannedItem)],
-            journalDirectory: journals
+            [
+                CleanUpPhotoSnapshot(index: 0, item: scannedItem),
+                CleanUpPhotoSnapshot(index: 1, item: untouchedItem),
+            ],
+            journalDirectory: journals,
+            fileManager: ProtectedTrashFileManager(trashDirectory: trash)
         ) { _, _ in }
 
         XCTAssertTrue(result.succeeded.isEmpty)
-        XCTAssertEqual(result.failedPhotos, 1)
+        XCTAssertEqual(result.stalePhotos, [
+            StaleCleanUpPhoto(itemID: "SOURCE.JPG", displayName: "SOURCE.JPG"),
+        ])
+        XCTAssertEqual(result.failedPhotos, 0)
         XCTAssertEqual(result.inconsistentPhotos, 0)
-        XCTAssertTrue(result.journalFailure)
+        XCTAssertFalse(result.journalFailure)
         XCTAssertFalse(result.requiresRecovery)
         XCTAssertEqual(try Data(contentsOf: source), replacement)
+        XCTAssertEqual(try Data(contentsOf: untouched), Data("movie".utf8))
         XCTAssertFalse(
             FileOperationJournal.hasPendingOperations(directory: journals),
-            "a scan-time rejection occurs before activation and needs no recovery"
+            "a stale scan must stop before journal activation or moving another item"
         )
+    }
+
+    func testStaleJPEGPreflightStopsWholeBatchAndFreshSnapshotsCanMoveIt() throws {
+        let root = try makeTemporaryDirectory(named: "StaleJPEGPreflight")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("PAIR.RAW")
+        let jpeg = root.appendingPathComponent("PAIR.JPG")
+        let movie = root.appendingPathComponent("MOVIE.mov")
+        let trash = root.appendingPathComponent("FakeTrash", isDirectory: true)
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        try Data("raw".utf8).write(to: raw)
+        try Data("jpeg".utf8).write(to: jpeg)
+        try Data("movie".utf8).write(to: movie)
+        try FileManager.default.createDirectory(
+            at: trash,
+            withIntermediateDirectories: true
+        )
+        let pair = makeItem(id: "PAIR.RAW", primaryURL: raw, pairedURL: jpeg)
+        let video = makeItem(id: "MOVIE.mov", primaryURL: movie, mediaKind: .video)
+        let oldJPEGIdentity = try XCTUnwrap(pair.pairedFile?.scannedIdentity)
+
+        // Permission metadata changes ctime without changing pixels, size,
+        // mtime, inode, or volume. This simulates Finder metadata drift.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)],
+            ofItemAtPath: jpeg.path
+        )
+        let changedJPEGIdentity = try FileOperationJournal.captureIdentity(at: jpeg)
+        XCTAssertTrue(FileOperationJournal.identitiesMatch(
+            expected: oldJPEGIdentity,
+            actual: changedJPEGIdentity,
+            includeStatusChange: false
+        ))
+        XCTAssertFalse(FileOperationJournal.identitiesMatch(
+            expected: oldJPEGIdentity,
+            actual: changedJPEGIdentity,
+            includeStatusChange: true
+        ))
+
+        let stale = CleanUpWorker.moveToTrash(
+            [
+                CleanUpPhotoSnapshot(index: 0, item: pair),
+                CleanUpPhotoSnapshot(index: 1, item: video),
+            ],
+            journalDirectory: journals,
+            fileManager: ProtectedTrashFileManager(trashDirectory: trash)
+        ) { _, _ in }
+
+        XCTAssertEqual(stale.stalePhotos, [
+            StaleCleanUpPhoto(itemID: "PAIR.RAW", displayName: "PAIR.RAW"),
+        ])
+        XCTAssertEqual(stale.failedPhotos, 0)
+        XCTAssertFalse(stale.journalFailure)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: raw.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: jpeg.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: movie.path))
+        XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+
+        // A normal rescan creates new snapshots; exact live checks still run
+        // before each move, but the refreshed batch can now use the existing
+        // protected/fake Trash path safely.
+        let rescannedPair = makeItem(
+            id: "PAIR.RAW", primaryURL: raw, pairedURL: jpeg
+        )
+        let rescannedVideo = makeItem(
+            id: "MOVIE.mov", primaryURL: movie, mediaKind: .video
+        )
+        let moved = CleanUpWorker.moveToTrash(
+            [
+                CleanUpPhotoSnapshot(index: 0, item: rescannedPair),
+                CleanUpPhotoSnapshot(index: 1, item: rescannedVideo),
+            ],
+            journalDirectory: journals,
+            fileManager: ProtectedTrashFileManager(trashDirectory: trash)
+        ) { _, _ in }
+        XCTAssertTrue(moved.stalePhotos.isEmpty)
+        XCTAssertEqual(moved.succeeded.count, 2)
+        XCTAssertEqual(moved.failedPhotos, 0)
+        XCTAssertFalse(moved.journalFailure)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: raw.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jpeg.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movie.path))
+        XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+    }
+
+    func testMultipleStalePairMembersCountAsOneReviewItem() throws {
+        let root = try makeTemporaryDirectory(named: "MultipleStalePairMembers")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("PAIR.RAW")
+        let jpeg = root.appendingPathComponent("PAIR.JPG")
+        let journals = root.appendingPathComponent("Journals", isDirectory: true)
+        try Data("raw".utf8).write(to: raw)
+        try Data("jpeg".utf8).write(to: jpeg)
+        let pair = makeItem(id: "PAIR.RAW", primaryURL: raw, pairedURL: jpeg)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)],
+            ofItemAtPath: raw.path
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)],
+            ofItemAtPath: jpeg.path
+        )
+
+        let result = CleanUpWorker.moveToTrash(
+            [CleanUpPhotoSnapshot(index: 0, item: pair)],
+            journalDirectory: journals
+        ) { _, _ in }
+
+        XCTAssertEqual(result.stalePhotos.count, 1)
+        XCTAssertEqual(result.stalePhotos.first?.itemID, "PAIR.RAW")
+        XCTAssertEqual(result.failedPhotos, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: raw.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: jpeg.path))
+        XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+    }
+
+    @MainActor
+    func testStaleScanMessageReportsOnlyStaleItemsAndRescanInstruction() {
+        let message = SessionStore.cleanUpStaleScanMessage(for: [
+            StaleCleanUpPhoto(itemID: "A", displayName: "A.RAW"),
+            StaleCleanUpPhoto(itemID: "B", displayName: "B.mov"),
+        ])
+        XCTAssertTrue(message.contains("2 items have changed"))
+        XCTAssertTrue(message.contains("A.RAW"))
+        XCTAssertTrue(message.contains("B.mov"))
+        XCTAssertTrue(message.contains("No files were moved."))
+        XCTAssertTrue(message.contains("Rescan Folder"))
+        XCTAssertTrue(message.contains("Keep Only Yes again"))
+        XCTAssertFalse(message.contains("179"))
     }
 
     func testRestoreCollisionLeavesBothFilesAndFinishesConsistently() throws {
@@ -500,7 +717,8 @@ final class CleanUpWorkerSafetyTests: XCTestCase {
     private func makeItem(
         id: String,
         primaryURL: URL,
-        pairedURL: URL? = nil
+        pairedURL: URL? = nil,
+        mediaKind: MediaKind = .photo
     ) -> PhotoItem {
         PhotoItem(
             id: id,
@@ -509,6 +727,7 @@ final class CleanUpWorkerSafetyTests: XCTestCase {
             captureDate: nil,
             cameraModel: nil,
             lensModel: nil,
+            mediaKind: mediaKind,
             fileSize: 1,
             pairedFileSize: pairedURL == nil ? 0 : 1
         )

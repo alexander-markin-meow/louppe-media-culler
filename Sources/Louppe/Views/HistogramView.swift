@@ -3,11 +3,11 @@ import SwiftUI
 /// Compact photo-only luminance inspection for the Info panel.
 struct HistogramSection: View {
     let analysis: HistogramAnalysis?
+    let source: HistogramAnalysisSource
     let loadFailed: Bool
     @ObservedObject var store: SessionStore
 
     private static let chartHeight: CGFloat = 88
-    private let warningColor = Color.red.opacity(0.72)
 
     var body: some View {
         VStack(spacing: 8) {
@@ -19,6 +19,21 @@ struct HistogramSection: View {
                     clippingButton
                         .padding(.top, 2)
                         .padding(.trailing, 2)
+                }
+
+                if analysis != nil {
+                    Text(source.shortLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 3)
+                        .padding(.leading, 3)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topLeading
+                        )
+                        .accessibilityHidden(true)
+                        .allowsHitTesting(false)
                 }
             }
 
@@ -32,9 +47,14 @@ struct HistogramSection: View {
     @ViewBuilder
     private var chart: some View {
         if let analysis {
-            LuminanceHistogramView(analysis: analysis)
+            LuminanceHistogramView(
+                analysis: analysis,
+                source: source
+            )
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(accessibilityDescription(for: analysis))
+                .accessibilityLabel(
+                    accessibilityDescription(for: analysis)
+                )
         } else if loadFailed {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle")
@@ -97,20 +117,17 @@ struct HistogramSection: View {
         .buttonStyle(.plain)
         .accessibilityLabel(
             store.showClippingWarnings
-                ? "Hide Clipping Warnings"
-                : "Show Clipping Warnings"
+                ? "Hide Preview Clipping Overlay"
+                : "Show Preview Clipping Overlay"
         )
         .accessibilityValue(
             store.showClippingWarnings ? "On" : "Off"
         )
-        .help("Show or hide red clipping warnings on the photo (X)")
+        .help("Show or hide the red preview clipping overlay (X)")
     }
 
     private func percentageColor(_ value: Double?) -> Color {
-        guard let value,
-              HistogramAnalysis.isHighPercentage(value)
-        else { return .primary }
-        return warningColor
+        value == nil ? .secondary : .primary
     }
 
     private static func formatPercentage(_ value: Double) -> String {
@@ -123,12 +140,13 @@ struct HistogramSection: View {
     private func accessibilityDescription(
         for analysis: HistogramAnalysis
     ) -> String {
-        "Luminance histogram. Shadows \(Self.formatPercentage(analysis.shadowPercentage)). Highlights \(Self.formatPercentage(analysis.highlightPercentage))."
+        "\(source.detailLabel) luminance histogram. Shadows \(Self.formatPercentage(analysis.shadowPercentage)). Highlights \(Self.formatPercentage(analysis.highlightPercentage))."
     }
 }
 
 private struct LuminanceHistogramView: View {
     let analysis: HistogramAnalysis
+    let source: HistogramAnalysisSource
 
     var body: some View {
         Canvas { context, size in
@@ -149,8 +167,8 @@ private struct LuminanceHistogramView: View {
                     width: max(binWidth + 0.35, 0.5),
                     height: height
                 )
-                if index <= Int(HistogramAnalysis.nearBlackUpperBound)
-                    || index >= Int(HistogramAnalysis.nearWhiteLowerBound) {
+                if index <= source.shadowBinUpperBound
+                    || index >= source.highlightBinLowerBound {
                     warningPath.addRect(rect)
                 } else {
                     normalPath.addRect(rect)
@@ -162,7 +180,7 @@ private struct LuminanceHistogramView: View {
             )
             context.fill(
                 warningPath,
-                with: .color(Color.red.opacity(0.72))
+                with: .color(Color.secondary.opacity(0.82))
             )
             context.stroke(
                 Path(CGRect(

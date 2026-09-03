@@ -12,6 +12,7 @@ struct VideoChecks {
             let folder = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try writeMovie(to: folder.appendingPathComponent("VIDEO.MOV"))
+            try writeSilentWAV(to: folder.appendingPathComponent("AUDIO.WAV"))
             try writePhoto(to: folder.appendingPathComponent("PHOTO.JPG"))
             print(folder.path)
             return
@@ -25,14 +26,29 @@ struct VideoChecks {
         let nativeMovieExtensions = AVURLAsset.audiovisualContentTypes
             .filter { $0.conforms(to: .movie) }
             .compactMap(\.preferredFilenameExtension)
-        try expect(!nativeMovieExtensions.isEmpty, "macOS should advertise native movie types")
-        try expect(
-            nativeMovieExtensions.allSatisfy(FolderScanner.isVideoExtension),
-            "scanner should recognise every movie extension AVFoundation advertises"
-        )
+        if !nativeMovieExtensions.isEmpty {
+            try expect(
+                nativeMovieExtensions.allSatisfy(FolderScanner.isVideoExtension),
+                "scanner should recognise every movie extension AVFoundation advertises"
+            )
+        }
         try expect(
             FolderScanner.videoExtensions.allSatisfy(FolderScanner.isVideoExtension),
             "scanner should retain every explicit common video fallback"
+        )
+        let nativeAudioExtensions = AVURLAsset.audiovisualContentTypes
+            .filter { $0.conforms(to: .audio) && !$0.conforms(to: .movie) }
+            .compactMap(\.preferredFilenameExtension)
+            .filter { !FolderScanner.videoExtensions.contains($0.lowercased()) }
+        if !nativeAudioExtensions.isEmpty {
+            try expect(
+                nativeAudioExtensions.allSatisfy(FolderScanner.isAudioExtension),
+                "scanner should recognise every unambiguous standalone audio extension AVFoundation advertises"
+            )
+        }
+        try expect(
+            FolderScanner.audioExtensions.allSatisfy(FolderScanner.isAudioExtension),
+            "scanner should retain every explicit common audio fallback"
         )
 
         let movieURL = folder.appendingPathComponent("FIRST-FRAME.MOV")
@@ -78,8 +94,18 @@ struct VideoChecks {
             let playback = VideoPlaybackController()
             playback.prepare(item)
             try expect(playback.isActive(item), "session player should prepare the selected video")
+            try expect(
+                playback.seek(item, by: 0.5),
+                "a playable video should accept the half-second culling seek"
+            )
+            try expect(!playback.isPlaying, "seeking a paused video must not start playback")
             playback.toggle(item)
             try expect(playback.isPlaying, "Grid play action should start the shared player")
+            try expect(
+                playback.seek(item, by: -0.5),
+                "a backward half-second seek should preserve the active video"
+            )
+            try expect(playback.isPlaying, "seeking a playing video must not pause it")
             playback.pause()
             try expect(!playback.isPlaying && playback.isActive(item), "pause should preserve the active video and position")
             playback.stop()
@@ -98,7 +124,50 @@ struct VideoChecks {
         try expect(broken.isVideo && !broken.videoIsPlayable, "damaged movie should be visible but unplayable")
         try expect(MediaDurationFormat.display(broken.duration) == "--:--", "unreadable movie should keep a visible duration placeholder")
 
-        print("Video checks passed (18/18)")
+        let audioURL = folder.appendingPathComponent("TRACK.WAV")
+        try writeSilentWAV(to: audioURL)
+        let audioInfo = AudioMetadataExtractor.scanInfo(for: audioURL)
+        try expect(audioInfo.isPlayable, "generated WAV should be playable")
+        try expect((audioInfo.duration ?? 0) >= 1, "generated WAV should expose its duration")
+        try expect(audioInfo.codec != nil, "generated WAV should expose its codec")
+
+        let scannedWithAudio = try FolderScanner.scan(folder) { _ in }
+        guard let scannedAudio = scannedWithAudio.first(where: {
+            $0.primaryURL.standardizedFileURL.resolvingSymlinksInPath()
+                == audioURL.standardizedFileURL.resolvingSymlinksInPath()
+        }) else {
+            throw CheckFailure("folder scan dropped the playable audio file")
+        }
+        try expect(scannedAudio.isAudio && scannedAudio.audioIsPlayable, "folder scan should classify WAV as playable audio")
+        try expect(scannedAudio.duration != nil, "folder scan should retain audio duration")
+        let audioThumbnail = await ImagePipeline.shared.thumbnail(for: scannedAudio)
+        try expect(audioThumbnail == nil, "audio should not consume the visual thumbnail pipeline")
+
+        try await MainActor.run {
+            let playback = VideoPlaybackController()
+            playback.prepare(scannedAudio)
+            try expect(playback.isActive(scannedAudio), "session player should prepare selected audio")
+            playback.toggle(scannedAudio)
+            try expect(playback.isPlaying, "Space and Grid controls should start shared audio playback")
+            playback.prepare(item)
+            try expect(playback.isActive(item), "preparing video should replace active audio in the shared player")
+            try expect(!playback.isActive(scannedAudio), "audio and video must never play concurrently")
+            playback.stop()
+        }
+
+        let brokenAudioURL = folder.appendingPathComponent("BROKEN.MP3")
+        try Data("not audio".utf8).write(to: brokenAudioURL)
+        let withBrokenAudio = try FolderScanner.scan(folder) { _ in }
+        guard let brokenAudio = withBrokenAudio.first(where: {
+            $0.primaryURL.standardizedFileURL.resolvingSymlinksInPath()
+                == brokenAudioURL.standardizedFileURL.resolvingSymlinksInPath()
+        }) else {
+            throw CheckFailure("recognized unsupported audio should remain visible")
+        }
+        try expect(brokenAudio.isAudio && !brokenAudio.audioIsPlayable, "damaged audio should be visible but unplayable")
+        try expect(MediaDurationFormat.display(brokenAudio.duration) == "--:--", "unreadable audio should keep a visible duration placeholder")
+
+        print("Media checks passed")
     }
 
     private static func writeMovie(to url: URL) throws {
@@ -190,6 +259,38 @@ struct VideoChecks {
             throw CheckFailure("photo fixture encoding failed")
         }
         try data.write(to: url, options: .atomic)
+    }
+
+    private static func writeSilentWAV(to url: URL) throws {
+        let sampleRate: UInt32 = 8_000
+        let sampleCount: UInt32 = 8_000
+        let bytesPerSample: UInt16 = 2
+        let dataByteCount = sampleCount * UInt32(bytesPerSample)
+        var data = Data()
+        data.append(contentsOf: "RIFF".utf8)
+        appendLittleEndian(36 + dataByteCount, to: &data)
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        appendLittleEndian(UInt32(16), to: &data)
+        appendLittleEndian(UInt16(1), to: &data) // PCM
+        appendLittleEndian(UInt16(1), to: &data) // mono
+        appendLittleEndian(sampleRate, to: &data)
+        appendLittleEndian(sampleRate * UInt32(bytesPerSample), to: &data)
+        appendLittleEndian(bytesPerSample, to: &data)
+        appendLittleEndian(UInt16(16), to: &data)
+        data.append(contentsOf: "data".utf8)
+        appendLittleEndian(dataByteCount, to: &data)
+        data.append(Data(count: Int(dataByteCount)))
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func appendLittleEndian<T: FixedWidthInteger>(
+        _ value: T,
+        to data: inout Data
+    ) {
+        var littleEndian = value.littleEndian
+        withUnsafeBytes(of: &littleEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
     }
 
     private static func isMostlyRed(_ image: NSImage) -> Bool {

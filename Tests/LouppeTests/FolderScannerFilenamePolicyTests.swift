@@ -3,6 +3,36 @@ import XCTest
 @testable import Louppe
 
 final class FolderScannerFilenamePolicyTests: XCTestCase {
+    func testRawJPEGPairsExcludeStandaloneAndAmbiguousFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "Louppe-Pair-Discovery-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let names = [
+            "MATCH.NEF", "MATCH.JPG", "LONE.JPG",
+            "AMBIG.NEF", "AMBIG.CR3", "AMBIG.JPG",
+        ]
+        let items = names.map { name in
+            PhotoItem(
+                id: name,
+                primaryURL: root.appendingPathComponent(name),
+                pairedURL: nil,
+                captureDate: nil,
+                cameraModel: nil,
+                lensModel: nil,
+                fileSize: 1
+            )
+        }
+
+        let pairs = FolderScanner.rawJPEGPairs(from: items, root: root)
+
+        XCTAssertEqual(pairs.count, 1)
+        XCTAssertEqual(pairs.first?.raw.url.lastPathComponent, "MATCH.NEF")
+        XCTAssertEqual(pairs.first?.jpeg.url.lastPathComponent, "MATCH.JPG")
+    }
+
     func testAccentedAndUnaccentedNamesNeverPair() {
         let files = [
             mediaURL("cafe.NEF"),

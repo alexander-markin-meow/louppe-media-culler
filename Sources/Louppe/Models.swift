@@ -39,11 +39,29 @@ enum PhotoColorLabel: String, Codable, CaseIterable, Hashable, Sendable {
 enum MediaKind: String, Hashable, Sendable {
     case photo
     case video
+    case audio
 
     var label: String {
         switch self {
         case .photo: return "Photos"
         case .video: return "Videos"
+        case .audio: return "Audio"
+        }
+    }
+
+    var singularLabel: String {
+        switch self {
+        case .photo: return "photo"
+        case .video: return "video"
+        case .audio: return "audio"
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .photo: return 0
+        case .video: return 1
+        case .audio: return 2
         }
     }
 }
@@ -226,6 +244,8 @@ struct PhotoFile: Identifiable, Sendable {
     let videoCodec: String?
     let videoFrameRate: Double?
     let videoIsPlayable: Bool
+    let audioCodec: String?
+    let audioIsPlayable: Bool
     let captureDate: Date?
     let captureDay: Date?
     let cameraModel: String?
@@ -287,6 +307,8 @@ struct PhotoFile: Identifiable, Sendable {
         videoCodec: String? = nil,
         videoFrameRate: Double? = nil,
         videoIsPlayable: Bool = false,
+        audioCodec: String? = nil,
+        audioIsPlayable: Bool = false,
         modificationDate: Date? = nil,
         fileSize: Int64,
         scannedIdentity: FileOperationJournal.FileIdentity? = nil,
@@ -316,6 +338,8 @@ struct PhotoFile: Identifiable, Sendable {
         self.videoCodec = videoCodec
         self.videoFrameRate = videoFrameRate
         self.videoIsPlayable = videoIsPlayable
+        self.audioCodec = audioCodec
+        self.audioIsPlayable = audioIsPlayable
         self.captureDate = captureDate
         self.captureDay = captureDate.map { Calendar.current.startOfDay(for: $0) }
         self.cameraModel = cameraModel
@@ -372,7 +396,9 @@ struct PhotoFile: Identifiable, Sendable {
 
     private static func makeFileTypeLabel(url: URL, mediaKind: MediaKind) -> String {
         let ext = url.pathExtension.lowercased()
-        if mediaKind == .video { return ext.isEmpty ? "VIDEO" : ext.uppercased() }
+        if mediaKind != .photo {
+            return ext.isEmpty ? mediaKind.label.uppercased() : ext.uppercased()
+        }
         if FolderScanner.rawExtensions.contains(ext) { return "RAW" }
         switch ext {
         case "jpg", "jpeg": return "JPEG"
@@ -586,7 +612,18 @@ struct PhotoItem: Identifiable, Sendable {
     var videoDimensions: CGSize? { primaryFile.videoDimensions }
     var videoCodec: String? { primaryFile.videoCodec }
     var videoFrameRate: Double? { primaryFile.videoFrameRate }
+    var videoResolution: VideoResolution? {
+        guard isVideo,
+              let size = videoDimensions,
+              let width = MediaNumeric.pixelDimension(size.width),
+              let height = MediaNumeric.pixelDimension(size.height)
+        else { return nil }
+        return VideoResolution(width: width, height: height)
+    }
+    var videoResolutionLabel: String? { videoResolution?.displayLabel }
     var videoIsPlayable: Bool { primaryFile.videoIsPlayable }
+    var audioCodec: String? { primaryFile.audioCodec }
+    var audioIsPlayable: Bool { primaryFile.audioIsPlayable }
     var captureDate: Date? { primaryFile.captureDate }
     var captureDay: Date? { primaryFile.captureDay }
     var cameraModel: String? { primaryFile.cameraModel }
@@ -699,6 +736,8 @@ struct PhotoItem: Identifiable, Sendable {
         videoCodec: String? = nil,
         videoFrameRate: Double? = nil,
         videoIsPlayable: Bool = false,
+        audioCodec: String? = nil,
+        audioIsPlayable: Bool = false,
         primaryModificationDate: Date? = nil,
         fileSize: Int64,
         pairedFileSize: Int64 = 0,
@@ -724,6 +763,8 @@ struct PhotoItem: Identifiable, Sendable {
             videoCodec: videoCodec,
             videoFrameRate: videoFrameRate,
             videoIsPlayable: videoIsPlayable,
+            audioCodec: audioCodec,
+            audioIsPlayable: audioIsPlayable,
             modificationDate: primaryModificationDate,
             fileSize: fileSize,
             scannedIdentity: try? FileOperationJournal.captureIdentity(
@@ -774,11 +815,28 @@ struct PhotoItem: Identifiable, Sendable {
     }
 
     var isVideo: Bool { mediaKind == .video }
+    var isAudio: Bool { mediaKind == .audio }
+
+    var isPlayableMedia: Bool {
+        switch mediaKind {
+        case .photo: return false
+        case .video: return videoIsPlayable
+        case .audio: return audioIsPlayable
+        }
+    }
+
+    var hasVisualPreview: Bool {
+        switch mediaKind {
+        case .photo: return isSupported
+        case .video: return videoIsPlayable
+        case .audio: return false
+        }
+    }
 
     /// Whether we can actually decode and preview this file. Unsupported visual
     /// files still appear in the session, just as a placeholder tile.
     var isSupported: Bool {
-        if isVideo { return videoIsPlayable }
+        if isVideo || isAudio { return isPlayableMedia }
         return FolderScanner.supportedExtensions.contains(primaryURL.pathExtension.lowercased())
     }
 
@@ -861,6 +919,7 @@ struct PhotoSelectionSummary: Equatable {
     let fileCount: Int
     let photoCount: Int
     let videoCount: Int
+    let audioCount: Int
     let cameras: [String]
     let lenses: [String]
     let captureDayRange: ClosedRange<Date>?
@@ -873,6 +932,7 @@ struct PhotoSelectionSummary: Equatable {
         fileCount = items.reduce(0) { $0 + $1.allURLs.count }
         photoCount = items.count { $0.mediaKind == .photo }
         videoCount = items.count { $0.mediaKind == .video }
+        audioCount = items.count { $0.mediaKind == .audio }
         cameras = Self.distinctMetadataLabels(items.map(\.cameraModel))
         lenses = Self.distinctMetadataLabels(items.map(\.lensModel))
 
@@ -911,7 +971,7 @@ struct PhotoSelectionSummary: Equatable {
 
 // MARK: - Clean up
 
-/// Which photos the two rating-based Clean Up actions are allowed to
+/// Which media items the two rating-based Clean Up actions are allowed to
 /// consider. Trashing the selection directly is intentionally independent of
 /// this choice.
 enum CleanUpScope: Hashable, Sendable {
@@ -938,13 +998,17 @@ enum CleanUpScope: Hashable, Sendable {
 /// The clean-up actions. All of them move files to the macOS Trash — never a
 /// permanent delete — so they're recoverable with ⌘Z or from the Trash itself.
 /// Which photos each mode targets is decided in `SessionStore.cleanUpTargets`.
-enum CleanUpMode: Sendable {
+enum CleanUpMode: Equatable, Sendable {
     /// Trash the currently selected photo(s).
     case selection
     /// Trash the photos marked No; Yes and unrated photos stay in the folder.
     case trashNo
     /// Keep only the photos marked Yes; everything else is trashed.
     case keepOnlyYes
+    /// Trash only the JPEG member of each unambiguous RAW+JPEG pair.
+    case pairedJPEGs
+    /// Trash only the RAW member of each unambiguous RAW+JPEG pair.
+    case pairedRAWs
 }
 
 // MARK: - Export
@@ -1010,14 +1074,20 @@ struct ExportSelectionSnapshot: Equatable, Sendable {
 
     var itemCount: Int { itemIndices.count }
 
-    init(items: [PhotoItem], predicate: ExportSelectionPredicate) {
+    init(
+        items: [PhotoItem],
+        candidateIndices: [Int]? = nil,
+        predicate: ExportSelectionPredicate
+    ) {
         var indices: [Int] = []
         var files = 0
         var mixedDecisions = 0
         var mixedStars = 0
         var mixedColors = 0
-        indices.reserveCapacity(items.count)
-        for (index, item) in items.enumerated() {
+        let candidates = candidateIndices ?? Array(items.indices)
+        indices.reserveCapacity(candidates.count)
+        for index in candidates where items.indices.contains(index) {
+            let item = items[index]
             let metadata = item.metadataState
             guard predicate.matches(metadata) else { continue }
             indices.append(index)
@@ -1070,6 +1140,9 @@ struct PhotoSort: Equatable, Sendable {
         case shutterSpeed
         case iso
         case duration
+        case videoResolution
+        case videoFrameRate
+        case videoCodec
         case decision
         case starRating
         case colorLabel
@@ -1077,12 +1150,14 @@ struct PhotoSort: Equatable, Sendable {
         var ascendingLabel: String {
             switch self {
             case .captureDate: return "Oldest first"
-            case .name, .subfolder, .fileType, .camera, .lens: return "A–Z"
+            case .name, .subfolder, .fileType, .camera, .lens, .videoCodec: return "A–Z"
             case .mediaKind: return "Photos first"
             case .aperture: return "Widest first"
             case .shutterSpeed: return "Fastest first"
             case .iso: return "Lowest first"
             case .duration: return "Shortest first"
+            case .videoResolution: return "Smallest first"
+            case .videoFrameRate: return "Lowest first"
             case .decision: return "Yes first"
             case .starRating: return "Lowest first"
             case .colorLabel: return "Red to Purple"
@@ -1092,12 +1167,14 @@ struct PhotoSort: Equatable, Sendable {
         var descendingLabel: String {
             switch self {
             case .captureDate: return "Newest first"
-            case .name, .subfolder, .fileType, .camera, .lens: return "Z–A"
-            case .mediaKind: return "Videos first"
+            case .name, .subfolder, .fileType, .camera, .lens, .videoCodec: return "Z–A"
+            case .mediaKind: return "Audio first"
             case .aperture: return "Narrowest first"
             case .shutterSpeed: return "Slowest first"
             case .iso: return "Highest first"
             case .duration: return "Longest first"
+            case .videoResolution: return "Largest first"
+            case .videoFrameRate: return "Highest first"
             case .decision: return "No first"
             case .starRating: return "Highest first"
             case .colorLabel: return "Purple to Red"
@@ -1135,6 +1212,13 @@ struct PhotoSort: Equatable, Sendable {
             case .duration:
                 return roundedDurationBucket(a.duration)
                     == roundedDurationBucket(b.duration)
+            case .videoResolution:
+                return a.videoResolution == b.videoResolution
+            case .videoFrameRate:
+                return groupNumberBits(a.videoFrameRate)
+                    == groupNumberBits(b.videoFrameRate)
+            case .videoCodec:
+                return a.videoCodec == b.videoCodec
             case .decision:
                 return a.ratingState == b.ratingState
             case .starRating:
@@ -1174,6 +1258,15 @@ struct PhotoSort: Equatable, Sendable {
                 return "ISO \(MetadataFormat.iso(iso))"
             case .duration:
                 return item.duration.map { MediaDurationFormat.display($0) } ?? "Unknown duration"
+            case .videoResolution:
+                return item.videoResolutionLabel ?? "Unknown resolution"
+            case .videoFrameRate:
+                guard let frameRate = item.videoFrameRate else {
+                    return "Unknown frame rate"
+                }
+                return VideoMetadataFormat.frameRate(frameRate)
+            case .videoCodec:
+                return item.videoCodec ?? "Unknown video codec"
             case .decision:
                 switch item.ratingState {
                 case .yes: return "Yes"
@@ -1225,6 +1318,12 @@ struct PhotoSort: Equatable, Sendable {
                 value = .numberBits(groupNumberBits(item.iso))
             case .duration:
                 value = .roundedDuration(roundedDurationBucket(item.duration))
+            case .videoResolution:
+                value = .text(item.videoResolutionLabel ?? "Unknown resolution")
+            case .videoFrameRate:
+                value = .numberBits(groupNumberBits(item.videoFrameRate))
+            case .videoCodec:
+                value = .text(item.videoCodec ?? "Unknown video codec")
             case .decision:
                 value = .decision(item.ratingState)
             case .starRating:
@@ -1268,8 +1367,8 @@ struct PhotoSort: Equatable, Sendable {
                 dateThenNameInOrder(a, b)
             }
         case .mediaKind:
-            let aValue = a.mediaKind == .photo ? 0 : 1
-            let bValue = b.mediaKind == .photo ? 0 : 1
+            let aValue = a.mediaKind.sortOrder
+            let bValue = b.mediaKind.sortOrder
             if aValue != bValue { return ascending ? aValue < bValue : aValue > bValue }
             return dateThenNameInOrder(a, b)
         case .camera:
@@ -1294,6 +1393,26 @@ struct PhotoSort: Equatable, Sendable {
             }
         case .duration:
             return optionalValuesInOrder(a.duration, b.duration, ascending: ascending) {
+                dateThenNameInOrder(a, b)
+            }
+        case .videoResolution:
+            return optionalValuesInOrder(
+                a.videoResolution,
+                b.videoResolution,
+                ascending: ascending
+            ) {
+                dateThenNameInOrder(a, b)
+            }
+        case .videoFrameRate:
+            return optionalValuesInOrder(
+                a.videoFrameRate,
+                b.videoFrameRate,
+                ascending: ascending
+            ) {
+                dateThenNameInOrder(a, b)
+            }
+        case .videoCodec:
+            return optionalStringsInOrder(a.videoCodec, b.videoCodec, ascending: ascending) {
                 dateThenNameInOrder(a, b)
             }
         case .decision:
@@ -1570,6 +1689,34 @@ enum MediaNumeric {
     }
 }
 
+/// Scan-cached video dimensions in a sort-safe form. The display orientation
+/// stays intact: a portrait clip does not collapse into its landscape twin.
+struct VideoResolution: Hashable, Sendable, Comparable {
+    let width: Int
+    let height: Int
+
+    var displayLabel: String { "\(width) × \(height)" }
+
+    private var pixelCount: Int64 { Int64(width) * Int64(height) }
+
+    static func < (lhs: VideoResolution, rhs: VideoResolution) -> Bool {
+        if lhs.pixelCount != rhs.pixelCount { return lhs.pixelCount < rhs.pixelCount }
+        if lhs.width != rhs.width { return lhs.width < rhs.width }
+        return lhs.height < rhs.height
+    }
+}
+
+enum VideoMetadataFormat {
+    static func frameRate(_ value: Double) -> String {
+        guard let frameRate = MediaNumeric.frameRate(value) else {
+            return "Unknown frame rate"
+        }
+        let text = String(format: "%.3f", frameRate)
+            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
+        return "\(text) fps"
+    }
+}
+
 /// EXIF value formatting shared by the filter fields and group headers.
 enum MetadataFormat {
     static func decimal(_ value: Double) -> String {
@@ -1633,6 +1780,9 @@ struct PhotoFilter: Equatable {
     var durationEnabled = false
     var durationFrom = 0.0
     var durationTo = 0.0
+    var videoFrameRateEnabled = false
+    var videoFrameRateFrom = 0.0
+    var videoFrameRateTo = 0.0
     /// Media categories switched off in a mixed photo/video folder.
     var excludedMediaKinds: Set<MediaKind> = []
     /// File-type labels the user has switched off. Empty = all types shown,
@@ -1641,6 +1791,10 @@ struct PhotoFilter: Equatable {
     /// Same exclusion pattern for camera and lens labels.
     var excludedCameras: Set<String> = []
     var excludedLenses: Set<String> = []
+    /// Video-specific facets only affect videos once the user narrows one of
+    /// these values; photos and audio recordings stay untouched otherwise.
+    var excludedVideoResolutions: Set<String> = []
+    var excludedVideoCodecs: Set<String> = []
     /// Same exclusion pattern for subfolder labels ("None" = the folder root).
     var excludedSubfolders: Set<String> = []
     /// Review metadata facets use the same all-included-by-default exclusion
@@ -1656,10 +1810,13 @@ struct PhotoFilter: Equatable {
             || shutterEnabled
             || isoEnabled
             || durationEnabled
+            || videoFrameRateEnabled
             || !excludedMediaKinds.isEmpty
             || !excludedTypes.isEmpty
             || !excludedCameras.isEmpty
             || !excludedLenses.isEmpty
+            || !excludedVideoResolutions.isEmpty
+            || !excludedVideoCodecs.isEmpty
             || !excludedSubfolders.isEmpty
             || !excludedDecisionStates.isEmpty
             || !excludedStarStates.isEmpty
@@ -1675,6 +1832,8 @@ struct PreparedPhotoFilter {
     let excludedTypes: Set<String>
     let excludedCameras: Set<String>
     let excludedLenses: Set<String>
+    let excludedVideoResolutions: Set<String>
+    let excludedVideoCodecs: Set<String>
     let excludedSubfolders: Set<String>
     let excludedDecisionStates: Set<PhotoItemRatingState>
     let excludedStarStates: Set<PhotoItemStarRatingState>
@@ -1687,6 +1846,7 @@ struct PreparedPhotoFilter {
     let shutterRange: ClosedRange<Double>?
     let isoRange: ClosedRange<Double>?
     let durationRange: ClosedRange<Double>?
+    let videoFrameRateRange: ClosedRange<Double>?
     let searchTokens: [Substring]
 
     init(_ filter: PhotoFilter, calendar: Calendar = .current) {
@@ -1694,6 +1854,8 @@ struct PreparedPhotoFilter {
         excludedTypes = filter.excludedTypes
         excludedCameras = filter.excludedCameras
         excludedLenses = filter.excludedLenses
+        excludedVideoResolutions = filter.excludedVideoResolutions
+        excludedVideoCodecs = filter.excludedVideoCodecs
         excludedSubfolders = filter.excludedSubfolders
         excludedDecisionStates = filter.excludedDecisionStates
         excludedStarStates = filter.excludedStarStates
@@ -1728,6 +1890,11 @@ struct PreparedPhotoFilter {
             to: filter.durationTo,
             allowsZero: true
         )
+        videoFrameRateRange = Self.validRange(
+            enabled: filter.videoFrameRateEnabled,
+            from: filter.videoFrameRateFrom,
+            to: filter.videoFrameRateTo
+        )
         let query = PhotoItem.normalizeForSearch(filter.searchText.trimmingCharacters(in: .whitespaces))
         searchTokens = query.split(whereSeparator: \.isWhitespace)
     }
@@ -1737,6 +1904,18 @@ struct PreparedPhotoFilter {
         if excludedTypes.contains(item.fileTypeLabel) { return false }
         if excludedCameras.contains(item.cameraLabel) { return false }
         if excludedLenses.contains(item.lensLabel) { return false }
+        if !excludedVideoResolutions.isEmpty {
+            guard item.isVideo else { return false }
+            if excludedVideoResolutions.contains(
+                item.videoResolutionLabel ?? "Unknown resolution"
+            ) { return false }
+        }
+        if !excludedVideoCodecs.isEmpty {
+            guard item.isVideo else { return false }
+            if excludedVideoCodecs.contains(item.videoCodec ?? "Unknown video codec") {
+                return false
+            }
+        }
         if excludedSubfolders.contains(item.subfolderLabel) { return false }
         if !excludedDecisionStates.isEmpty
             || !excludedStarStates.isEmpty
@@ -1767,6 +1946,12 @@ struct PreparedPhotoFilter {
         }
         if let durationRange {
             guard let duration = item.duration, durationRange.contains(duration) else { return false }
+        }
+        if let videoFrameRateRange {
+            guard item.isVideo,
+                  let frameRate = item.videoFrameRate,
+                  videoFrameRateRange.contains(frameRate)
+            else { return false }
         }
         for token in searchTokens where !item.searchableText.contains(token) {
             return false

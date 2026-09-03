@@ -43,7 +43,7 @@ struct ThumbnailView: View {
         // their first frame instead of flashing a placeholder and scheduling
         // an otherwise unnecessary state update.
         self._image = State(
-            initialValue: item.isSupported
+            initialValue: item.hasVisualPreview
                 ? ImagePipeline.shared.cachedThumbnail(for: item)
                 : nil
         )
@@ -56,7 +56,9 @@ struct ThumbnailView: View {
             : ImagePipeline.shared.cachedThumbnail(for: item)
         ZStack {
             Group {
-                if !item.isSupported {
+                if item.isAudio, item.audioIsPlayable {
+                    AudioThumbnail(item: item)
+                } else if !item.isSupported {
                     UnsupportedThumbnail(item: item)
                 } else if let displayedImage {
                     Image(nsImage: displayedImage)
@@ -96,8 +98,11 @@ struct ThumbnailView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if item.isVideo {
-                VideoDurationBadge(duration: item.duration)
+            if item.isVideo || item.isAudio {
+                MediaDurationBadge(
+                    duration: item.duration,
+                    mediaKind: item.mediaKind
+                )
                     .padding(4)
             }
         }
@@ -111,12 +116,12 @@ struct ThumbnailView: View {
         .task(id: revision) {
             let requestedItem = item
             let requestedRevision = requestedItem.contentRevision
-            let cached = requestedItem.isSupported
+            let cached = requestedItem.hasVisualPreview
                 ? ImagePipeline.shared.cachedThumbnail(for: requestedItem)
                 : nil
             image = cached
             imageRevision = requestedRevision
-            guard requestedItem.isSupported, cached == nil else { return }
+            guard requestedItem.hasVisualPreview, cached == nil else { return }
             let loaded = await ImagePipeline.shared.thumbnail(
                 for: requestedItem
             )
@@ -146,8 +151,9 @@ private struct GridVideoPlaybackOverlay: View {
     }
 }
 
-struct VideoDurationBadge: View {
+struct MediaDurationBadge: View {
     let duration: TimeInterval?
+    let mediaKind: MediaKind
 
     var body: some View {
         Text(MediaDurationFormat.display(duration))
@@ -158,7 +164,34 @@ struct VideoDurationBadge: View {
             .padding(.vertical, 3)
             .background(.black.opacity(0.68), in: Capsule())
             .shadow(radius: 1)
-            .accessibilityLabel("Video duration: \(MediaDurationFormat.accessibility(duration))")
+            .accessibilityLabel("\(mediaKind.singularLabel.capitalized) duration: \(MediaDurationFormat.accessibility(duration))")
+    }
+}
+
+/// A lightweight, non-decoding tile for a playable audio file. Audio has no
+/// visual preview, so keeping it out of ImagePipeline preserves the thumbnail
+/// queue for photos and video first frames.
+private struct AudioThumbnail: View {
+    let item: PhotoItem
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: thumbnailCornerRadius)
+            .fill(Color(nsColor: .quaternaryLabelColor))
+            .overlay {
+                VStack(spacing: 7) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 25, weight: .medium))
+                        .foregroundStyle(Color.louppeAccent)
+                    Text("Audio")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(item.fileTypeLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .multilineTextAlignment(.center)
+                .padding(6)
+            }
     }
 }
 

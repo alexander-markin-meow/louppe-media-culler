@@ -169,6 +169,16 @@ final class MediaNumericSafetyTests: XCTestCase {
         XCTAssertEqual(MediaNumeric.longitude(180), 180)
     }
 
+    func testVideoFrameRateFormattingTrimsOnlyInsignificantZeroes() {
+        XCTAssertEqual(VideoMetadataFormat.frameRate(60), "60 fps")
+        XCTAssertEqual(VideoMetadataFormat.frameRate(59.94), "59.94 fps")
+        XCTAssertEqual(VideoMetadataFormat.frameRate(23.976), "23.976 fps")
+        XCTAssertEqual(
+            VideoMetadataFormat.frameRate(.infinity),
+            "Unknown frame rate"
+        )
+    }
+
     func testVideoFieldsOmitFiniteButNonsensicalFrameRate() {
         let malformed = videoItem(
             duration: 1,

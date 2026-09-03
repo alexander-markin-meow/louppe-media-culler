@@ -4,6 +4,20 @@ import Foundation
 struct CleanUpPhotoSnapshot: Sendable {
     let index: Int
     let item: PhotoItem
+    /// Files whose unchanged scan identity is required for the action to stay
+    /// valid. Pair-member cleanup moves only `item`, but validates both halves
+    /// so it can never remove the last trustworthy copy of a stale pair.
+    let validationFiles: [PhotoFile]
+
+    init(
+        index: Int,
+        item: PhotoItem,
+        validationFiles: [PhotoFile]? = nil
+    ) {
+        self.index = index
+        self.item = item
+        self.validationFiles = validationFiles ?? item.individualFiles
+    }
 }
 
 struct TrashedFile: Sendable {
@@ -30,10 +44,21 @@ struct TrashedPhotoSnapshot: Sendable {
 
 struct TrashBatchResult: Sendable {
     let succeeded: [TrashedPhotoSnapshot]
+    /// Review items whose current physical files no longer exactly match the
+    /// scan snapshot. A RAW+JPEG pair contributes at most one entry even when
+    /// both physical files changed.
+    let stalePhotos: [StaleCleanUpPhoto]
     let failedPhotos: Int
     let inconsistentPhotos: Int
     let journalFailure: Bool
     let requiresRecovery: Bool
+}
+
+/// A read-only preflight finding. This is deliberately separate from a
+/// journal failure: no journal has been activated and no source was touched.
+struct StaleCleanUpPhoto: Equatable, Sendable {
+    let itemID: String
+    let displayName: String
 }
 
 struct RestoreBatchResult: Sendable {
@@ -61,15 +86,32 @@ enum CleanUpWorker {
             $0 + $1.item.individualFiles.count
         }
         guard photos.allSatisfy({ photo in
-            photo.item.individualFiles.allSatisfy {
+            photo.validationFiles.allSatisfy {
                 $0.scannedIdentity != nil
             }
         }) else {
             return TrashBatchResult(
                 succeeded: [],
+                stalePhotos: [],
                 failedPhotos: photos.count,
                 inconsistentPhotos: 0,
                 journalFailure: true,
+                requiresRecovery: false
+            )
+        }
+        // A journal validates all sources while building its plan. Do the
+        // same exact (including ctime) validation first so an ordinary stale
+        // scan can be reported accurately without creating a journal or
+        // starting a partial Trash batch. The journal keeps its own check and
+        // the per-file check immediately before trashItem remains mandatory.
+        let stalePhotos = staleScanPhotos(in: photos)
+        guard stalePhotos.isEmpty else {
+            return TrashBatchResult(
+                succeeded: [],
+                stalePhotos: stalePhotos,
+                failedPhotos: 0,
+                inconsistentPhotos: 0,
+                journalFailure: false,
                 requiresRecovery: false
             )
         }
@@ -92,6 +134,7 @@ enum CleanUpWorker {
         } catch {
             return TrashBatchResult(
                 succeeded: [],
+                stalePhotos: [],
                 failedPhotos: photos.count,
                 inconsistentPhotos: 0,
                 journalFailure: true,
@@ -128,6 +171,13 @@ enum CleanUpWorker {
                 if !failed {
                     var trashCallAttempted = false
                     do {
+                        if localFileIndex == 0 {
+                            guard validationFilesAreUnchanged(
+                                photo.validationFiles
+                            ) else {
+                                throw CocoaError(.fileReadUnknown)
+                            }
+                        }
                         try writer.requireUnchangedSource(at: fileIndex)
                         trashCallAttempted = true
                         try fm.trashItem(at: url, resultingItemURL: &trashURL)
@@ -288,11 +338,47 @@ enum CleanUpWorker {
         }
         return TrashBatchResult(
             succeeded: succeeded,
+            stalePhotos: [],
             failedPhotos: failedPhotos,
             inconsistentPhotos: inconsistentPhotos,
             journalFailure: journalFailure,
             requiresRecovery: inconsistentPhotos > 0 || !journalFinalized
         )
+    }
+
+    /// Checks every physical member of each review item against the exact
+    /// scan-time identity. It is intentionally read-only and preserves the
+    /// journal's status-change-time protection rather than rebasing it.
+    private static func staleScanPhotos(
+        in photos: [CleanUpPhotoSnapshot]
+    ) -> [StaleCleanUpPhoto] {
+        photos.compactMap { photo in
+            let hasStaleMember = !validationFilesAreUnchanged(
+                photo.validationFiles
+            )
+            return hasStaleMember
+                ? StaleCleanUpPhoto(
+                    itemID: photo.item.id,
+                    displayName: photo.item.displayName
+                )
+                : nil
+        }
+    }
+
+    private static func validationFilesAreUnchanged(
+        _ files: [PhotoFile]
+    ) -> Bool {
+        files.allSatisfy { file in
+            guard let expected = file.scannedIdentity,
+                  let actual = try? FileOperationJournal.captureIdentity(
+                    at: file.url
+                  ) else { return false }
+            return FileOperationJournal.identitiesMatch(
+                expected: expected,
+                actual: actual,
+                includeStatusChange: true
+            )
+        }
     }
 
     static func restore(

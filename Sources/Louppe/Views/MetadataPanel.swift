@@ -15,6 +15,23 @@ struct MetadataPanel: View {
     @State private var histogram: HistogramAnalysis?
     @State private var histogramLoadFailed = false
     @State private var histogramRevision: PhotoContentRevision?
+    @State private var rawHistogram: HistogramAnalysis?
+    @State private var rawHistogramIsPending = false
+    @State private var rawHistogramRevision: PhotoContentRevision?
+    @State private var audioLevels: AudioLevelAnalysis?
+    @State private var audioLevelsLoadFailed = false
+    @State private var audioLevelsRevision: PhotoContentRevision?
+    @AppStorage(CameraQualityWarningPreferences.Keys.isEnabled)
+    private var cameraQualityWarningsEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.highISOThreshold)
+    private var highISOWarningThreshold =
+        CameraQualityWarningPreferences.defaultHighISOThreshold
+    @AppStorage(CameraQualityWarningPreferences.Keys.slowShutterThreshold)
+    private var slowShutterWarningThreshold =
+        CameraQualityWarningPreferences.defaultSlowShutterThreshold
+    @AppStorage(CameraQualityWarningPreferences.Keys.clippingPercentageThreshold)
+    private var clippingWarningThreshold =
+        CameraQualityWarningPreferences.defaultClippingPercentageThreshold
 
     private struct MetadataLoadID: Hashable {
         let contentRevision: PhotoContentRevision
@@ -22,6 +39,11 @@ struct MetadataPanel: View {
     }
 
     private struct HistogramLoadID: Hashable {
+        let contentRevision: PhotoContentRevision
+        let isEligible: Bool
+    }
+
+    private struct AudioLevelsLoadID: Hashable {
         let contentRevision: PhotoContentRevision
         let isEligible: Bool
     }
@@ -38,11 +60,72 @@ struct MetadataPanel: View {
     }
 
     private var displayedHistogram: HistogramAnalysis? {
-        histogramRevision == item.contentRevision ? histogram : nil
+        displayedRawHistogram
+            ?? (histogramRevision == item.contentRevision ? histogram : nil)
+    }
+
+    private var displayedRawHistogram: HistogramAnalysis? {
+        rawHistogramRevision == item.contentRevision ? rawHistogram : nil
+    }
+
+    private var displayedHistogramSource: HistogramAnalysisSource {
+        displayedRawHistogram == nil ? .renderedPreview : .rawDecode
+    }
+
+    private var displayedRawHistogramIsPending: Bool {
+        rawHistogramRevision == item.contentRevision && rawHistogramIsPending
     }
 
     private var displayedHistogramLoadFailed: Bool {
-        histogramRevision == item.contentRevision && histogramLoadFailed
+        displayedHistogram == nil
+            && histogramRevision == item.contentRevision
+            && histogramLoadFailed
+            && !displayedRawHistogramIsPending
+    }
+
+    private var showsAudioLevels: Bool {
+        store.selectedIndices.count <= 1
+            && (item.isVideo || item.isAudio)
+            && item.isPlayableMedia
+    }
+
+    private var audioLevelsLoadID: AudioLevelsLoadID {
+        AudioLevelsLoadID(
+            contentRevision: item.contentRevision,
+            isEligible: showsAudioLevels
+        )
+    }
+
+    private var displayedAudioLevels: AudioLevelAnalysis? {
+        audioLevelsRevision == item.contentRevision ? audioLevels : nil
+    }
+
+    private var displayedAudioLevelsLoadFailed: Bool {
+        audioLevelsRevision == item.contentRevision
+            && audioLevelsLoadFailed
+    }
+
+    private var cameraQualityWarningPreferences: CameraQualityWarningPreferences {
+        CameraQualityWarningPreferences(
+            isEnabled: cameraQualityWarningsEnabled,
+            highISOThreshold: highISOWarningThreshold,
+            slowShutterThreshold: slowShutterWarningThreshold,
+            clippingPercentageThreshold: clippingWarningThreshold
+        )
+    }
+
+    private var cameraQualityCuesRow: CameraQualityCuesRow {
+        CameraQualityCuesRow(
+            item: item,
+            analysis: displayedHistogram,
+            analysisSource: displayedHistogramSource,
+            isRawAnalysisPending: displayedRawHistogramIsPending,
+            preferences: cameraQualityWarningPreferences
+        )
+    }
+
+    private var showsCameraQualityCues: Bool {
+        cameraQualityCuesRow.isVisible
     }
 
     private var cameraName: String? {
@@ -171,6 +254,43 @@ struct MetadataPanel: View {
             histogram = loaded
             histogramLoadFailed = (loaded == nil)
         }
+        .task(id: histogramLoadID) {
+            let requestedRevision = histogramLoadID.contentRevision
+            let requestedItem = item
+            rawHistogramRevision = requestedRevision
+            rawHistogram = RawHistogramPipeline.shared.cachedAnalysis(
+                for: requestedItem
+            )
+            rawHistogramIsPending = histogramLoadID.isEligible
+                && RawHistogramPipeline.supportsAnalysis(for: requestedItem)
+                && rawHistogram == nil
+            guard rawHistogramIsPending else { return }
+
+            let loaded = await RawHistogramPipeline.shared.analysis(
+                for: requestedItem
+            )
+            guard !Task.isCancelled,
+                  rawHistogramRevision == requestedRevision else { return }
+            rawHistogram = loaded
+            rawHistogramIsPending = false
+        }
+        .task(id: audioLevelsLoadID) {
+            let requestedRevision = audioLevelsLoadID.contentRevision
+            audioLevels = nil
+            audioLevelsLoadFailed = false
+            audioLevelsRevision = requestedRevision
+            guard audioLevelsLoadID.isEligible else { return }
+            try? await Task.sleep(
+                nanoseconds: Self.inspectionDebounceNanoseconds
+            )
+            guard !Task.isCancelled else { return }
+            let requestedItem = item
+            let loaded = await AudioLevelPipeline.shared.analysis(for: requestedItem)
+            guard !Task.isCancelled,
+                  audioLevelsRevision == requestedRevision else { return }
+            audioLevels = loaded
+            audioLevelsLoadFailed = (loaded == nil)
+        }
     }
 
     // MARK: - Single photo
@@ -192,16 +312,38 @@ struct MetadataPanel: View {
 
         Divider()
 
+        if item.isPlayableMedia {
+            MediaPlaybackSpeedControl(
+                playback: store.videoPlayback,
+                isEnabled: store.canSetCurrentPlayableMediaPlaybackRate
+            )
+            Divider()
+        }
+
+        if showsAudioLevels {
+            AudioLevelsSection(
+                item: item,
+                analysis: displayedAudioLevels,
+                isLoading: displayedAudioLevels == nil
+                    && !displayedAudioLevelsLoadFailed,
+                loadFailed: displayedAudioLevelsLoadFailed,
+                playback: store.videoPlayback
+            )
+            Divider()
+        }
+
         if showsHistogram {
             HistogramSection(
                 analysis: displayedHistogram,
+                source: displayedHistogramSource,
                 loadFailed: displayedHistogramLoadFailed,
                 store: store
             )
+        }
 
-            if hasCameraLensInfo || hasShootingInfo || !otherFields.isEmpty {
-                Divider()
-            }
+        if showsHistogram
+            && (hasCameraLensInfo || hasShootingInfo || !otherFields.isEmpty) {
+            Divider()
         }
 
         if let cameraLensText {
@@ -212,7 +354,7 @@ struct MetadataPanel: View {
             Divider()
         }
 
-        if hasShootingInfo {
+        if hasShootingInfo || showsCameraQualityCues {
             VStack(spacing: 12) {
                 if !primaryShootingFields.isEmpty {
                     metadataRow(primaryShootingFields, showLabels: false, emphasized: true)
@@ -220,10 +362,13 @@ struct MetadataPanel: View {
                 if !secondaryShootingFields.isEmpty {
                     metadataRow(secondaryShootingFields)
                 }
+                if showsCameraQualityCues {
+                    cameraQualityCuesRow
+                }
             }
         }
 
-        if hasShootingInfo && !otherFields.isEmpty {
+        if (hasShootingInfo || showsCameraQualityCues) && !otherFields.isEmpty {
             Divider()
         }
 
@@ -261,7 +406,9 @@ struct MetadataPanel: View {
     }
 
     private func selectionTitle(for summary: PhotoSelectionSummary) -> String {
-        let itemLabel = summary.videoCount == 0 ? "photos" : "media items"
+        let itemLabel = summary.videoCount == 0 && summary.audioCount == 0
+            ? "photos"
+            : "media items"
         return "\(summary.count) \(itemLabel) selected · \(summary.fileCount) files"
     }
 
@@ -292,7 +439,9 @@ struct MetadataPanel: View {
             }
         }
         if summary.unknownDateCount > 0 {
-            let itemLabel = summary.videoCount == 0 ? "photo" : "media item"
+            let itemLabel = summary.videoCount == 0 && summary.audioCount == 0
+                ? "photo"
+                : "media item"
             let label = summary.unknownDateCount == 1
                 ? "1 \(itemLabel) without a capture date"
                 : "\(summary.unknownDateCount) \(itemLabel)s without a capture date"
@@ -322,7 +471,7 @@ struct MetadataPanel: View {
                         } else {
                             Text(field.value)
                                 .font(.callout.weight(.medium))
-                                .foregroundStyle(valueColor(for: field))
+                            .foregroundStyle(.primary)
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -332,7 +481,6 @@ struct MetadataPanel: View {
     }
 
     private func settingValue(for field: MetadataField) -> some View {
-        let color = valueColor(for: field)
         let largeFont = Font.system(size: 18, weight: .semibold)
         let smallFont = Font.system(size: 12, weight: .semibold)
         let value = field.value
@@ -341,7 +489,7 @@ struct MetadataPanel: View {
         case "Aperture" where value.hasPrefix("f/"):
             return Text("f/\(Text(String(value.dropFirst(2))).font(largeFont))")
                 .font(smallFont)
-                .foregroundStyle(color)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .textSelection(.enabled)
         case "Shutter" where value.hasPrefix("1/"):
@@ -350,19 +498,19 @@ struct MetadataPanel: View {
             let number = suffix.isEmpty ? remainder : String(remainder.dropLast())
             return Text("1/\(Text(number).font(largeFont))\(suffix)")
                 .font(smallFont)
-                .foregroundStyle(color)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .textSelection(.enabled)
         case "ISO":
             return Text("ISO\(Text(value).font(largeFont))")
                 .font(smallFont)
-                .foregroundStyle(color)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .textSelection(.enabled)
         default:
             return Text(value)
                 .font(largeFont)
-                .foregroundStyle(color)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .textSelection(.enabled)
         }
@@ -386,9 +534,36 @@ struct MetadataPanel: View {
             .textSelection(.enabled)
     }
 
-    private func valueColor(for field: MetadataField) -> Color {
-        guard field.label == "ISO", Int(field.value) ?? 0 > 6000 else { return .primary }
-        return .red.opacity(0.72)
+}
+
+private struct MediaPlaybackSpeedControl: View {
+    @ObservedObject var playback: VideoPlaybackController
+    let isEnabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Playback speed")
+                .font(.subheadline.weight(.semibold))
+            Picker(
+                "Media playback speed",
+                selection: Binding(
+                    get: { playback.playbackRate },
+                    set: { playback.setPlaybackRate($0) }
+                )
+            ) {
+                ForEach(VideoPlaybackController.availablePlaybackRates, id: \.self) {
+                    rate in
+                    Text(speedLabel(rate)).tag(rate)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(!isEnabled)
+            .accessibilityHint("Applies to video and audio playback.")
+        }
     }
 
+    private func speedLabel(_ rate: Double) -> String {
+        rate.rounded() == rate ? "\(Int(rate))×" : "\(rate)×"
+    }
 }

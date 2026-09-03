@@ -17,9 +17,19 @@ struct ExportView: View {
     // The sheet's content is recreated per presentation, so every open starts
     // from the safe default: Copy, keepers only.
     @State private var mode: ExportMode = .copy
+    /// Routing is intentionally a Copy-only subflow. Keeping it out of the
+    /// toolbar and separate from Move makes the non-destructive default clear.
+    @State private var isRoutingCopies = false
+    @State private var routingRoutes: [MultiDestinationExportRoute] = [
+        MultiDestinationExportRoute(predicate: .decision(.yes))
+    ]
+    @State private var routingIncludesXMP = false
+    @State private var routingEvaluation = MultiDestinationExportEvaluation
+        .evaluate(routes: [], items: [])
     @State private var selectedRatings: Set<Rating> = [.yes]
     @State private var selectedStars = ExportSelectionPredicate.allStarStates
     @State private var selectedColors = ExportSelectionPredicate.allColorStates
+    @State private var scope: CleanUpScope = .filtered
     @State private var selectionSnapshot = ExportSelectionSnapshot.empty
     @State private var xmpProfile: XMPApplicationProfile = .universal
     @State private var universalDecisionKeywords = false
@@ -51,8 +61,16 @@ struct ExportView: View {
                     xmpExportPreparationView(mode: mode)
                 case .awaitingXMPConfirmation(let confirmation):
                     xmpExportPreflightView(confirmation)
-                case .working(let mode, let done, let total):
-                    workingView(mode: mode, done: done, total: total)
+                case .preparingMultiDestination:
+                    multiDestinationPreparationView
+                case .awaitingMultiDestinationConfirmation(let plan):
+                    multiDestinationConfirmationView(plan)
+                case .working(let mode, let completedBytes, let totalBytes):
+                    workingView(
+                        mode: mode,
+                        completedBytes: completedBytes,
+                        totalBytes: totalBytes
+                    )
                 case .finished(let outcome):
                     finishedView(outcome: outcome)
                 case .failed(let message):
@@ -61,13 +79,34 @@ struct ExportView: View {
             }
         }
         .padding(24)
-        .frame(width: 500)
+        .frame(width: isRoutingCopies ? 640 : 500)
         .interactiveDismissDisabled(isWorking)
+        .confirmationDialog(
+            "Stop copying?",
+            isPresented: Binding(
+                get: { exporter.isCopyStopConfirmationPresented },
+                set: { isPresented in
+                    if !isPresented {
+                        exporter.dismissCopyStopConfirmation()
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Stop Copying") { exporter.confirmCopyStop() }
+            Button("Keep Copying", role: .cancel) {
+                exporter.dismissCopyStopConfirmation()
+            }
+        } message: {
+            Text("Completed media stays at the destination. Louppe will safely roll back only the file currently being copied.")
+        }
         .onAppear {
             xmpInclusionChoice = ExportXMPInclusionChoice()
+            routingIncludesXMP = false
             existingXMPCount = 0
             excludedACRCompanionCount = 0
             refreshSelectionSnapshot()
+            refreshRoutingEvaluation()
         }
         .onDisappear {
             cancelXMPInspection()
@@ -76,13 +115,23 @@ struct ExportView: View {
         }
         .onChange(of: mode) {
             showXMPDetails = false
+            if mode != .copy { isRoutingCopies = false }
             store.resetXMPPublication()
             refreshSelectionSnapshot()
         }
+        .onChange(of: isRoutingCopies) { refreshRoutingEvaluation() }
+        .onChange(of: routingRoutes) { refreshRoutingEvaluation() }
         .onChange(of: selectedRatings) { refreshSelectionSnapshot() }
         .onChange(of: selectedStars) { refreshSelectionSnapshot() }
         .onChange(of: selectedColors) { refreshSelectionSnapshot() }
-        .onChange(of: store.items.count) { refreshSelectionSnapshot() }
+        .onChange(of: scope) {
+            refreshSelectionSnapshot()
+            refreshRoutingEvaluation()
+        }
+        .onChange(of: store.items.count) {
+            refreshSelectionSnapshot()
+            refreshRoutingEvaluation()
+        }
         .sheet(item: $conflictResolver) { presentation in
             XMPConflictResolverView(
                 conflicts: presentation.conflicts,
@@ -100,11 +149,16 @@ struct ExportView: View {
     private var isWorking: Bool {
         if store.isXMPPublicationRunning { return true }
         if case .preparingXMP = exporter.state { return true }
+        if case .preparingMultiDestination = exporter.state { return true }
         if case .working = exporter.state { return true }
         return false
     }
 
+    @ViewBuilder
     private var summaryView: some View {
+        if isRoutingCopies && mode == .copy {
+            routingSummaryView
+        } else {
         VStack(spacing: 14) {
             Text("Export")
                 .font(.title2.bold())
@@ -117,14 +171,21 @@ struct ExportView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
+            if mode == .copy {
+                Toggle("Route copies to multiple folders", isOn: $isRoutingCopies)
+                    .accessibilityHint("Create explicit Copy-only routes with a separately chosen folder for each one")
+            }
+
             VStack(alignment: .leading, spacing: 10) {
-                Text("Photos to include")
+                Text("Media to include")
                     .font(.subheadline.weight(.semibold))
 
+                exportScopeRow
+
                 HStack(spacing: 12) {
-                    ratingTile(.yes, count: store.yesCount, label: "Yes", color: .green)
-                    ratingTile(.no, count: store.noCount, label: "No", color: .red)
-                    ratingTile(.undecided, count: store.undecidedCount, label: "Undecided", color: .secondary)
+                    ratingTile(.yes, count: scopeRatingCount(.yes), label: "Yes", color: .green)
+                    ratingTile(.no, count: scopeRatingCount(.no), label: "No", color: .red)
+                    ratingTile(.undecided, count: scopeRatingCount(.undecided), label: "Undecided", color: .secondary)
                 }
 
                 exportMenuRow("Stars") {
@@ -283,15 +344,16 @@ struct ExportView: View {
                     .multilineTextAlignment(.center)
             }
 
-            if store.mixedStarCount > 0 || store.mixedColorCount > 0 {
+            if scopeMixedStarCount > 0 || scopeMixedColorCount > 0 {
                 Text(mixedMetadataNote)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             }
 
-            if store.undecidedCount > 0 && !selectedRatings.contains(.undecided) {
-                Text("\(store.undecidedCount) item\(store.undecidedCount == 1 ? "" : "s") still undecided — they won't be exported.")
+            if scopeRatingCount(.undecided) > 0 && !selectedRatings.contains(.undecided) {
+                let count = scopeRatingCount(.undecided)
+                Text("\(count) item\(count == 1 ? "" : "s") still undecided in this scope — they won't be exported.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -338,6 +400,7 @@ struct ExportView: View {
                 )
             }
         }
+        }
     }
 
     private var selectionPredicate: ExportSelectionPredicate {
@@ -348,9 +411,462 @@ struct ExportView: View {
         )
     }
 
+    // MARK: - Multi-destination Copy
+
+    private var routingSummaryView: some View {
+        VStack(spacing: 14) {
+            Text("Route Copies")
+                .font(.title2.bold())
+
+            Picker("Mode", selection: $mode) {
+                Text("Copy").tag(ExportMode.copy)
+                Text("Move").tag(ExportMode.move)
+                Text("Metadata (XMP)").tag(ExportMode.metadataXMP)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Toggle("Route copies to multiple folders", isOn: $isRoutingCopies)
+                .accessibilityHint("Turn off to return to normal one-folder Copy")
+
+            exportScopeRow
+
+            Text("Each route has one explicit condition and one separately chosen folder. Items matching no route stay in the source folder. Nothing is moved or deleted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach($routingRoutes) { $route in
+                        routingRouteEditor($route)
+                    }
+                }
+                .padding(.horizontal, 1)
+            }
+            .frame(maxHeight: 250)
+
+            HStack {
+                Button("Add Route") {
+                    routingRoutes.append(MultiDestinationExportRoute(
+                        predicate: .decision(.no)
+                    ))
+                }
+                .disabled(routingRoutes.count >= 12)
+                Spacer()
+                Text(routingMatchSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let message = routingValidationMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .accessibilityLabel("Routing issue: \(message)")
+            }
+
+            if !routingEvaluation.unmatchedItemIndices.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Unmatched — will stay in the source folder")
+                        .font(.caption.weight(.semibold))
+                    Text(routingItemList(routingEvaluation.unmatchedItemIndices))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Divider()
+            Toggle("Include XMP sidecars (off by default)", isOn: $routingIncludesXMP)
+            Text("When enabled, sidecars follow their media in the same journal. Louppe refuses a routing plan that would split one same-stem XMP family across folders.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack {
+                Button("Cancel") { store.isExportPresented = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Review Copy Plan") {
+                    exporter.prepareMultiDestinationExport(
+                        routes: routingRoutes,
+                        items: scopedItems,
+                        sourceFolder: store.sourceFolder,
+                        includeXMP: routingIncludesXMP,
+                        familyContextItems: store.items,
+                        sessionGeneration: store.xmpConflictSessionGeneration,
+                        xmpProfile: xmpProfile,
+                        visibleDecisionKeywords: effectiveVisibleDecisionKeywords,
+                        allowExternalLabelReplacement:
+                            allowExternalLabelReplacement,
+                        onOperationWillStart: { store.exportWillStart(mode: $0) },
+                        onOperationDidFinish: {
+                            store.finishExport(
+                                mode: $0,
+                                movedIDs: $1,
+                                requiresRecovery: $2,
+                                interruptionMessage: $3
+                            )
+                        }
+                    )
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!routingCanReview)
+            }
+        }
+    }
+
+    private func routingRouteEditor(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> some View {
+        let routeID = route.wrappedValue.id
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(route.wrappedValue.predicate.displayName)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Remove") {
+                    routingRoutes.removeAll { $0.id == routeID }
+                }
+                .disabled(routingRoutes.count == 1)
+            }
+
+            HStack {
+                Picker("Match", selection: routingDimensionBinding(route)) {
+                    ForEach(MultiDestinationRoutePredicate.Dimension.allCases, id: \.self) {
+                        Text($0.title).tag($0)
+                    }
+                }
+                .frame(width: 145)
+
+                routingValuePicker(route)
+                    .frame(maxWidth: .infinity)
+            }
+
+            HStack {
+                Text("Destination")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(route.wrappedValue.destination?.lastPathComponent ?? "Choose Folder…") {
+                    chooseRoutingDestination(routeID)
+                }
+                .accessibilityLabel(
+                    route.wrappedValue.destination == nil
+                        ? "Choose destination for \(route.wrappedValue.predicate.displayName)"
+                        : "Change destination for \(route.wrappedValue.predicate.displayName)"
+                )
+            }
+            if let destination = route.wrappedValue.destination {
+                Text(destination.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(10)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.25))
+        }
+    }
+
+    @ViewBuilder
+    private func routingValuePicker(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> some View {
+        switch route.wrappedValue.predicate.dimension {
+        case .decision:
+            Picker("Decision", selection: routingDecisionBinding(route)) {
+                ForEach([Rating.yes, .no, .undecided], id: \.self) {
+                    Text($0.displayName).tag($0)
+                }
+            }
+            .labelsHidden()
+        case .stars:
+            Picker("Stars", selection: routingStarsBinding(route)) {
+                ForEach(routingStarStates, id: \.self) {
+                    Text($0.displayName).tag($0)
+                }
+            }
+            .labelsHidden()
+        case .color:
+            Picker("Color", selection: routingColorBinding(route)) {
+                ForEach(routingColorStates, id: \.self) {
+                    Text($0.displayName).tag($0)
+                }
+            }
+            .labelsHidden()
+        case .fileType:
+            Picker("File type", selection: routingFileTypeBinding(route)) {
+                ForEach(store.availableTypes, id: \.self) { type in
+                    Text(type).tag(type)
+                }
+            }
+            .labelsHidden()
+            .disabled(store.availableTypes.isEmpty)
+        case .mediaKind:
+            Picker("Media type", selection: routingMediaKindBinding(route)) {
+                Text(MediaKind.photo.label).tag(MediaKind.photo)
+                Text(MediaKind.video.label).tag(MediaKind.video)
+                Text(MediaKind.audio.label).tag(MediaKind.audio)
+            }
+            .labelsHidden()
+        }
+    }
+
+    private var routingStarStates: [PhotoItemStarRatingState] {
+        [.unrated] + StarRating.allCases.map(PhotoItemStarRatingState.stars) + [.mixed]
+    }
+
+    private var routingColorStates: [PhotoItemColorLabelState] {
+        [.none] + PhotoColorLabel.allCases.map(PhotoItemColorLabelState.label) + [.mixed]
+    }
+
+    private func routingDimensionBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<MultiDestinationRoutePredicate.Dimension> {
+        Binding {
+            route.wrappedValue.predicate.dimension
+        } set: { dimension in
+            switch dimension {
+            case .decision: route.wrappedValue.predicate = .decision(.yes)
+            case .stars: route.wrappedValue.predicate = .stars(.unrated)
+            case .color: route.wrappedValue.predicate = .color(.none)
+            case .fileType:
+                route.wrappedValue.predicate = .fileType(
+                    store.availableTypes.first ?? "Unknown"
+                )
+            case .mediaKind: route.wrappedValue.predicate = .mediaKind(.photo)
+            }
+        }
+    }
+
+    private func routingDecisionBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<Rating> {
+        Binding {
+            if case .decision(let value) = route.wrappedValue.predicate {
+                return value
+            }
+            return .yes
+        } set: { route.wrappedValue.predicate = .decision($0) }
+    }
+
+    private func routingStarsBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<PhotoItemStarRatingState> {
+        Binding {
+            if case .stars(let value) = route.wrappedValue.predicate {
+                return value
+            }
+            return .unrated
+        } set: { route.wrappedValue.predicate = .stars($0) }
+    }
+
+    private func routingColorBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<PhotoItemColorLabelState> {
+        Binding {
+            if case .color(let value) = route.wrappedValue.predicate {
+                return value
+            }
+            return .none
+        } set: { route.wrappedValue.predicate = .color($0) }
+    }
+
+    private func routingFileTypeBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<String> {
+        Binding {
+            if case .fileType(let value) = route.wrappedValue.predicate {
+                return value
+            }
+            return store.availableTypes.first ?? "Unknown"
+        } set: { route.wrappedValue.predicate = .fileType($0) }
+    }
+
+    private func routingMediaKindBinding(
+        _ route: Binding<MultiDestinationExportRoute>
+    ) -> Binding<MediaKind> {
+        Binding {
+            if case .mediaKind(let value) = route.wrappedValue.predicate {
+                return value
+            }
+            return .photo
+        } set: { route.wrappedValue.predicate = .mediaKind($0) }
+    }
+
+    private var routingCanReview: Bool {
+        !routingRoutes.isEmpty
+            && routingRoutes.allSatisfy { $0.destination != nil }
+            && routingEvaluation.overlappingItemIndices.isEmpty
+            && routingEvaluation.emptyRouteIDs.isEmpty
+    }
+
+    private var routingMatchSummary: String {
+        let routed = scopedItems.count
+            - routingEvaluation.unmatchedItemIndices.count
+            - routingEvaluation.overlappingItemIndices.count
+        return "\(max(routed, 0)) routed · \(routingEvaluation.unmatchedItemIndices.count) unmatched"
+    }
+
+    private var routingValidationMessage: String? {
+        if routingRoutes.isEmpty { return "Add at least one route." }
+        if routingRoutes.contains(where: { $0.destination == nil }) {
+            return "Choose a destination folder for every route."
+        }
+        if !routingEvaluation.overlappingItemIndices.isEmpty {
+            return "\(routingEvaluation.overlappingItemIndices.count) item\(routingEvaluation.overlappingItemIndices.count == 1 ? "" : "s") match more than one route: \(routingItemList(routingEvaluation.overlappingItemIndices))."
+        }
+        if !routingEvaluation.emptyRouteIDs.isEmpty {
+            return "Every route must match at least one item before it can be reviewed."
+        }
+        return nil
+    }
+
+    private func routingItemList(_ indices: [Int], limit: Int = 8) -> String {
+        let names = indices.prefix(limit).compactMap { index in
+            scopedItems.indices.contains(index) ? scopedItems[index].displayName : nil
+        }
+        let remainder = max(0, indices.count - names.count)
+        return names.joined(separator: ", ")
+            + (remainder > 0 ? " and \(remainder) more" : "")
+    }
+
+    private func refreshRoutingEvaluation() {
+        routingEvaluation = MultiDestinationExportEvaluation.evaluate(
+            routes: routingRoutes,
+            items: scopedItems
+        )
+    }
+
+    private func chooseRoutingDestination(_ routeID: UUID) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose where this route will copy its matching media."
+        panel.prompt = "Use Folder"
+        guard panel.runModal() == .OK, let destination = panel.url,
+              let index = routingRoutes.firstIndex(where: { $0.id == routeID }) else {
+            return
+        }
+        exporter.retainRoutingDestinationAccess(destination, for: routeID)
+        routingRoutes[index].destination = destination
+    }
+
+    private var multiDestinationPreparationView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Checking routing copy plan…")
+                .font(.headline)
+            Text("Louppe is validating every destination, reserving collision-safe names, and preparing one recovery record before any file can change.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Cancel") { exporter.cancelMultiDestinationPreparation() }
+                .keyboardShortcut(.cancelAction)
+        }
+    }
+
+    private func multiDestinationConfirmationView(
+        _ plan: MultiDestinationExportPlan
+    ) -> some View {
+        VStack(spacing: 14) {
+            Text("Review Routing Copy")
+                .font(.title2.bold())
+            Text("\(plan.totalFiles) file\(plan.totalFiles == 1 ? "" : "s") will be copied. Originals stay where they are.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(plan.routes) { route in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(route.route.predicate.displayName) → \(route.destination.path)")
+                                .font(.subheadline.weight(.semibold))
+                            Text("\(route.itemCount) item\(route.itemCount == 1 ? "" : "s") · \(route.mediaFileCount) media file\(route.mediaFileCount == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(route.files) { file in
+                                Text(filePreviewText(file))
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(file.role == .media ? .primary : .secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        Divider()
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Unmatched — not copied")
+                            .font(.subheadline.weight(.semibold))
+                        if plan.unmatchedNames.isEmpty {
+                            Text("Every current item is routed exactly once.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(plan.unmatchedNames, id: \.self) { name in
+                                Text(name)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    if let xmp = plan.xmpPlan {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("XMP sidecars")
+                                .font(.subheadline.weight(.semibold))
+                            Text("\(xmp.existingRecognizedPacketCount) existing · \(xmp.count(.create)) to create · \(xmp.count(.update)) to update · \(xmp.applicationPacketCount) application packet\(xmp.applicationPacketCount == 1 ? "" : "s") copied unchanged")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if !xmp.issueFamilies.isEmpty {
+                                Text("\(xmp.issueFamilies.count) sidecar \(xmp.issueFamilies.count == 1 ? "family is" : "families are") skipped because it could not be prepared safely; listed media files still copy.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+
+            Text("Starting Copy creates one durable recovery record for every route. If a copy is interrupted, verified finished files remain in their listed folders; Louppe never moves or deletes an original.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack {
+                Button("Back") { exporter.backFromMultiDestinationConfirmation() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Start Copy") { exporter.confirmMultiDestinationExport() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    private func filePreviewText(
+        _ file: MultiDestinationExportPlan.RoutePreview.FilePreview
+    ) -> String {
+        let copy = file.sourcePath == file.destinationPath
+            ? file.sourcePath
+            : "\(file.sourcePath) → \(file.destinationPath)"
+        switch file.role {
+        case .media: return copy
+        case .applicationXMP: return "\(copy) (XMP application packet)"
+        case .preparedXMP: return "\(copy) (prepared XMP sidecar)"
+        case .retiredXMPSource: return "\(copy) (XMP safety record)"
+        }
+    }
+
     private func refreshSelectionSnapshot() {
         selectionSnapshot = ExportSelectionSnapshot(
             items: store.items,
+            candidateIndices: scopeIndices,
             predicate: selectionPredicate
         )
         scheduleXMPInspection()
@@ -516,17 +1032,67 @@ struct ExportView: View {
     private var mixedMetadataNote: String {
         var parts: [String] = []
         var total = 0
-        if store.mixedStarCount > 0 {
-            parts.append("\(store.mixedStarCount) mixed-star pair\(store.mixedStarCount == 1 ? "" : "s")")
-            total += store.mixedStarCount
+        if scopeMixedStarCount > 0 {
+            parts.append("\(scopeMixedStarCount) mixed-star pair\(scopeMixedStarCount == 1 ? "" : "s")")
+            total += scopeMixedStarCount
         }
-        if store.mixedColorCount > 0 {
-            parts.append("\(store.mixedColorCount) mixed-color pair\(store.mixedColorCount == 1 ? "" : "s")")
-            total += store.mixedColorCount
+        if scopeMixedColorCount > 0 {
+            parts.append("\(scopeMixedColorCount) mixed-color pair\(scopeMixedColorCount == 1 ? "" : "s")")
+            total += scopeMixedColorCount
         }
         return parts.joined(separator: " and ")
             + (total == 1 ? " matches" : " match")
             + " only when Mixed is selected in the corresponding menu."
+    }
+
+    private var scopeIndices: [Int] {
+        scope.candidateIndices(
+            all: store.items.indices,
+            filtered: store.visibleIndices,
+            selected: store.effectiveSelection
+        )
+    }
+
+    private var scopedItems: [PhotoItem] {
+        scopeIndices.compactMap {
+            store.items.indices.contains($0) ? store.items[$0] : nil
+        }
+    }
+
+    private func scopeRatingCount(_ rating: Rating) -> Int {
+        scopedItems.count { $0.ratingState.effectiveRating == rating }
+    }
+
+    private var scopeMixedStarCount: Int {
+        scopedItems.count { $0.starRatingState == .mixed }
+    }
+
+    private var scopeMixedColorCount: Int {
+        scopedItems.count { $0.colorLabelState == .mixed }
+    }
+
+    private var exportScopeRow: some View {
+        exportMenuRow("Scope") {
+            Picker("Scope", selection: $scope) {
+                exportScopeLabel("All Media", scope: .all)
+                    .tag(CleanUpScope.all)
+                exportScopeLabel("Filtered", scope: .filtered)
+                    .tag(CleanUpScope.filtered)
+                exportScopeLabel("Selected", scope: .selected)
+                    .tag(CleanUpScope.selected)
+            }
+            .pickerStyle(.menu)
+            .accessibilityLabel("Media to consider")
+        }
+    }
+
+    private func exportScopeLabel(_ title: String, scope: CleanUpScope) -> Text {
+        let count = scope.candidateIndices(
+            all: store.items.indices,
+            filtered: store.visibleIndices,
+            selected: store.effectiveSelection
+        ).count
+        return Text("\(title) (\(count))")
     }
 
     private var starSelectionSummary: String {
@@ -890,17 +1456,33 @@ struct ExportView: View {
         }
     }
 
-    private func workingView(mode: ExportMode, done: Int, total: Int) -> some View {
-        VStack(spacing: 12) {
+    private func workingView(
+        mode: ExportMode,
+        completedBytes: Int64,
+        totalBytes: Int64
+    ) -> some View {
+        let verb = mode == .copy ? "copied" : "moved"
+        let completed = ByteCountFormatter.string(
+            fromByteCount: max(0, completedBytes),
+            countStyle: .file
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: max(0, totalBytes),
+            countStyle: .file
+        )
+        return VStack(spacing: 12) {
             Text(mode == .copy ? "Copying media…" : "Moving media…")
                 .font(.headline)
-            ProgressView(value: Double(done), total: Double(total))
-            Text("\(done) of \(total) files")
+            ProgressView(
+                value: Double(max(0, completedBytes)),
+                total: Double(max(totalBytes, 1))
+            )
+            Text("\(completed) of \(total) \(verb)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if mode == .copy {
-                Button(exporter.isCancellingCopy ? "Stopping…" : "Stop Copying") {
-                    exporter.cancelCopy()
+                Button(exporter.isCancellingCopy ? "Stopping…" : "Stop Copying…") {
+                    exporter.requestCopyStopConfirmation()
                 }
                 .disabled(exporter.isCancellingCopy)
             }
@@ -1071,7 +1653,7 @@ struct ExportView: View {
                 }
             }
             HStack {
-                Button("Show in Finder") {
+                Button(outcome.destinations.count > 1 ? "Show First Folder" : "Show in Finder") {
                     exporter.revealInFinder(outcome.destination)
                 }
                 Button("Done") {
@@ -1106,11 +1688,22 @@ struct ExportView: View {
                 + "Louppe kept a durable record of the interrupted move. Completed groups stay at the destination; incomplete groups return to their safe source state. Wait for the recovery notice before starting another file operation."
         }
         let verb = outcome.mode == .copy ? "copied" : "moved"
-        var text = "\(outcome.files) file\(outcome.files == 1 ? "" : "s") \(verb) to \(outcome.destination.lastPathComponent)"
+        let destinationText: String
+        if outcome.destinations.count > 1 {
+            destinationText = "across \(outcome.destinations.count) folders"
+        } else {
+            destinationText = "to \(outcome.destination.lastPathComponent)"
+        }
+        var text = "\(outcome.files) file\(outcome.files == 1 ? "" : "s") \(verb) \(destinationText)"
         switch outcome.mode {
         case .copy:
             if outcome.cancelled {
                 text += ". Completed photos remain at the destination; the photo in progress was rolled back."
+                if let reason = outcome.cancellationReason {
+                    text += " \(reason.userMessage)"
+                } else {
+                    text += " Louppe did not record why this copy stopped; please send its diagnostic log with this report."
+                }
             } else if outcome.failedPhotos > 0 {
                 let agreement = outcome.failedPhotos == 1 ? "was" : "were"
                 text += " — \(outcome.failedPhotos) item\(outcome.failedPhotos == 1 ? "" : "s") couldn't be copied and \(agreement) rolled back."

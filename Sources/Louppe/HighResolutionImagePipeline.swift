@@ -171,7 +171,7 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
     }
 
     func prefetchSources(items: [PhotoItem]) {
-        for item in items where !item.isVideo && item.isSupported {
+        for item in items where item.mediaKind == .photo && item.isSupported {
             Task.detached(priority: .utility) { [weak self] in
                 _ = await self?.source(
                     for: item,

@@ -10,6 +10,11 @@ import Foundation
 /// itself also failed.
 enum ExportWorker {
     typealias Progress = CleanUpWorker.Progress
+    /// Transfer progress is intentionally independent from the worker's
+    /// per-file progress callback. The latter remains available to the
+    /// file-operation safety tests and to callers that need physical-file
+    /// boundaries; the export UI should reflect the amount of data moved.
+    typealias ByteProgress = @Sendable (_ completedBytes: Int64, _ totalBytes: Int64) -> Void
     typealias FileCopier = @Sendable (_ source: URL, _ destination: URL) throws -> Void
 
     struct CopyResult: Sendable {
@@ -22,6 +27,10 @@ enum ExportWorker {
         /// The photographer stopped Copy. Photos completed before cancellation
         /// remain at the destination; the in-progress photo is rolled back.
         let cancelled: Bool
+        /// Why Copy stopped. A missing reason while `cancelled` is true is
+        /// retained explicitly so the UI and diagnostic log never mislabel an
+        /// unexplained interruption as an intentional photographer action.
+        let cancellationReason: CopyCancellationReason?
         /// The operation was stopped because its durable recovery checkpoint
         /// could not be updated.
         let journalFailure: Bool
@@ -32,6 +41,30 @@ enum ExportWorker {
         /// A concise, user-facing reason for the first failure in the batch.
         let failureMessage: String?
         let xmpSummary: XMPResultSummary?
+    }
+
+    enum CopyCancellationReason: Equatable, Sendable {
+        /// The photographer confirmed the Stop Copying prompt.
+        case userConfirmed
+        /// A caller stopped the worker without recording a reason. This is an
+        /// app defect worth surfacing, never an assumption about the card.
+        case unrecorded
+
+        var userMessage: String {
+            switch self {
+            case .userConfirmed:
+                return "You chose to stop copying."
+            case .unrecorded:
+                return "Louppe stopped copying without a recorded reason. Please send Louppe’s diagnostic log with this report."
+            }
+        }
+
+        var diagnosticValue: String {
+            switch self {
+            case .userConfirmed: return "user-confirmed"
+            case .unrecorded: return "unrecorded"
+            }
+        }
     }
 
     struct MoveResult: Sendable {
@@ -112,6 +145,10 @@ enum ExportWorker {
         let source: URL
         let target: URL
         let scannedIdentity: FileOperationJournal.FileIdentity?
+        /// Scan-time size used when an older identity omitted its logical
+        /// size. It is display-only; filesystem identity remains the safety
+        /// authority for every operation.
+        let expectedByteCount: Int64
         let role: FileOperationJournal.PlannedFileRole
         let expectedSourceDigest: Data?
         let preparedContents: Data?
@@ -121,6 +158,7 @@ enum ExportWorker {
             source: URL,
             target: URL,
             scannedIdentity: FileOperationJournal.FileIdentity?,
+            expectedByteCount: Int64 = 0,
             role: FileOperationJournal.PlannedFileRole = .media,
             expectedSourceDigest: Data? = nil,
             preparedContents: Data? = nil,
@@ -129,10 +167,25 @@ enum ExportWorker {
             self.source = source
             self.target = target
             self.scannedIdentity = scannedIdentity
+            self.expectedByteCount = max(0, expectedByteCount)
             self.role = role
             self.expectedSourceDigest = expectedSourceDigest
             self.preparedContents = preparedContents
             self.xmpCategory = xmpCategory
+        }
+
+        /// Bytes that reach the photographer's chosen destination. The
+        /// retired source XMP packet is an internal Move safety step, not part
+        /// of the requested export, so it must not distort visible progress.
+        var transferByteCount: Int64 {
+            guard role != .retiredXMPSource else { return 0 }
+            if let preparedContents {
+                return Int64(clamping: preparedContents.count)
+            }
+            if let logicalSize = scannedIdentity?.logicalSize {
+                return max(0, logicalSize)
+            }
+            return expectedByteCount
         }
     }
 
@@ -158,6 +211,17 @@ enum ExportWorker {
 
         var totalFiles: Int { items.reduce(0) { $0 + $1.files.count } }
 
+        var totalTransferBytes: Int64 {
+            items.reduce(into: Int64(0)) { total, item in
+                for file in item.files {
+                    let (sum, overflowed) = total.addingReportingOverflow(
+                        file.transferByteCount
+                    )
+                    total = overflowed ? Int64.max : sum
+                }
+            }
+        }
+
         func photoCount(from itemOffset: Int) -> Int {
             guard itemOffset < items.count else { return 0 }
             return items[itemOffset...].reduce(0) {
@@ -171,18 +235,36 @@ enum ExportWorker {
     /// safely change.
     final class CancelFlag: @unchecked Sendable {
         private let lock = NSLock()
-        private var value = false
+        private var storedReason: CopyCancellationReason?
 
         var isSet: Bool {
             lock.lock()
             defer { lock.unlock() }
-            return value
+            return storedReason != nil
         }
 
-        func set() {
+        var reason: CopyCancellationReason? {
             lock.lock()
             defer { lock.unlock() }
-            value = true
+            return storedReason
+        }
+
+        /// The first request is the immutable cancellation authority. Keeping
+        /// it immutable lets the result identify exactly what stopped Copy.
+        @discardableResult
+        func request(_ reason: CopyCancellationReason) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard storedReason == nil else { return false }
+            storedReason = reason
+            return true
+        }
+
+        /// Compatibility for worker callers that predate reasoned
+        /// cancellation. Production UI must call `request(_:)`; this path is
+        /// intentionally surfaced as an unexplained stop in diagnostics.
+        func set() {
+            _ = request(.unrecorded)
         }
     }
 
@@ -279,7 +361,8 @@ enum ExportWorker {
                         PlannedFile(
                             source: $0.0.url,
                             target: $0.1,
-                            scannedIdentity: $0.0.scannedIdentity
+                            scannedIdentity: $0.0.scannedIdentity,
+                            expectedByteCount: $0.0.fileSize
                         )
                     }
                     if let family {
@@ -367,11 +450,13 @@ enum ExportWorker {
         preparedPlan: Plan? = nil,
         journalDirectory: URL? = nil,
         isCancelled: @escaping @Sendable () -> Bool = { false },
+        cancellationReason: @escaping @Sendable () -> CopyCancellationReason? = { nil },
         fileCopier: @escaping FileCopier = { source, destination in
             try FileManager().copyItem(at: source, to: destination)
         },
         afterStagedFile: (Int) -> Void = { _ in },
-        progress: @escaping Progress
+        progress: @escaping Progress,
+        byteProgress: @escaping ByteProgress = { _, _ in }
     ) -> CopyResult {
         let fm = FileManager()
         var xmpSummary = xmpPlan.map(XMPResultSummary.init(plan:))
@@ -389,6 +474,7 @@ enum ExportWorker {
                 failedPhotos: items.count,
                 inconsistentPhotos: 0,
                 cancelled: false,
+                cancellationReason: nil,
                 journalFailure: true,
                 requiresRecovery: false,
                 failureMessage: copyFailureMessage(
@@ -405,6 +491,7 @@ enum ExportWorker {
                 failedPhotos: items.count,
                 inconsistentPhotos: 0,
                 cancelled: false,
+                cancellationReason: nil,
                 journalFailure: false,
                 requiresRecovery: false,
                 failureMessage: "A destination name was claimed after confirmation. Review and confirm a fresh export plan.",
@@ -420,6 +507,7 @@ enum ExportWorker {
                 failedPhotos: items.count,
                 inconsistentPhotos: 0,
                 cancelled: false,
+                cancellationReason: nil,
                 journalFailure: true,
                 requiresRecovery: false,
                 failureMessage: "One or more source files could not be verified before copying",
@@ -453,6 +541,7 @@ enum ExportWorker {
                 failedPhotos: items.count,
                 inconsistentPhotos: 0,
                 cancelled: false,
+                cancellationReason: nil,
                 journalFailure: true,
                 requiresRecovery:
                     FileOperationJournal.errorRequiresRecovery(error),
@@ -464,20 +553,31 @@ enum ExportWorker {
             )
         }
         var reporter = ThrottledProgress(total: plan.totalFiles, callback: progress)
+        var byteReporter = ThrottledByteProgress(
+            total: plan.totalTransferBytes,
+            callback: byteProgress
+        )
         var copied = 0
         var failedPhotos = 0
         var inconsistentPhotos = 0
         var cancelled = false
+        var observedCancellationReason: CopyCancellationReason?
         var journalFailure = false
         var failureMessage: String?
         var sourceUnavailable = false
         var globalFileIndex = 0
 
+        func requestedCancellation() -> CopyCancellationReason? {
+            guard isCancelled() else { return nil }
+            return cancellationReason() ?? .unrecorded
+        }
+
         itemLoop: for (itemOffset, item) in plan.items.enumerated() {
             let itemFileIndex = globalFileIndex
             globalFileIndex += item.files.count
-            if isCancelled() {
+            if let reason = requestedCancellation() {
                 cancelled = true
+                observedCancellationReason = reason
                 break
             }
             var touchedForItem: [TouchedExportFile] = []
@@ -485,8 +585,9 @@ enum ExportWorker {
             var attempted = 0
             for (localFileIndex, file) in item.files.enumerated() {
                 let fileIndex = itemFileIndex + localFileIndex
-                if isCancelled() {
+                if let reason = requestedCancellation() {
                     cancelled = true
+                    observedCancellationReason = reason
                     failed = true
                     break
                 }
@@ -566,6 +667,8 @@ enum ExportWorker {
                     } catch {
                         if case SourceReconnectError.cancelled = error {
                             cancelled = true
+                            observedCancellationReason = cancellationReason()
+                                ?? .unrecorded
                         }
                         if !cancelled, failureMessage == nil {
                             failureMessage = copyFailureMessage(
@@ -719,6 +822,9 @@ enum ExportWorker {
                     }
                 }
                 touchedForItem.append(touched)
+                if case .destination = touched.location {
+                    byteReporter.advance(by: file.transferByteCount)
+                }
                 reporter.advance()
                 if failed { break }
             }
@@ -738,8 +844,13 @@ enum ExportWorker {
                         fileManager: fm
                     ) {
                         rollbackFailed = true
-                    } else if (try? writer.mark(.rolledBack, fileAt: touched.index)) == nil {
-                        journalFailure = true
+                    } else {
+                        if case .destination = touched.location {
+                            byteReporter.retract(by: touched.file.transferByteCount)
+                        }
+                        if (try? writer.mark(.rolledBack, fileAt: touched.index)) == nil {
+                            journalFailure = true
+                        }
                     }
                 }
                 if !cancelled {
@@ -769,6 +880,10 @@ enum ExportWorker {
             }
         }
         if !cancelled { reporter.finish() }
+        if !cancelled, failedPhotos == 0, inconsistentPhotos == 0,
+           !journalFailure {
+            byteReporter.finish()
+        }
         let journalFinalized = FileOperationJournal.finalize(
             writer,
             operationIsConsistent: inconsistentPhotos == 0
@@ -783,6 +898,7 @@ enum ExportWorker {
             failedPhotos: failedPhotos,
             inconsistentPhotos: inconsistentPhotos,
             cancelled: cancelled,
+            cancellationReason: observedCancellationReason,
             journalFailure: journalFailure,
             requiresRecovery: inconsistentPhotos > 0 || !journalFinalized,
             failureMessage: failureMessage,
@@ -801,7 +917,8 @@ enum ExportWorker {
         renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
             .exclusivePOSIX,
         prepareDestinationDirectories: @escaping () throws -> Void = {},
-        progress: @escaping Progress
+        progress: @escaping Progress,
+        byteProgress: @escaping ByteProgress = { _, _ in }
     ) -> MoveResult {
         var xmpSummary = xmpPlan.map(XMPResultSummary.init(plan:))
         // Defense in depth: the dialog preflight explains this limitation,
@@ -954,6 +1071,10 @@ enum ExportWorker {
             )
         }
         var reporter = ThrottledProgress(total: plan.totalFiles, callback: progress)
+        var byteReporter = ThrottledByteProgress(
+            total: plan.totalTransferBytes,
+            callback: byteProgress
+        )
         var movedItemIDs: [String] = []
         var movedFiles = 0
         var failedPhotos = 0
@@ -1218,6 +1339,9 @@ enum ExportWorker {
                     }
                 }
                 touchedForItem.append(touched)
+                if case .destination = touched.location {
+                    byteReporter.advance(by: file.transferByteCount)
+                }
                 reporter.advance()
                 if failed { break }
             }
@@ -1245,6 +1369,9 @@ enum ExportWorker {
                     if !rolledBack {
                         rollbackFailed = true
                     } else {
+                        if case .destination = touched.location {
+                            byteReporter.retract(by: touched.file.transferByteCount)
+                        }
                         if touched.needsSourceIdentityRefresh {
                             guard let sourcePath = FileOperationJournal
                                 .exactPathBytes(for: touched.file.source),
@@ -1303,6 +1430,9 @@ enum ExportWorker {
             }
         }
         reporter.finish()
+        if failedPhotos == 0, inconsistentPhotos == 0, !journalFailure {
+            byteReporter.finish()
+        }
         let journalFinalized = FileOperationJournal.finalize(
             writer,
             operationIsConsistent: inconsistentPhotos == 0
@@ -2089,5 +2219,46 @@ enum ExportWorker {
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: Locale(identifier: "en_US_POSIX")
         )
+    }
+}
+
+/// Coalesces transfer-byte progress for Export without changing the existing
+/// physical-file progress contract shared with Clean Up. A rollback reports
+/// immediately so the visible amount never claims a safely removed copy.
+private struct ThrottledByteProgress {
+    let total: Int64
+    let callback: ExportWorker.ByteProgress
+    private(set) var completed: Int64 = 0
+    private var lastReport = Date.distantPast
+
+    init(total: Int64, callback: @escaping ExportWorker.ByteProgress) {
+        self.total = max(0, total)
+        self.callback = callback
+    }
+
+    mutating func advance(by amount: Int64) {
+        let amount = max(0, amount)
+        let (sum, overflowed) = completed.addingReportingOverflow(amount)
+        completed = min(overflowed ? Int64.max : sum, total)
+        reportIfNeeded(force: completed == total)
+    }
+
+    mutating func retract(by amount: Int64) {
+        completed = max(0, completed - max(0, amount))
+        reportIfNeeded(force: true)
+    }
+
+    mutating func finish() {
+        guard completed != total else { return }
+        completed = total
+        reportIfNeeded(force: true)
+    }
+
+    private mutating func reportIfNeeded(force: Bool) {
+        guard total > 0 else { return }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastReport) >= 0.1 else { return }
+        callback(completed, total)
+        lastReport = now
     }
 }

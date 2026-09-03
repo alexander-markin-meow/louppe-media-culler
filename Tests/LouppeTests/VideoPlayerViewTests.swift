@@ -4,23 +4,247 @@ import XCTest
 
 @MainActor
 final class VideoPlayerViewTests: XCTestCase {
-    func testGalleryPlayerUsesStableNativeInlineControls() {
+    func testGalleryVideoSurfaceUsesFittedPlayerLayerAboveClearBackground() {
+        let view = GalleryVideoSurfaceView(
+            frame: CGRect(x: 0, y: 0, width: 800, height: 800)
+        )
+        let player = AVPlayer()
+
+        view.configure(
+            player: player,
+            presentationSize: CGSize(width: 16, height: 9)
+        )
+        view.layout()
+
+        XCTAssertTrue(view.playerLayer.player === player)
+        XCTAssertTrue(view.wantsLayer)
+        XCTAssertTrue(view.layer?.masksToBounds == true)
+        XCTAssertEqual(
+            view.layer?.backgroundColor,
+            NSColor.clear.cgColor
+        )
+        XCTAssertEqual(view.presentationSize, CGSize(width: 16, height: 9))
+        XCTAssertEqual(view.playerLayer.frame, CGRect(x: 0, y: 175, width: 800, height: 450))
+        XCTAssertEqual(view.playerLayer.videoGravity, .resizeAspectFill)
+    }
+
+    func testNativeAudioPlayerKeepsStableInlineControls() {
         let view = AVPlayerView()
         let player = AVPlayer()
 
-        NativeVideoPlayer.configure(view, player: player, controls: .full)
-
+        NativeVideoPlayer.configure(view, player: player, controls: .audio)
         XCTAssertTrue(view.player === player)
         XCTAssertEqual(view.controlsStyle, .inline)
-        XCTAssertTrue(view.showsFullScreenToggleButton)
-        XCTAssertTrue(view.showsFrameSteppingButtons)
-        XCTAssertTrue(view.allowsPictureInPicturePlayback)
+        XCTAssertFalse(view.showsFullScreenToggleButton)
+        XCTAssertFalse(view.showsFrameSteppingButtons)
+        XCTAssertFalse(view.allowsPictureInPicturePlayback)
 
-        // Reapplying the same SwiftUI configuration must keep the native view
-        // and its anchored controls unchanged.
-        NativeVideoPlayer.configure(view, player: player, controls: .full)
+        NativeVideoPlayer.configure(view, player: player, controls: .audio)
         XCTAssertTrue(view.player === player)
         XCTAssertEqual(view.controlsStyle, .inline)
+    }
+
+    func testGalleryVideoAspectFitLeavesLetterboxAreaForAppBackground() {
+        XCTAssertEqual(
+            GalleryVideoSurfaceView.aspectFitRect(
+                CGSize(width: 16, height: 9),
+                in: CGRect(x: 0, y: 0, width: 800, height: 800)
+            ),
+            CGRect(x: 0, y: 175, width: 800, height: 450)
+        )
+        XCTAssertEqual(
+            GalleryVideoSurfaceView.aspectFitRect(
+                CGSize(width: 9, height: 16),
+                in: CGRect(x: 0, y: 0, width: 800, height: 450)
+            ),
+            CGRect(x: 273.4375, y: 0, width: 253.125, height: 450)
+        )
+    }
+
+    func testSeekTargetUsesHalfSecondStepsAndClampsToVideoBounds() {
+        XCTAssertEqual(
+            VideoPlaybackController.seekTarget(
+                from: 1.25,
+                by: 0.5,
+                duration: 2
+            ),
+            1.75,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            VideoPlaybackController.seekTarget(
+                from: 0.2,
+                by: -0.5,
+                duration: 2
+            ),
+            0,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            VideoPlaybackController.seekTarget(
+                from: 1.9,
+                by: 0.5,
+                duration: 2
+            ),
+            2,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            VideoPlaybackController.seekTarget(
+                from: .infinity,
+                by: 0.5,
+                duration: nil
+            ),
+            0.5,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testGalleryScrubberSeeksToAbsoluteClampedTime() {
+        let item = makeVideoItem(
+            at: URL(fileURLWithPath: "/tmp/SCRUB.MOV"),
+            modificationDate: Date(timeIntervalSince1970: 1),
+            duration: 8
+        )
+        let controller = VideoPlaybackController()
+
+        XCTAssertTrue(controller.seek(item, to: 3.25))
+        XCTAssertEqual(controller.currentTimeSeconds, 3.25, accuracy: 0.000_001)
+        XCTAssertEqual(controller.rememberedPosition(for: item), 3.25)
+
+        XCTAssertTrue(controller.seek(item, to: 20))
+        XCTAssertEqual(controller.currentTimeSeconds, 8, accuracy: 0.000_001)
+        XCTAssertNil(controller.rememberedPosition(for: item))
+    }
+
+    func testResumePositionIsStableAcrossItemNavigationAndClearsPerFolder() {
+        let first = makeVideoItem(
+            at: URL(fileURLWithPath: "/tmp/RESUME-A.MOV"),
+            modificationDate: Date(timeIntervalSince1970: 1)
+        )
+        let second = makeVideoItem(
+            at: URL(fileURLWithPath: "/tmp/RESUME-B.MOV"),
+            modificationDate: Date(timeIntervalSince1970: 2)
+        )
+        let controller = VideoPlaybackController()
+
+        XCTAssertTrue(controller.seek(first, by: 5))
+        XCTAssertEqual(
+            controller.rememberedPosition(for: first),
+            5
+        )
+        controller.prepare(second)
+        XCTAssertEqual(
+            controller.rememberedPosition(for: first),
+            5,
+            "changing item must not discard the position just sought"
+        )
+        controller.resetRememberedPositions()
+        XCTAssertNil(
+            controller.rememberedPosition(for: first),
+            "a new folder starts a fresh review session"
+        )
+    }
+
+    func testPlaybackRateUsesOnlyTheSupportedMediaChoices() {
+        let controller = VideoPlaybackController()
+        controller.setPlaybackRate(2.5)
+        XCTAssertEqual(controller.playbackRate, 2.5)
+        controller.setPlaybackRate(1.25)
+        XCTAssertEqual(
+            controller.playbackRate,
+            2.5,
+            "an unsupported playback rate must not leave the documented choices"
+        )
+
+        controller.synchronizePlaybackRate(with: 2)
+        XCTAssertEqual(
+            controller.playbackRate,
+            2,
+            "native AVPlayerView speed changes must update the Info selection"
+        )
+        XCTAssertTrue(controller.adjustPlaybackRate(forward: false))
+        XCTAssertEqual(controller.playbackRate, 1.5)
+    }
+
+    func testPlaybackRateStaysSharedAcrossVideoAndAudio() {
+        let controller = VideoPlaybackController()
+        let video = makeVideoItem(
+            at: URL(fileURLWithPath: "/tmp/SPEED.MOV"),
+            modificationDate: Date(timeIntervalSince1970: 1)
+        )
+        let audio = makeAudioItem(
+            at: URL(fileURLWithPath: "/tmp/SPEED.WAV"),
+            modificationDate: Date(timeIntervalSince1970: 2)
+        )
+
+        controller.setPlaybackRate(2.5)
+        controller.prepare(video)
+        XCTAssertEqual(controller.player.defaultRate, 2.5)
+
+        controller.prepare(audio)
+        XCTAssertEqual(
+            controller.player.defaultRate,
+            2.5,
+            "AVKit's native Play button must use the shared playback speed"
+        )
+
+        controller.setPlaybackRate(2)
+        XCTAssertEqual(controller.playbackRate, 2)
+        XCTAssertEqual(
+            controller.player.defaultRate,
+            2,
+            "changing the shared preference must update active audio"
+        )
+
+        controller.prepare(video)
+        XCTAssertEqual(
+            controller.player.defaultRate,
+            2,
+            "returning to video must retain the shared playback speed"
+        )
+    }
+
+    func testCurrentAudioFailurePublishesItsPlaybackError() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "louppe-audio-failure-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: folder,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("AUDIO.wav")
+        try writeSilentWAV(to: url)
+        let item = makeAudioItem(
+            at: url,
+            modificationDate: try XCTUnwrap(
+                url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate
+            )
+        )
+        let controller = VideoPlaybackController()
+        controller.prepare(item)
+        let playerItem = try XCTUnwrap(controller.player.currentItem)
+
+        NotificationCenter.default.post(
+            name: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem,
+            userInfo: [
+                AVPlayerItemFailedToPlayToEndTimeErrorKey:
+                    NSError(
+                        domain: "LouppeTests.AudioPlayback",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Audio failed"]
+                    ),
+            ]
+        )
+        await Task.yield()
+
+        XCTAssertEqual(controller.errorMessage, "Audio failed")
+        XCTAssertTrue(controller.represents(item))
     }
 
     func testControllerReplacesSameIDPhysicalVideoReplacement() throws {
@@ -170,7 +394,8 @@ final class VideoPlayerViewTests: XCTestCase {
 
     private func makeVideoItem(
         at url: URL,
-        modificationDate: Date
+        modificationDate: Date,
+        duration: TimeInterval? = nil
     ) -> PhotoItem {
         PhotoItem(
             id: url.lastPathComponent,
@@ -180,7 +405,26 @@ final class VideoPlayerViewTests: XCTestCase {
             cameraModel: nil,
             lensModel: nil,
             mediaKind: .video,
+            duration: duration,
             videoIsPlayable: true,
+            primaryModificationDate: modificationDate,
+            fileSize: 5
+        )
+    }
+
+    private func makeAudioItem(
+        at url: URL,
+        modificationDate: Date
+    ) -> PhotoItem {
+        PhotoItem(
+            id: url.lastPathComponent,
+            primaryURL: url,
+            pairedURL: nil,
+            captureDate: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            mediaKind: .audio,
+            audioIsPlayable: true,
             primaryModificationDate: modificationDate,
             fileSize: 5
         )

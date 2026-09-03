@@ -11,6 +11,7 @@ struct FilterView: View {
     @State private var dateExpanded = true
     @State private var mediaExpanded = true
     @State private var durationExpanded = false
+    @State private var videoDetailsExpanded = true
     @State private var cameraSettingsExpanded = false
     @State private var subfoldersExpanded = false
     @State private var fileTypesExpanded = true
@@ -25,6 +26,8 @@ struct FilterView: View {
     @State private var isoToText = ""
     @State private var durationFromText = ""
     @State private var durationToText = ""
+    @State private var videoFrameRateFromText = ""
+    @State private var videoFrameRateToText = ""
     @State private var settingCommitTask: Task<Void, Never>?
     @FocusState private var focusedSettingField: SettingField?
 
@@ -33,6 +36,7 @@ struct FilterView: View {
         case shutterFrom, shutterTo
         case isoFrom, isoTo
         case durationFrom, durationTo
+        case videoFrameRateFrom, videoFrameRateTo
     }
 
     var body: some View {
@@ -58,6 +62,13 @@ struct FilterView: View {
                     if store.durationRange != nil {
                         Divider()
                         durationSection
+                    }
+
+                    if !store.availableVideoResolutions.isEmpty
+                        || !store.availableVideoCodecs.isEmpty
+                        || store.videoFrameRateRange != nil {
+                        Divider()
+                        videoDetailsSection
                     }
 
                     Divider()
@@ -309,7 +320,7 @@ struct FilterView: View {
     }
 
     private var durationSection: some View {
-        FilterDisclosureSection(title: "Video duration", isExpanded: $durationExpanded) {
+        FilterDisclosureSection(title: "Media duration", isExpanded: $durationExpanded) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 5) {
                     Text("From")
@@ -337,6 +348,77 @@ struct FilterView: View {
             .onChange(of: durationFromText) { scheduleSettingCommit() }
             .onChange(of: durationToText) { scheduleSettingCommit() }
         }
+    }
+
+    private var videoDetailsSection: some View {
+        FilterDisclosureSection(title: "Video details", isExpanded: $videoDetailsExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                if !store.availableVideoResolutions.isEmpty {
+                    videoFacet(
+                        title: "Resolution",
+                        values: store.availableVideoResolutions,
+                        counts: store.videoResolutionCounts,
+                        set: \.excludedVideoResolutions
+                    )
+                }
+                if !store.availableVideoCodecs.isEmpty {
+                    videoFacet(
+                        title: "Codec",
+                        values: store.availableVideoCodecs,
+                        counts: store.videoCodecCounts,
+                        set: \.excludedVideoCodecs
+                    )
+                }
+                if store.videoFrameRateRange != nil {
+                    videoFrameRateSetting
+                }
+            }
+        }
+    }
+
+    private func videoFacet(
+        title: String,
+        values: [String],
+        counts: [String: Int],
+        set: WritableKeyPath<PhotoFilter, Set<String>>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.callout)
+            ForEach(values, id: \.self) { value in
+                Toggle(isOn: exclusionBinding(value, set)) {
+                    labeledCount(value, counts[value, default: 0])
+                }
+            }
+        }
+    }
+
+    private var videoFrameRateSetting: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Frame rate")
+                .font(.callout)
+            HStack(spacing: 5) {
+                Text("From")
+                validatedTextField(
+                    $videoFrameRateFromText,
+                    field: .videoFrameRateFrom,
+                    width: 62,
+                    invalid: !videoFrameRateDraftIsValid
+                )
+                Text("to").foregroundStyle(.secondary)
+                validatedTextField(
+                    $videoFrameRateToText,
+                    field: .videoFrameRateTo,
+                    width: 62,
+                    invalid: !videoFrameRateDraftIsValid
+                )
+                Text("fps").foregroundStyle(.secondary)
+            }
+            .padding(.leading, 20)
+            if !videoFrameRateDraftIsValid { invalidRangeMessage }
+        }
+        .onChange(of: videoFrameRateFromText) { scheduleSettingCommit() }
+        .onChange(of: videoFrameRateToText) { scheduleSettingCommit() }
     }
 
     private var cameraSettingsSection: some View {
@@ -703,6 +785,13 @@ struct FilterView: View {
         return from <= to
     }
 
+    private var videoFrameRateDraftIsValid: Bool {
+        guard let from = Self.parseVideoFrameRate(videoFrameRateFromText),
+              let to = Self.parseVideoFrameRate(videoFrameRateToText)
+        else { return false }
+        return from <= to
+    }
+
     private func commitApertureDrafts(to filter: inout PhotoFilter) {
         guard let available = store.apertureRange,
               let parsedFrom = Self.parseAperture(apertureFromText),
@@ -751,6 +840,26 @@ struct FilterView: View {
         filter.durationEnabled = from != available.lowerBound || to != available.upperBound
     }
 
+    private func commitVideoFrameRateDrafts(to filter: inout PhotoFilter) {
+        guard let available = store.videoFrameRateRange,
+              let parsedFrom = Self.parseVideoFrameRate(videoFrameRateFromText),
+              let parsedTo = Self.parseVideoFrameRate(videoFrameRateToText),
+              parsedFrom <= parsedTo
+        else { return }
+        let from = Self.snapVideoFrameRate(
+            parsedFrom,
+            toDisplayedBound: available.lowerBound
+        )
+        let to = Self.snapVideoFrameRate(
+            parsedTo,
+            toDisplayedBound: available.upperBound
+        )
+        filter.videoFrameRateFrom = from
+        filter.videoFrameRateTo = to
+        filter.videoFrameRateEnabled = from != available.lowerBound
+            || to != available.upperBound
+    }
+
     private func syncAllSettingDrafts() {
         if let range = store.apertureRange {
             let from = store.filter.apertureFrom > 0 ? store.filter.apertureFrom : range.lowerBound
@@ -776,6 +885,14 @@ struct FilterView: View {
             durationFromText = Self.formatDuration(from)
             durationToText = Self.formatDuration(to)
         }
+        if let range = store.videoFrameRateRange {
+            let from = store.filter.videoFrameRateEnabled
+                ? store.filter.videoFrameRateFrom : range.lowerBound
+            let to = store.filter.videoFrameRateEnabled
+                ? store.filter.videoFrameRateTo : range.upperBound
+            videoFrameRateFromText = Self.formatVideoFrameRate(from)
+            videoFrameRateToText = Self.formatVideoFrameRate(to)
+        }
     }
 
     /// Numeric text can be valid on every keystroke ("3", "32", "320"),
@@ -797,6 +914,7 @@ struct FilterView: View {
         commitShutterDrafts(to: &updated)
         commitISODrafts(to: &updated)
         commitDurationDrafts(to: &updated)
+        commitVideoFrameRateDrafts(to: &updated)
         if updated != store.filter {
             // One assignment means one pass across the photo list even if
             // several camera-setting fields changed before the debounce fired.
@@ -822,6 +940,14 @@ struct FilterView: View {
             durationFromText = Self.formatDuration(store.filter.durationFrom)
         case .durationTo where !durationDraftIsValid:
             durationToText = Self.formatDuration(store.filter.durationTo)
+        case .videoFrameRateFrom where !videoFrameRateDraftIsValid:
+            videoFrameRateFromText = Self.formatVideoFrameRate(
+                store.filter.videoFrameRateFrom
+            )
+        case .videoFrameRateTo where !videoFrameRateDraftIsValid:
+            videoFrameRateToText = Self.formatVideoFrameRate(
+                store.filter.videoFrameRateTo
+            )
         default:
             break
         }
@@ -893,6 +1019,13 @@ struct FilterView: View {
         return seconds
     }
 
+    private static func parseVideoFrameRate(_ text: String) -> Double? {
+        guard let value = Double(normalizedNumberText(text)),
+              MediaNumeric.frameRate(value) != nil
+        else { return nil }
+        return value
+    }
+
     private static func normalizedNumberText(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: " ", with: "")
@@ -915,6 +1048,11 @@ struct FilterView: View {
         MediaDurationFormat.display(value)
     }
 
+    private static func formatVideoFrameRate(_ value: Double) -> String {
+        VideoMetadataFormat.frameRate(value)
+            .replacingOccurrences(of: " fps", with: "")
+    }
+
     /// Display formatting rounds some legal EXIF values. If the user-entered
     /// value equals what a folder bound displays, retain the exact bound so a
     /// neutral full range cannot accidentally exclude its edge photo.
@@ -932,6 +1070,13 @@ struct FilterView: View {
 
     private static func snapDuration(_ value: Double, toDisplayedBound bound: Double) -> Double {
         parseDuration(formatDuration(bound)) == value ? bound : value
+    }
+
+    private static func snapVideoFrameRate(
+        _ value: Double,
+        toDisplayedBound bound: Double
+    ) -> Double {
+        parseVideoFrameRate(formatVideoFrameRate(bound)) == value ? bound : value
     }
 
     private func labeledCount(_ label: String, _ count: Int) -> some View {

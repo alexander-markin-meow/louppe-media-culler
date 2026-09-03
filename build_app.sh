@@ -1,7 +1,15 @@
 #!/bin/zsh
-# Builds Louppe.app from source. Run:  ./build_app.sh
+# Builds Louppe.app from source. Run: ./build_app.sh [--app-store]
 set -euo pipefail
 cd "$(dirname "$0")"
+
+APP_STORE=false
+if [[ $# -eq 1 && "$1" == "--app-store" ]]; then
+    APP_STORE=true
+elif [[ $# -ne 0 ]]; then
+    echo "Usage: $0 [--app-store]" >&2
+    exit 2
+fi
 
 VERSION_FILE="$PWD/VERSION"
 CHANGELOG_FILE="$PWD/CHANGELOG.md"
@@ -21,10 +29,20 @@ if ! grep -Fq "## $MARKETING_VERSION ($BUILD_NUMBER) " "$CHANGELOG_FILE"; then
     exit 1
 fi
 
-echo "Compiling Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
+if $APP_STORE; then
+    echo "Compiling App Store Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
+else
+    echo "Compiling direct-download Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
+fi
 # Sparkle is a public, checksum-pinned binary. Do not ask macOS Keychain for
 # unrelated github.com credentials while downloading it.
-swift build --disable-keychain -c release
+BUILD_ARGUMENTS=(--disable-keychain -c release)
+if $APP_STORE; then
+    BUILD_ARGUMENTS+=(-Xswiftc -DAPP_STORE)
+    LOUPPE_APP_STORE=1 swift build "${BUILD_ARGUMENTS[@]}"
+else
+    swift build "${BUILD_ARGUMENTS[@]}"
+fi
 
 OUTPUT_APP="dist/Louppe.app"
 OUTPUT_ARCHIVE="dist/Louppe.zip"
@@ -45,17 +63,20 @@ cp ThirdPartyLicenses/XMPCore-BSD-3-Clause.txt \
     "$APP_DIR/Contents/Resources/XMPCore License.txt"
 cp ThirdPartyLicenses/Expat-MIT.txt \
     "$APP_DIR/Contents/Resources/Expat License.txt"
+cp PrivacyInfo.xcprivacy "$APP_DIR/Contents/Resources/PrivacyInfo.xcprivacy"
 
-SPARKLE_FRAMEWORK="$(find .build/artifacts -type d \
-    -path '*/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' \
-    -print -quit)"
-if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
-    echo "Sparkle.framework was not found in SwiftPM's build artifacts." >&2
-    exit 1
+if ! $APP_STORE; then
+    SPARKLE_FRAMEWORK="$(find .build/artifacts -type d \
+        -path '*/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' \
+        -print -quit)"
+    if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+        echo "Sparkle.framework was not found in SwiftPM's build artifacts." >&2
+        exit 1
+    fi
+    # ditto preserves the framework's versioned symlinks and executable bits.
+    ditto --noextattr --noqtn "$SPARKLE_FRAMEWORK" \
+        "$APP_DIR/Contents/Frameworks/Sparkle.framework"
 fi
-# ditto preserves the framework's versioned symlinks and executable bits.
-ditto --noextattr --noqtn "$SPARKLE_FRAMEWORK" \
-    "$APP_DIR/Contents/Frameworks/Sparkle.framework"
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -88,6 +109,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+PLIST
+
+if ! $APP_STORE; then
+    cat >> "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>SUFeedURL</key>
     <string>https://raw.githubusercontent.com/alexander-markin-meow/louppe/main/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -102,12 +127,20 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>SURequireSignedFeed</key>
     <true/>
+PLIST
+fi
+
+cat >> "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
 
 xattr -cr "$APP_DIR"
-codesign --force --sign - "$APP_DIR"
+if $APP_STORE; then
+    codesign --force --sign - --entitlements "$PWD/Louppe.entitlements" "$APP_DIR"
+else
+    codesign --force --sign - "$APP_DIR"
+fi
 codesign --verify --deep --strict "$APP_DIR"
 
 rm -rf "$OUTPUT_APP"
@@ -116,7 +149,11 @@ ditto --noextattr --noqtn "$APP_DIR" "$OUTPUT_APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$STAGING_ROOT/Louppe.zip"
 cp "$STAGING_ROOT/Louppe.zip" "$OUTPUT_ARCHIVE"
 
-"$PWD/Scripts/verify_release.sh"
+if $APP_STORE; then
+    "$PWD/Scripts/verify_release.sh" --app-store
+else
+    "$PWD/Scripts/verify_release.sh"
+fi
 
 echo ""
 echo "Done → $PWD/$OUTPUT_APP"

@@ -9,7 +9,7 @@ enum FolderScanner {
         case filesChangedDuringScan
 
         var errorDescription: String? {
-            "A photo or video changed while Louppe was scanning. Nothing was saved; scan the folder again."
+            "A media file changed while Louppe was scanning. Nothing was saved; scan the folder again."
         }
     }
     /// Camera RAW formats macOS's ImageIO can decode (verified against
@@ -49,6 +49,14 @@ enum FolderScanner {
         "webm", "3gp", "3g2", "mts", "m2ts", "m2v", "hevc", "insv",
     ]
 
+    /// Common sound recordings and audio exports. `isAudioExtension` also
+    /// consults Uniform Type Identifiers so formats supplied by macOS media
+    /// extensions appear without a Louppe update.
+    static let audioExtensions: Set<String> = [
+        "aac", "aif", "aiff", "alac", "amr", "caf", "flac", "m4a", "m4b",
+        "mp3", "oga", "ogg", "opus", "wav", "wma",
+    ]
+
     /// Visual files we recognise but can't preview — RAW formats ImageIO
     /// doesn't decode. They show up in the session as a grey
     /// "file isn't supported" placeholder instead of being silently dropped.
@@ -61,6 +69,7 @@ enum FolderScanner {
     static let recognizedExtensions: Set<String> = supportedExtensions
         .union(unsupportedVisualExtensions)
         .union(videoExtensions)
+        .union(audioExtensions)
 
     static func isVideoExtension(_ ext: String) -> Bool {
         let normalized = ext.lowercased()
@@ -69,14 +78,31 @@ enum FolderScanner {
         // lookup. Pairing and metadata construction ask this repeatedly, so
         // keep their common photo path to two in-memory Set lookups.
         if supportedExtensions.contains(normalized)
-            || unsupportedVisualExtensions.contains(normalized) {
+            || unsupportedVisualExtensions.contains(normalized)
+            || audioExtensions.contains(normalized) {
             return false
         }
         return UTType(filenameExtension: normalized)?.conforms(to: .movie) == true
     }
 
+    static func isAudioExtension(_ ext: String) -> Bool {
+        let normalized = ext.lowercased()
+        if audioExtensions.contains(normalized) { return true }
+        if supportedExtensions.contains(normalized)
+            || unsupportedVisualExtensions.contains(normalized)
+            || videoExtensions.contains(normalized) {
+            return false
+        }
+        guard let type = UTType(filenameExtension: normalized) else {
+            return false
+        }
+        return type.conforms(to: .audio) && !type.conforms(to: .movie)
+    }
+
     static func isRecognizedExtension(_ ext: String) -> Bool {
-        recognizedExtensions.contains(ext.lowercased()) || isVideoExtension(ext)
+        recognizedExtensions.contains(ext.lowercased())
+            || isVideoExtension(ext)
+            || isAudioExtension(ext)
     }
 
     private struct FileFacts: Sendable {
@@ -332,20 +358,21 @@ enum FolderScanner {
         for key in groups.keys.sorted() {
             guard let grouped = groups[key] else { continue }
             let urls = grouped.sorted(by: stableURLOrder)
-            // Videos are always independent media, even when a camera gives a
-            // RAW and sidecar movie the same base name. Only RAW + JPEG is a
-            // pair; pairing a RAW with MOV/PNG/TIFF would make the latter
-            // disappear from the review session.
-            var videos: [URL] = []
+            // Video and audio are always independent media, even when a
+            // camera gives them the same base name as a RAW. Only RAW + JPEG
+            // is a pair; grouping any other format would hide an original
+            // from the review session.
+            var independentMedia: [URL] = []
             var images: [URL] = []
             for url in urls {
-                if isVideoExtension(url.pathExtension) {
-                    videos.append(url)
+                if isVideoExtension(url.pathExtension)
+                    || isAudioExtension(url.pathExtension) {
+                    independentMedia.append(url)
                 } else {
                     images.append(url)
                 }
             }
-            for video in videos { pairs.append((video, nil)) }
+            for media in independentMedia { pairs.append((media, nil)) }
             let raws = images.filter {
                 rawExtensions.contains($0.pathExtension.lowercased())
             }
@@ -371,6 +398,30 @@ enum FolderScanner {
             }
         }
         return pairs
+    }
+
+    /// Resolves the same unambiguous one-RAW/one-JPEG relationships used by
+    /// the grouped review projection while retaining the complete scanned
+    /// physical-file records needed by pair-member Clean Up.
+    static func rawJPEGPairs(
+        from items: [PhotoItem],
+        root: URL
+    ) -> [(raw: PhotoFile, jpeg: PhotoFile)] {
+        var filesByPath: [String: PhotoFile] = [:]
+        for file in items.flatMap(\.individualFiles) {
+            filesByPath[fileSystemIdentityPath(for: file.url)] = file
+        }
+        return pairFiles(
+            filesByPath.values.map(\.url),
+            pairingMode: .together,
+            filenamePolicy: pairingFilenamePolicy(at: root)
+        ).compactMap { pair in
+            guard let jpegURL = pair.paired,
+                  let raw = filesByPath[fileSystemIdentityPath(for: pair.primary)],
+                  let jpeg = filesByPath[fileSystemIdentityPath(for: jpegURL)]
+            else { return nil }
+            return (raw, jpeg)
+        }
     }
 
     /// Reprojects the already-discovered physical files without walking the
@@ -515,10 +566,12 @@ enum FolderScanner {
         root: URL
     ) -> PhotoFile {
         let isVideo = isVideoExtension(url.pathExtension)
-        let info = isVideo
+        let isAudio = isAudioExtension(url.pathExtension)
+        let info = isVideo || isAudio
             ? MetadataExtractor.ScanInfo()
             : MetadataExtractor.scanInfo(for: url)
         let videoInfo = isVideo ? VideoMetadataExtractor.scanInfo(for: url) : nil
+        let audioInfo = isAudio ? AudioMetadataExtractor.scanInfo(for: url) : nil
         return PhotoFile(
             id: relativeFileIdentity(of: url, under: root),
             url: url,
@@ -529,12 +582,14 @@ enum FolderScanner {
             aperture: info.aperture,
             shutterSpeed: info.shutterSpeed,
             iso: info.iso,
-            mediaKind: isVideo ? .video : .photo,
-            duration: videoInfo?.duration,
+            mediaKind: isVideo ? .video : (isAudio ? .audio : .photo),
+            duration: videoInfo?.duration ?? audioInfo?.duration,
             videoDimensions: videoInfo?.dimensions,
             videoCodec: videoInfo?.codec,
             videoFrameRate: videoInfo?.frameRate,
             videoIsPlayable: videoInfo?.isPlayable ?? false,
+            audioCodec: audioInfo?.codec,
+            audioIsPlayable: audioInfo?.isPlayable ?? false,
             modificationDate: facts?.modificationDate,
             fileSize: facts?.size ?? 0,
             scannedIdentity: facts?.identity
@@ -593,14 +648,27 @@ enum FolderScanner {
         return results.flattened()
     }
 
+    /// Prepares a previously lightweight JPEG partner to become a visible
+    /// standalone item after its RAW counterpart is removed. Callers run this
+    /// off the main actor because it may read image metadata from disk.
+    static func prepareStandaloneFiles(
+        _ files: [PhotoFile]
+    ) throws -> [PhotoFile] {
+        try prepareMissingMetadata(in: files, isCancelled: { false })
+    }
+
     private static func enrichMetadata(for file: PhotoFile) -> PhotoFile {
         let metadata = file.metadataSnapshot
         let isVideo = isVideoExtension(file.url.pathExtension)
-        let info = isVideo
+        let isAudio = isAudioExtension(file.url.pathExtension)
+        let info = isVideo || isAudio
             ? MetadataExtractor.ScanInfo()
             : MetadataExtractor.scanInfo(for: file.url)
         let videoInfo = isVideo
             ? VideoMetadataExtractor.scanInfo(for: file.url)
+            : nil
+        let audioInfo = isAudio
+            ? AudioMetadataExtractor.scanInfo(for: file.url)
             : nil
         return PhotoFile(
             id: file.id,
@@ -612,12 +680,14 @@ enum FolderScanner {
             aperture: info.aperture,
             shutterSpeed: info.shutterSpeed,
             iso: info.iso,
-            mediaKind: isVideo ? .video : .photo,
-            duration: videoInfo?.duration,
+            mediaKind: isVideo ? .video : (isAudio ? .audio : .photo),
+            duration: videoInfo?.duration ?? audioInfo?.duration,
             videoDimensions: videoInfo?.dimensions,
             videoCodec: videoInfo?.codec,
             videoFrameRate: videoInfo?.frameRate,
             videoIsPlayable: videoInfo?.isPlayable ?? false,
+            audioCodec: audioInfo?.codec,
+            audioIsPlayable: audioInfo?.isPlayable ?? false,
             modificationDate: file.modificationDate,
             fileSize: file.fileSize,
             scannedIdentity: file.scannedIdentity,
@@ -689,14 +759,25 @@ enum FolderScanner {
     static func relativeFileIdentity(of url: URL, under root: URL) -> String {
         let path = fileSystemIdentityPath(for: url)
         let rootPath = fileSystemIdentityPath(for: root)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let rootedPrefix = rootPath.isEmpty ? "/" : "/\(rootPath)/"
-        if path.hasPrefix(rootedPrefix) {
-            return String(path.dropFirst(rootedPrefix.count))
+        if let relative = relativePath(path, under: rootPath) {
+            return relative
         }
-        let absoluteRoot = rootPath.isEmpty ? "/" : "/\(rootPath)"
-        if path.hasPrefix(absoluteRoot + "/") {
-            return String(path.dropFirst(absoluteRoot.count + 1))
+        // FileManager can enumerate the physical spelling of a path while a
+        // user-selected root retains its logical spelling (for example
+        // /tmp versus /private/tmp). Compare both resolved paths only as a
+        // containment fallback; the returned name still comes from the
+        // original percent-encoded filesystem path.
+        let resolvedPath = fileSystemIdentityPath(
+            for: url.resolvingSymlinksInPath()
+        )
+        let resolvedRootPath = fileSystemIdentityPath(
+            for: root.resolvingSymlinksInPath()
+        )
+        if let relative = relativePath(
+            resolvedPath,
+            under: resolvedRootPath
+        ) {
+            return relative
         }
         return path.split(separator: "/", omittingEmptySubsequences: true)
             .last
@@ -710,9 +791,35 @@ enum FolderScanner {
     ) -> String {
         let path = url.path
         let rootPath = root.path
-        if path.hasPrefix(rootPath + "/") {
-            return String(path.dropFirst(rootPath.count + 1))
+        if let relative = relativePath(path, under: rootPath) {
+            return relative
+        }
+        let resolvedPath = url.resolvingSymlinksInPath().path
+        let resolvedRootPath = root.resolvingSymlinksInPath().path
+        if let relative = relativePath(
+            resolvedPath,
+            under: resolvedRootPath
+        ) {
+            return relative
         }
         return url.lastPathComponent
+    }
+
+    private static func relativePath(
+        _ path: String,
+        under rootPath: String
+    ) -> String? {
+        let root = rootPath.trimmingCharacters(
+            in: CharacterSet(charactersIn: "/")
+        )
+        let rootedPrefix = root.isEmpty ? "/" : "/\(root)/"
+        if path.hasPrefix(rootedPrefix) {
+            return String(path.dropFirst(rootedPrefix.count))
+        }
+        let absoluteRoot = root.isEmpty ? "/" : "/\(root)"
+        if path.hasPrefix(absoluteRoot + "/") {
+            return String(path.dropFirst(absoluteRoot.count + 1))
+        }
+        return nil
     }
 }

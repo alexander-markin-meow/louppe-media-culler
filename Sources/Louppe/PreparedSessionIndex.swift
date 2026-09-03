@@ -119,6 +119,58 @@ struct PreparedSessionIndex {
             sort: sort,
             isGroupingEnabled: isGroupingEnabled
         )
+        rebuildVisiblePresentation(for: items)
+    }
+
+    /// Projects one already-filtered session into a review-only group layout.
+    /// The analyzer owns stable item IDs; this index maps them back into the
+    /// current item generation and deliberately omits any group that has fewer
+    /// than two members after the normal filter is applied. The original sorted
+    /// list remains untouched, so leaving grouped review is a cheap rebuild.
+    mutating func applyGroupedReview(
+        _ reviewGroups: [DuplicateBurstAnalysis.Group],
+        to items: [PhotoItem]
+    ) {
+        guard !reviewGroups.isEmpty, !visibleIndices.isEmpty else {
+            visibleIndices = []
+            visibleGroups = []
+            rebuildVisiblePresentation(for: items)
+            return
+        }
+
+        let visibleSet = Set(visibleIndices)
+        let normalPosition = Dictionary(
+            uniqueKeysWithValues: visibleIndices.enumerated().map {
+                ($0.element, $0.offset)
+            }
+        )
+        var projectedGroups: [PhotoGroup] = []
+        var seenIndices = Set<Int>()
+        for reviewGroup in reviewGroups {
+            let indices = reviewGroup.itemIDs.compactMap(itemIndex(forID:))
+                .filter { visibleSet.contains($0) && !seenIndices.contains($0) }
+                .sorted {
+                    (normalPosition[$0] ?? .max) < (normalPosition[$1] ?? .max)
+                }
+            guard indices.count >= 2 else { continue }
+            seenIndices.formUnion(indices)
+            projectedGroups.append(
+                PhotoGroup(
+                    id: PhotoGroup.ID(
+                        key: nil,
+                        value: .text("review-\(reviewGroup.id)")
+                    ),
+                    title: reviewGroup.title,
+                    indices: indices
+                )
+            )
+        }
+        visibleGroups = projectedGroups
+        visibleIndices = projectedGroups.flatMap(\.indices)
+        rebuildVisiblePresentation(for: items)
+    }
+
+    private mutating func rebuildVisiblePresentation(for items: [PhotoItem]) {
         visibleEntries = visibleIndices.compactMap { index in
             guard items.indices.contains(index) else { return nil }
             return VisibleEntry(id: items[index].id, index: index)

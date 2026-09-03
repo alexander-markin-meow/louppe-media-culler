@@ -98,6 +98,8 @@ truth, created in `LouppeApp` and passed to every view.
 | `Sources/Louppe/FolderScanner.swift` | Recursive scan, deterministic volume-aware RAW+JPEG pairing, lazy partner-JPEG metadata enrichment, in-memory pairing projection, chronological sort |
 | `Sources/Louppe/ImagePipeline.swift` | ImageIO decoding + AVFoundation first-frame generation, thumbnail memory+disk caches, prefetching |
 | `Sources/Louppe/HistogramPipeline.swift` | Bounded photo-only luminance analysis plus cached Fit/phone-size clipping-warning previews |
+| `Sources/Louppe/CameraQualityWarnings.swift` | Pure app-wide warning preferences and non-blocking photo warning state |
+| `Sources/Louppe/DuplicateBurstAnalysis.swift` | Local, bounded exact-duplicate, likely-similar-preview, and capture-burst analysis for review-only groups |
 | `Sources/Louppe/HighResolutionImagePipeline.swift` | Lazy Core Image source-region rendering plus the bounded 100% tile cache |
 | `Sources/Louppe/ZoomViewport.swift` | Pure backing-scale/normalized-position geometry and persistent non-published 100% viewport state |
 | `Sources/Louppe/VideoSupport.swift` | Native movie metadata loading, duration formatting |
@@ -118,6 +120,7 @@ truth, created in `LouppeApp` and passed to every view.
 | `Sources/Louppe/Views/GridView.swift` | Grid view, day-grouped rows, click-to-rate, rubber-band selection |
 | `Sources/Louppe/Views/MetadataPanel.swift` | Info panel (filename header, photo histogram, camera, exposure row, fields) |
 | `Sources/Louppe/Views/HistogramView.swift` | Photo-only histogram, shadow/highlight percentages, and Gallery clipping toggle |
+| `Sources/Louppe/Views/CameraQualityWarningsView.swift` | Text-first Info-panel review warnings and the focused Warnings settings page |
 | `Sources/Louppe/Views/ThumbnailView.swift` | Async thumbnail tile + rating badge |
 | `Sources/Louppe/Views/MediaTileAccessibility.swift` | Shared VoiceOver descriptions and open/rate/select actions for Browser/Grid tiles |
 | `Sources/Louppe/Views/FullImageView.swift` | Large photo with fit / 100% / phone-size zoom |
@@ -310,9 +313,12 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   retryable for sidecar repair.
   The obsolete path-keyed backup is read only when both current locations are
   absent. Schema 1–3 filename-only ratings migrate automatically only when
-  every saved filename is present in its original folder. An unowned legacy
-  backup or missing legacy entries requires explicit confirmation and must not
-  autosave, close-save, or quit-save before it. Missing entries may be discarded
+  every saved filename is present. A folder-owned legacy sidecar whose recorded
+  path differs may proceed only after **Open Anyway** acknowledges that exact
+  sidecar revision; it is rescanned and filename-checked before migration. An
+  unowned legacy backup or missing legacy entries require explicit confirmation
+  and must not autosave, close-save, or quit-save before it. Missing entries
+  may be discarded
   only through **Open Folder and Forget Missing Items**; Close Folder and Quit
   must preserve both legacy copies byte-for-byte.
 - **Clean Up has a three-phase boundary**: snapshot on `SessionStore`, file I/O

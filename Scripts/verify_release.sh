@@ -1,15 +1,18 @@
 #!/bin/zsh
 # Verifies the exact app/archive/feed inputs used for a Louppe release.
-# Use --publishing after prepare_update_feed.sh; it additionally requires the
-# feed to contain a current-version enclosure matching dist/Louppe.zip.
+# Use --publishing after prepare_update_feed.sh; --app-store checks the
+# sandboxed Store variant, which deliberately contains no Sparkle updater.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PUBLISHING=false
+APP_STORE=false
 if [[ "${1:-}" == "--publishing" ]]; then
     PUBLISHING=true
+elif [[ "${1:-}" == "--app-store" ]]; then
+    APP_STORE=true
 elif [[ $# -ne 0 ]]; then
-    echo "Usage: $0 [--publishing]" >&2
+    echo "Usage: $0 [--publishing|--app-store]" >&2
     exit 2
 fi
 
@@ -49,24 +52,49 @@ verify_app_bundle() {
         || fail "$label build number does not match VERSION."
     [[ "$(plist_value "$bundle" LSMultipleInstancesProhibited)" == "true" ]] \
         || fail "$label must prohibit a second app instance during file operations."
-    [[ "$(plist_value "$bundle" SUFeedURL)" == "$EXPECTED_FEED_URL" ]] \
-        || fail "$label embedded update feed URL is wrong."
-    [[ "$(plist_value "$bundle" SUPublicEDKey)" == "$EXPECTED_PUBLIC_KEY" ]] \
-        || fail "$label embedded Sparkle public key is wrong."
-    [[ "$(plist_value "$bundle" SURequireSignedFeed)" == "true" ]] \
-        || fail "$label does not require signed feeds."
-    [[ "$(plist_value "$bundle" SUVerifyUpdateBeforeExtraction)" == "true" ]] \
-        || fail "$label does not verify updates before extraction."
-    [[ -d "$bundle/Contents/Frameworks/Sparkle.framework" ]] \
-        || fail "$label does not embed Sparkle.framework."
     cmp -s ThirdPartyLicenses/XMPCore-BSD-3-Clause.txt \
         "$bundle/Contents/Resources/XMPCore License.txt" \
         || fail "$label does not contain the reviewed XMPCore license."
     cmp -s ThirdPartyLicenses/Expat-MIT.txt \
         "$bundle/Contents/Resources/Expat License.txt" \
         || fail "$label does not contain the reviewed Expat license."
-    otool -L "$bundle/Contents/MacOS/Louppe" | grep -Fq "@rpath/Sparkle.framework" \
-        || fail "$label executable is not linked to embedded Sparkle."
+    cmp -s PrivacyInfo.xcprivacy "$bundle/Contents/Resources/PrivacyInfo.xcprivacy" \
+        || fail "$label does not contain the reviewed privacy manifest."
+    plutil -lint "$bundle/Contents/Resources/PrivacyInfo.xcprivacy" >/dev/null \
+        || fail "$label privacy manifest is invalid."
+
+    if $APP_STORE; then
+        local entitlements
+        entitlements="$(mktemp "$CHECK_DIR/Louppe-entitlements.XXXXXX")"
+        codesign -d --entitlements :- "$bundle" 2>/dev/null > "$entitlements"
+        [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$entitlements")" == "true" ]] \
+            || fail "$label is not sandboxed."
+        [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-write' "$entitlements")" == "true" ]] \
+            || fail "$label cannot write only to folders the person selected."
+        [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.bookmarks.app-scope' "$entitlements")" == "true" ]] \
+            || fail "$label cannot retain selected-folder access safely."
+        if /usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$bundle/Contents/Info.plist" >/dev/null 2>&1; then
+            fail "$label includes a prohibited standalone update feed."
+        fi
+        [[ ! -e "$bundle/Contents/Frameworks/Sparkle.framework" ]] \
+            || fail "$label embeds a prohibited standalone updater."
+        if otool -L "$bundle/Contents/MacOS/Louppe" | grep -Fq "@rpath/Sparkle.framework"; then
+            fail "$label executable links a prohibited standalone updater."
+        fi
+    else
+        [[ "$(plist_value "$bundle" SUFeedURL)" == "$EXPECTED_FEED_URL" ]] \
+            || fail "$label embedded update feed URL is wrong."
+        [[ "$(plist_value "$bundle" SUPublicEDKey)" == "$EXPECTED_PUBLIC_KEY" ]] \
+            || fail "$label embedded Sparkle public key is wrong."
+        [[ "$(plist_value "$bundle" SURequireSignedFeed)" == "true" ]] \
+            || fail "$label does not require signed feeds."
+        [[ "$(plist_value "$bundle" SUVerifyUpdateBeforeExtraction)" == "true" ]] \
+            || fail "$label does not verify updates before extraction."
+        [[ -d "$bundle/Contents/Frameworks/Sparkle.framework" ]] \
+            || fail "$label does not embed Sparkle.framework."
+        otool -L "$bundle/Contents/MacOS/Louppe" | grep -Fq "@rpath/Sparkle.framework" \
+            || fail "$label executable is not linked to embedded Sparkle."
+    fi
 }
 
 [[ "$MARKETING_VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] \
@@ -77,7 +105,9 @@ grep -Fq "## $MARKETING_VERSION ($BUILD_NUMBER) " "$CHANGELOG_FILE" \
     || fail "CHANGELOG.md has no matching top-level release entry."
 [[ -d "$APP" ]] || fail "dist/Louppe.app is missing; run ./build_app.sh."
 [[ -f "$ARCHIVE" ]] || fail "dist/Louppe.zip is missing; run ./build_app.sh."
-[[ -f "$APPCAST" ]] || fail "appcast.xml is missing."
+if ! $APP_STORE; then
+    [[ -f "$APPCAST" ]] || fail "appcast.xml is missing."
+fi
 
 CHECK_DIR="$(mktemp -d /private/tmp/Louppe-preflight.XXXXXX)"
 trap 'rm -rf "$CHECK_DIR"' EXIT
@@ -89,21 +119,23 @@ ditto --noextattr --noqtn "$APP" "$VERIFIED_APP"
 xattr -cr "$VERIFIED_APP"
 verify_app_bundle "$VERIFIED_APP" "the loose app's"
 
-SPARKLE_TOOLS="$(find .build/artifacts -type d -path '*/Sparkle/bin' -print -quit)"
-[[ -n "$SPARKLE_TOOLS" && -x "$SPARKLE_TOOLS/sign_update" ]] \
-    || fail "Sparkle's verification tool is missing."
-if $PUBLISHING; then
-    # Sparkle's verifier intentionally reads the matching private key from the
-    # release owner's Keychain. This is the authoritative cryptographic check.
-    "$SPARKLE_TOOLS/sign_update" --account "$ACCOUNT" --verify "$APPCAST"
-else
-    # Routine local builds must not trigger a Keychain prompt. Structural
-    # checks catch a missing/malformed signature block; --publishing detects
-    # edits with the real key-backed verification immediately before upload.
-    grep -Fq '<!-- sparkle-signatures:' "$APPCAST" \
-        || fail "the appcast has no embedded Sparkle signature block."
-    grep -Eq '^edSignature: [A-Za-z0-9+/]+={0,2}$' "$APPCAST" \
-        || fail "the appcast signature block is malformed."
+if ! $APP_STORE; then
+    SPARKLE_TOOLS="$(find .build/artifacts -type d -path '*/Sparkle/bin' -print -quit)"
+    [[ -n "$SPARKLE_TOOLS" && -x "$SPARKLE_TOOLS/sign_update" ]] \
+        || fail "Sparkle's verification tool is missing."
+    if $PUBLISHING; then
+        # Sparkle's verifier intentionally reads the matching private key from the
+        # release owner's Keychain. This is the authoritative cryptographic check.
+        "$SPARKLE_TOOLS/sign_update" --account "$ACCOUNT" --verify "$APPCAST"
+    else
+        # Routine local builds must not trigger a Keychain prompt. Structural
+        # checks catch a missing/malformed signature block; --publishing detects
+        # edits with the real key-backed verification immediately before upload.
+        grep -Fq '<!-- sparkle-signatures:' "$APPCAST" \
+            || fail "the appcast has no embedded Sparkle signature block."
+        grep -Eq '^edSignature: [A-Za-z0-9+/]+={0,2}$' "$APPCAST" \
+            || fail "the appcast signature block is malformed."
+    fi
 fi
 
 EXTRACT_DIR="$CHECK_DIR/Archive"
@@ -119,6 +151,7 @@ if [[ -n "$ARCHIVE_DIFFERENCES" ]]; then
     fail "the archive contents differ from the verified loose app."
 fi
 
+if ! $APP_STORE; then
 ITEM_COUNT="$(xmllint --xpath \
     'count(//*[local-name()="channel"]/*[local-name()="item"])' \
     "$APPCAST" 2>/dev/null)"
@@ -176,6 +209,7 @@ else
     "$SPARKLE_TOOLS/sign_update" \
         --account "$ACCOUNT" \
         --verify "$ARCHIVE" "$FEED_SIGNATURE"
+fi
 fi
 
 echo "Release preflight passed for Louppe $MARKETING_VERSION ($BUILD_NUMBER)."

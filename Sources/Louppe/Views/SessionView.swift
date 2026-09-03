@@ -7,12 +7,14 @@ import AppKit
 /// Hotkey map (README's table must stay in sync with `handleKey`):
 ///   F yes · D no · 0–5 stars · S 100% zoom · A phone-size zoom
 ///   R clear all decisions
-///   Q browser · W info panel · X clipping warnings · E export
-///   Space video play/pause (photo: next)
-///   ←/→ prev/next
+///   Q browser · W info panel · X preview clipping overlay · E export
+///   Space/K video or audio play/pause (photo: Space = next)
+///   ←/→ prev/next (Gallery video: seek −/+ 0.5 seconds) · J/L always prev/next
 ///   ↑/↓ prev/next in the Gallery view · same-column photo in the Grid view
 ///   Tab/G switch view · Z/⌘Z undo · ⌘+/⌘− grid size
-///   ⌘A select all · ⌘⇧←/→ select to first/last · Esc clear selection
+///   ⌘←/→ slower/faster media (photo: prev/next) · ⌘A select all
+///   ⌘⇧←/→ select to first/last
+///   Esc clear selection
 ///   ⌘K Command Palette
 ///   ⌘⌫ trash selection (no confirmation — ⌘Z restores)
 ///   (⇧-click range and ⌘-click add/remove live in the thumbnail views)
@@ -85,12 +87,18 @@ struct SessionView: View {
                 Button("Move to Trash", role: .destructive) {
                     store.performCleanUp(mode)
                 }
+                .keyboardShortcut(.defaultAction)
                 Button("Cancel", role: .cancel) {}
             } message: { mode in
                 Text(cleanUpMessage(for: mode))
             }
             .alert("Clean Up", isPresented: isCleanUpErrorPresented) {
-                Button("OK") { store.cleanUpError = nil }
+                if !store.cleanUpStalePhotos.isEmpty {
+                    Button("Rescan Folder") {
+                        store.rescanAfterCleanUpStaleScan()
+                    }
+                }
+                Button("OK") { store.dismissCleanUpError() }
             } message: {
                 Text(store.cleanUpError ?? "")
             }
@@ -168,7 +176,7 @@ struct SessionView: View {
     private var isCleanUpErrorPresented: Binding<Bool> {
         Binding(
             get: { store.cleanUpError != nil },
-            set: { if !$0 { store.cleanUpError = nil } }
+            set: { if !$0 { store.dismissCleanUpError() } }
         )
     }
 
@@ -182,6 +190,12 @@ struct SessionView: View {
             return "Move \(itemsPhrase(counts.photos)) marked “No” to the Trash?"
         case .keepOnlyYes:
             return "Move \(itemsPhrase(counts.photos)) not marked “Yes” to the Trash?"
+        case .pairedJPEGs:
+            let noun = counts.photos == 1 ? "JPEG from 1 RAW + JPEG pair" : "JPEGs from \(counts.photos) RAW + JPEG pairs"
+            return "Move the \(noun) to the Trash?"
+        case .pairedRAWs:
+            let noun = counts.photos == 1 ? "RAW from 1 RAW + JPEG pair" : "RAWs from \(counts.photos) RAW + JPEG pairs"
+            return "Move the \(noun) to the Trash?"
         }
     }
 
@@ -189,6 +203,23 @@ struct SessionView: View {
         let counts = store.cleanUpCounts(for: mode)
         let files = counts.files == 1 ? "1 file" : "\(counts.files) files"
         let space = ByteCountFormatter.string(fromByteCount: counts.bytes, countStyle: .file)
+        if mode == .pairedJPEGs || mode == .pairedRAWs {
+            let removed = mode == .pairedJPEGs ? "JPEG" : "RAW"
+            let retained = mode == .pairedJPEGs ? "RAW" : "JPEG"
+            var parts = [
+                "\(files) (about \(space)) will be moved to the Trash. The matching \(retained) files will stay in the folder.",
+                "Immediately afterward, you can undo during this open session while the files remain in the Trash. Emptying the Trash permanently deletes them and may reclaim approximately that space."
+            ]
+            switch store.cleanUpScope {
+            case .all:
+                break
+            case .filtered:
+                parts.append("Only paired \(removed) files shown by the current filter are included.")
+            case .selected:
+                parts.append("Only paired \(removed) files in the current selection are included.")
+            }
+            return parts.joined(separator: "\n")
+        }
         var parts = [
             "\(files) will be moved to the Trash (a RAW+JPEG pair counts as two), totaling about \(space). Immediately afterward, you can undo during this open session while the files remain in the Trash. Emptying the Trash permanently deletes them and may reclaim approximately that space."
         ]
@@ -199,6 +230,8 @@ struct SessionView: View {
             parts.append("Among the items being considered, items marked “Yes” and unrated items stay in the folder.")
         case .keepOnlyYes:
             parts.append("Among the items being considered, only those marked “Yes” stay in the folder.")
+        case .pairedJPEGs, .pairedRAWs:
+            break // These modes return through their dedicated message above.
         }
         // Spell out the rating-based scope so nothing outside it is trashed
         // (or spared) by surprise. A direct selection is already explicit.
@@ -242,6 +275,9 @@ struct SessionView: View {
         if store.selectedIndices.count > 1 {
             text += "  ·  \(store.selectedIndices.count) selected"
         }
+        if store.isGroupedReviewActive {
+            text += "  ·  grouped review"
+        }
         return text
     }
 
@@ -257,42 +293,91 @@ struct SessionView: View {
                 .controlSize(.small)
                 .opacity(
                     store.fullImageLoads > 0
-                        || store.isChangingRawJPEGPairingMode ? 1 : 0
+                        || store.isChangingRawJPEGPairingMode
+                        || store.isDuplicateBurstAnalysisRunning ? 1 : 0
                 )
                 .accessibilityLabel(
-                    store.isChangingRawJPEGPairingMode
+                    store.isDuplicateBurstAnalysisRunning
+                        ? "Analyzing duplicate and burst groups locally"
+                        : store.isChangingRawJPEGPairingMode
                         ? "Preparing separate JPEG metadata"
                         : "Loading photo preview"
                 )
                 .accessibilityHidden(
                     store.fullImageLoads == 0
                         && !store.isChangingRawJPEGPairingMode
+                        && !store.isDuplicateBurstAnalysisRunning
                 )
         }
         .help("Review progress and decision totals")
     }
 
     private var mainContent: some View {
-        HStack(spacing: 0) {
-            Group {
-                switch store.viewMode {
-                case .gallery:
-                    GalleryView(store: store)
-                case .grid:
-                    GridView(store: store)
+        VStack(spacing: 0) {
+            if store.isGroupedReviewActive {
+                groupedReviewBanner
+                Divider()
+            }
+            HStack(spacing: 0) {
+                Group {
+                    switch store.viewMode {
+                    case .gallery:
+                        GalleryView(store: store)
+                    case .grid:
+                        GridView(store: store)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // The Info panel is shared by both modes. Keeping it outside the
+                // mode switch preserves its metadata/histogram tasks instead of
+                // tearing them down and reopening the RAW on every toggle.
+                if store.showMetadataPanel, let item = store.currentItem {
+                    Divider()
+                    MetadataPanel(store: store, item: item)
+                        .frame(width: 280)
+                        .transition(.move(edge: .trailing))
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
 
-            // The Info panel is shared by both modes. Keeping it outside the
-            // mode switch preserves its metadata/histogram tasks instead of
-            // tearing them down and reopening the RAW on every toggle.
-            if store.showMetadataPanel, let item = store.currentItem {
-                Divider()
-                MetadataPanel(store: store, item: item)
-                    .frame(width: 280)
-                    .transition(.move(edge: .trailing))
+    private var groupedReviewBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: groupedReviewSymbol)
+                .foregroundStyle(Color.louppeAccent)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.groupedReviewMode.analysisTitle)
+                    .font(.subheadline.weight(.semibold))
+                Text(
+                    "\(store.groupedReviewExplanation) \(store.groupedReviewGroupCount) "
+                        + (store.groupedReviewGroupCount == 1 ? "group is" : "groups are")
+                        + " visible. Review only — nothing is changed automatically."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
             }
+            Spacer(minLength: 8)
+            Button("Normal Review") {
+                store.exitGroupedReview()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Return to the normal filtered and sorted media list")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.appBackground)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var groupedReviewSymbol: String {
+        switch store.groupedReviewMode {
+        case .exactDuplicates: return "doc.on.doc"
+        case .likelySimilarPhotos: return "photo.on.rectangle.angled"
+        case .captureBursts: return "rectangle.stack"
+        case .off: return "rectangle.3.group"
         }
     }
 
@@ -642,6 +727,39 @@ struct SessionView: View {
             }
         }
 
+        // ⌘← / ⌘→ — slower/faster playback for playable media. On a photo,
+        // retain the adjacent-item shortcut. Native AVKit controls keep the
+        // same chord when they own directional focus; the playback controller
+        // observes their resulting rate so Info stays synchronized.
+        if context.acceptsNavigationShortcuts,
+           modifiers == [.command] {
+            switch event.keyCode {
+            case 123:
+                if !store.adjustCurrentPlayableMediaPlaybackRate(
+                    forward: false
+                ) { store.goPrevious() }
+                return true                                              // ⌘←
+            case 124:
+                if !store.adjustCurrentPlayableMediaPlaybackRate(
+                    forward: true
+                ) { store.goNext() }
+                return true                                              // ⌘→
+            default: break
+            }
+        }
+
+        // ⇧← / ⇧→ — make a larger inspection jump without stealing Shift-
+        // arrow range navigation from still media, Grid, or native controls.
+        if context.acceptsNavigationShortcuts,
+           modifiers == [.shift],
+           store.canSeekCurrentVideo {
+            switch event.keyCode {
+            case 123: store.seekCurrentVideo(by: -5); return true       // ⇧←
+            case 124: store.seekCurrentVideo(by: 5); return true        // ⇧→
+            default: break
+            }
+        }
+
         // ⌘A — select all photos that pass the filter.
         if acceptsAppCommand,
            modifiers == [.command],
@@ -651,16 +769,27 @@ struct SessionView: View {
         }
 
         guard context.acceptsReviewShortcuts else { return false }
+
+        // J/L are review letters, not native control-navigation keys. They
+        // always move between items after an ordinary control or AVKit player
+        // has focus; text editing and modal UI were excluded above.
+        if acceptsReviewModifiers {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "j": store.goPrevious(); return true
+            case "l": store.goNext(); return true
+            default: break
+            }
+        }
         switch event.keyCode {
         case 123:
             guard context.acceptsNavigationShortcuts,
                   acceptsNavigationModifiers else { return false }
-            store.goPrevious()
+            store.performHorizontalReviewAction(forward: false)
             return true                                      // ←
         case 124:
             guard context.acceptsNavigationShortcuts,
                   acceptsNavigationModifiers else { return false }
-            store.goNext()
+            store.performHorizontalReviewAction(forward: true)
             return true                                      // →
         case 126:                                             // ↑
             guard context.acceptsNavigationShortcuts,
@@ -690,7 +819,7 @@ struct SessionView: View {
         case 49:                                             // Space
             guard context.acceptsNavigationShortcuts,
                   acceptsNavigationModifiers else { return false }
-            if let item = store.currentItem, item.isVideo {
+            if let item = store.currentItem, item.isPlayableMedia {
                 store.videoPlayback.toggle(item)
             } else {
                 store.goNext()
@@ -727,6 +856,7 @@ struct SessionView: View {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "f": store.rate(.yes); return true
         case "d": store.rate(.no); return true
+        case "k": return store.toggleCurrentPlayableMedia()
         case "q": withAnimation { store.toggleBrowser() }; return true
         case "w": withAnimation { store.showMetadataPanel.toggle() }; return true
         case "x": return store.toggleClippingWarnings()
@@ -1095,7 +1225,7 @@ private struct SessionKeyEventMonitor: NSViewRepresentable {
     }
 }
 
-/// The Clean Up menu body — the three trash actions plus the inline scope —
+/// The Clean Up menu body — the trash actions plus the inline scope —
 /// shared by the toolbar menu and the File menu so the two never drift.
 struct CleanUpMenuItems: View {
     @ObservedObject var store: SessionStore
@@ -1106,8 +1236,8 @@ struct CleanUpMenuItems: View {
         }
         .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .selection))
         Divider()
-        Picker("For “No” / “Yes” Actions", selection: $store.cleanUpScope) {
-            cleanUpScopeLabel("All Photos", scope: .all)
+        Picker("Scope for Actions Below", selection: $store.cleanUpScope) {
+            cleanUpScopeLabel("All Media", scope: .all)
                 .tag(CleanUpScope.all)
             cleanUpScopeLabel("Filtered", scope: .filtered)
                 .tag(CleanUpScope.filtered)
@@ -1125,6 +1255,15 @@ struct CleanUpMenuItems: View {
             store.requestCleanUp(.keepOnlyYes)
         }
         .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .keepOnlyYes))
+        Divider()
+        Button("Move Paired JPEGs to Trash…") {
+            store.requestCleanUp(.pairedJPEGs)
+        }
+        .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .pairedJPEGs))
+        Button("Move Paired RAWs to Trash…") {
+            store.requestCleanUp(.pairedRAWs)
+        }
+        .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .pairedRAWs))
     }
 
     private func cleanUpScopeLabel(_ title: String, scope: CleanUpScope) -> Text {

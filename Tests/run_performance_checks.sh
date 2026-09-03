@@ -27,11 +27,13 @@ swiftc \
     Sources/Louppe/DurableFileIO.swift \
     Sources/Louppe/SourceOrganizationStorageSafety.swift \
     Sources/Louppe/FileOperationJournal.swift \
+    Sources/Louppe/DuplicateBurstAnalysis.swift \
     Sources/Louppe/CleanUpWorker.swift \
     Sources/Louppe/ExportWorker.swift \
     Sources/Louppe/ExportDestinationValidator.swift \
     Sources/Louppe/SourceOrganization.swift \
     Sources/Louppe/SourceOrganizationWorker.swift \
+    Sources/Louppe/SecurityScopedAccess.swift \
     Sources/Louppe/SessionPersistence.swift \
     Tests/PerformanceChecks/XMPPublicationStubs.swift \
     Sources/Louppe/XMP/XMPSidecarResolver.swift \

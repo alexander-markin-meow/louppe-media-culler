@@ -1,5 +1,43 @@
 import Foundation
 import AppKit
+import CoreImage
+
+enum HistogramAnalysisSource: Equatable, Sendable {
+    case renderedPreview
+    case rawDecode
+
+    var shortLabel: String {
+        switch self {
+        case .renderedPreview: return "Rendered"
+        case .rawDecode: return "RAW"
+        }
+    }
+
+    var detailLabel: String {
+        switch self {
+        case .renderedPreview: return "Rendered image estimate"
+        case .rawDecode: return "RAW decode"
+        }
+    }
+
+    var shadowBinUpperBound: Int {
+        switch self {
+        case .renderedPreview:
+            return Int(HistogramAnalysis.nearBlackUpperBound)
+        case .rawDecode:
+            return Int(RawHistogramProcessor.shadowLuminanceUpperBound * 255)
+        }
+    }
+
+    var highlightBinLowerBound: Int {
+        switch self {
+        case .renderedPreview:
+            return Int(HistogramAnalysis.nearWhiteLowerBound)
+        case .rawDecode:
+            return Int(RawHistogramProcessor.highlightLuminanceLowerBound * 255)
+        }
+    }
+}
 
 /// Photo-wide luminance distribution plus the two warning-zone populations
 /// used by both the Info panel and clipping-warning overlay.
@@ -199,11 +237,11 @@ final class HistogramPipeline: @unchecked Sendable {
     static let resultCacheLimit = 256
 
     private final class PendingAnalysis {
-        var waiters: [CheckedContinuation<HistogramAnalysis?, Never>]
+        var waiters: [UUID: CheckedContinuation<HistogramAnalysis?, Never>]
         let operation: BlockOperation
 
         init(
-            waiters: [CheckedContinuation<HistogramAnalysis?, Never>],
+            waiters: [UUID: CheckedContinuation<HistogramAnalysis?, Never>],
             operation: BlockOperation
         ) {
             self.waiters = waiters
@@ -229,37 +267,49 @@ final class HistogramPipeline: @unchecked Sendable {
         guard item.mediaKind == .photo, item.isSupported else { return nil }
         let key = ImagePipeline.cacheKey(for: item)
         let url = item.primaryURL
-        return await withCheckedContinuation { continuation in
-            lock.lock()
-            if let cached = cache[key] {
-                touch(key)
-                lock.unlock()
-                continuation.resume(returning: cached)
-                return
-            }
-            if let pending = inFlight[key] {
-                pending.waiters.append(continuation)
-                lock.unlock()
-                return
-            }
-
-            let operation = BlockOperation { [weak self] in
-                guard let self else { return }
-                let result = autoreleasepool {
-                    ImagePipeline.decodeImage(
-                        url: url,
-                        maxPixel: Self.analysisPixelSize
-                    ).flatMap(ClippingWarningProcessor.analyze)
+        let requestID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                guard !Task.isCancelled else {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
                 }
-                self.finish(key: key, result: result)
+                if let cached = cache[key] {
+                    touch(key)
+                    lock.unlock()
+                    continuation.resume(returning: cached)
+                    return
+                }
+                if let pending = inFlight[key] {
+                    pending.waiters[requestID] = continuation
+                    lock.unlock()
+                    return
+                }
+
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak self, weak operation] in
+                    guard let self, let operation, !operation.isCancelled
+                    else { return }
+                    let result = autoreleasepool {
+                        ImagePipeline.decodeImage(
+                            url: url,
+                            maxPixel: Self.analysisPixelSize
+                        ).flatMap(ClippingWarningProcessor.analyze)
+                    }
+                    self.finish(key: key, result: result)
+                }
+                operation.qualityOfService = .userInitiated
+                inFlight[key] = PendingAnalysis(
+                    waiters: [requestID: continuation],
+                    operation: operation
+                )
+                lock.unlock()
+                queue.addOperation(operation)
             }
-            operation.qualityOfService = .userInitiated
-            inFlight[key] = PendingAnalysis(
-                waiters: [continuation],
-                operation: operation
-            )
-            lock.unlock()
-            queue.addOperation(operation)
+        } onCancel: { [weak self] in
+            self?.cancelWaiter(requestID, for: key)
         }
     }
 
@@ -277,11 +327,345 @@ final class HistogramPipeline: @unchecked Sendable {
                 cache.removeValue(forKey: removed)
             }
         }
-        let waiters = pending.waiters
+        let waiters = pending.waiters.values
         lock.unlock()
         for waiter in waiters {
             waiter.resume(returning: result)
         }
+    }
+
+    /// Dropping the final waiter also drops the queued analysis. A running
+    /// ImageIO decode is allowed to finish safely, but it cannot publish a
+    /// stale result because its in-flight entry has already been removed.
+    private func cancelWaiter(_ requestID: UUID, for key: String) {
+        lock.lock()
+        guard let pending = inFlight[key],
+              let waiter = pending.waiters.removeValue(forKey: requestID)
+        else {
+            lock.unlock()
+            return
+        }
+        if pending.waiters.isEmpty {
+            inFlight.removeValue(forKey: key)
+            pending.operation.cancel()
+        }
+        lock.unlock()
+        waiter.resume(returning: nil)
+    }
+
+    private func touch(_ key: String) {
+        cacheOrder.removeAll { $0 == key }
+        cacheOrder.append(key)
+    }
+}
+
+/// Luminance measurement for a bounded, linear-response Core Image RAW
+/// decode. The decode intentionally differs from ImagePipeline's fast
+/// embedded-preview path and never produces a source-resolution bitmap.
+enum RawHistogramProcessor {
+    static let shadowLuminanceUpperBound: Float = 0.002
+    static let highlightLuminanceLowerBound: Float = 0.995
+
+    private static let outputColorSpace = CGColorSpace(
+        name: CGColorSpace.extendedLinearSRGB
+    )
+    private static let context: CIContext? = {
+        guard let outputColorSpace else { return nil }
+        return CIContext(options: [
+            .useSoftwareRenderer: true,
+            .workingColorSpace: outputColorSpace,
+            .workingFormat: CIFormat.RGBAh,
+            .highQualityDownsample: false,
+        ])
+    }()
+
+    static func analyze(
+        rgba pixels: [Float],
+        width: Int,
+        height: Int
+    ) -> HistogramAnalysis? {
+        guard width > 0, height > 0,
+              width <= Int.max / height,
+              width * height <= Int.max / 4,
+              pixels.count == width * height * 4
+        else { return nil }
+
+        var bins = Array(repeating: 0, count: 256)
+        var sampleCount = 0
+        var shadowCount = 0
+        var highlightCount = 0
+
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            let red = pixels[offset]
+            let green = pixels[offset + 1]
+            let blue = pixels[offset + 2]
+            let alpha = pixels[offset + 3]
+            guard alpha > 0,
+                  red.isFinite, green.isFinite, blue.isFinite
+            else { continue }
+
+            // Core Image's default working space is linear-light. Rendering
+            // to extended-linear sRGB keeps values outside 0...1 available;
+            // only the chart bin is clamped, while clipping counts use the
+            // actual decoded value.
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            let chartValue = min(max(luminance, 0), 1)
+            let bin = min(Int(chartValue * 255), 255)
+            bins[bin] += 1
+            sampleCount += 1
+            if luminance <= shadowLuminanceUpperBound {
+                shadowCount += 1
+            }
+            if luminance >= highlightLuminanceLowerBound {
+                highlightCount += 1
+            }
+        }
+
+        guard sampleCount > 0 else { return nil }
+        return HistogramAnalysis(
+            bins: bins,
+            sampleCount: sampleCount,
+            shadowCount: shadowCount,
+            highlightCount: highlightCount
+        )
+    }
+
+    static func analyze(url: URL) -> HistogramAnalysis? {
+        guard let outputColorSpace, let context,
+              let filter = CIRAWFilter(imageURL: url)
+        else { return nil }
+
+        let nativeSize = filter.nativeSize
+        let nativeMaximum = max(nativeSize.width, nativeSize.height)
+        guard nativeMaximum.isFinite, nativeMaximum > 0 else { return nil }
+
+        filter.isDraftModeEnabled = false
+        filter.scaleFactor = Float(min(
+            1,
+            RawHistogramPipeline.analysisPixelSize / nativeMaximum
+        ))
+        // Disable the presentation-oriented tone curves. The result is still
+        // a demosaiced, white-balanced Core Image RAW decode—not a proprietary
+        // per-photosite camera histogram—but is substantially closer to the
+        // RAW data than the embedded rendered preview.
+        filter.boostAmount = 0
+        if filter.isLocalToneMapSupported {
+            filter.localToneMapAmount = 0
+        }
+        if #available(macOS 26.0, *),
+           filter.isHighlightRecoverySupported {
+            filter.isHighlightRecoveryEnabled = false
+        }
+        filter.extendedDynamicRangeAmount = 1
+        filter.isGamutMappingEnabled = false
+
+        guard var image = filter.outputImage else { return nil }
+        var extent = image.extent.integral
+        guard extent.width.isFinite, extent.height.isFinite,
+              extent.width > 0, extent.height > 0
+        else { return nil }
+
+        // Some decoders round their native scale. Apply one final lazy scale
+        // if needed so the render allocation remains strictly bounded.
+        let maximum = max(extent.width, extent.height)
+        if maximum > RawHistogramPipeline.analysisPixelSize {
+            let scale = RawHistogramPipeline.analysisPixelSize / maximum
+            image = image.transformed(
+                by: CGAffineTransform(scaleX: scale, y: scale),
+                highQualityDownsample: false
+            )
+            extent = image.extent.integral
+        }
+
+        let width = Int(ceil(extent.width))
+        let height = Int(ceil(extent.height))
+        guard width > 0, height > 0,
+              width <= Int(RawHistogramPipeline.analysisPixelSize) + 1,
+              height <= Int(RawHistogramPipeline.analysisPixelSize) + 1,
+              width <= Int.max / height,
+              width * height <= Int.max / 4
+        else { return nil }
+
+        var pixels = Array(repeating: Float(0), count: width * height * 4)
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            context.render(
+                image,
+                toBitmap: baseAddress,
+                rowBytes: width * 4 * MemoryLayout<Float>.size,
+                bounds: CGRect(
+                    x: extent.minX,
+                    y: extent.minY,
+                    width: CGFloat(width),
+                    height: CGFloat(height)
+                ),
+                format: .RGBAf,
+                colorSpace: outputColorSpace
+            )
+        }
+        return analyze(rgba: pixels, width: width, height: height)
+    }
+}
+
+/// Delayed, cancellable RAW-only analysis. One utility operation can run at a
+/// time, duplicate requests share it, and only small content-revision-keyed
+/// histogram values survive in the LRU cache.
+final class RawHistogramPipeline: @unchecked Sendable {
+    typealias Decoder = @Sendable (URL) -> HistogramAnalysis?
+
+    static let shared = RawHistogramPipeline()
+    static let analysisPixelSize: CGFloat = 1024
+    static let analysisDelayNanoseconds: UInt64 = 700_000_000
+    static let resultCacheLimit = 128
+
+    private final class PendingAnalysis {
+        var waiters: [UUID: CheckedContinuation<HistogramAnalysis?, Never>]
+        let operation: BlockOperation
+
+        init(
+            waiters: [UUID: CheckedContinuation<HistogramAnalysis?, Never>],
+            operation: BlockOperation
+        ) {
+            self.waiters = waiters
+            self.operation = operation
+        }
+    }
+
+    private let queue: OperationQueue
+    private let delayNanoseconds: UInt64
+    private let cacheLimit: Int
+    private let decoder: Decoder
+    private let lock = NSLock()
+    private var cache: [String: HistogramAnalysis] = [:]
+    private var cacheOrder: [String] = []
+    private var inFlight: [String: PendingAnalysis] = [:]
+
+    init(
+        delayNanoseconds: UInt64 = analysisDelayNanoseconds,
+        resultCacheLimit: Int = resultCacheLimit,
+        decoder: @escaping Decoder = { url in
+            RawHistogramProcessor.analyze(url: url)
+        }
+    ) {
+        self.delayNanoseconds = delayNanoseconds
+        self.cacheLimit = max(resultCacheLimit, 1)
+        self.decoder = decoder
+        let queue = OperationQueue()
+        queue.name = "louppe.histogram.raw"
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .utility
+        self.queue = queue
+    }
+
+    static func supportsAnalysis(for item: PhotoItem) -> Bool {
+        item.mediaKind == .photo && item.isSupported && item.isRaw
+    }
+
+    func cachedAnalysis(for item: PhotoItem) -> HistogramAnalysis? {
+        guard Self.supportsAnalysis(for: item) else { return nil }
+        let key = ImagePipeline.cacheKey(for: item)
+        lock.lock()
+        let result = cache[key]
+        if result != nil { touch(key) }
+        lock.unlock()
+        return result
+    }
+
+    func analysis(for item: PhotoItem) async -> HistogramAnalysis? {
+        guard Self.supportsAnalysis(for: item), !Task.isCancelled else {
+            return nil
+        }
+        if let cached = cachedAnalysis(for: item) { return cached }
+
+        do {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        } catch {
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        if let cached = cachedAnalysis(for: item) { return cached }
+
+        let key = ImagePipeline.cacheKey(for: item)
+        let url = item.primaryURL
+        let requestID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                guard !Task.isCancelled else {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                if let cached = cache[key] {
+                    touch(key)
+                    lock.unlock()
+                    continuation.resume(returning: cached)
+                    return
+                }
+                if let pending = inFlight[key] {
+                    pending.waiters[requestID] = continuation
+                    lock.unlock()
+                    return
+                }
+
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak self, weak operation] in
+                    guard let self, let operation, !operation.isCancelled
+                    else { return }
+                    let result = autoreleasepool {
+                        self.decoder(url)
+                    }
+                    self.finish(key: key, result: result)
+                }
+                operation.qualityOfService = .utility
+                operation.queuePriority = .low
+                inFlight[key] = PendingAnalysis(
+                    waiters: [requestID: continuation],
+                    operation: operation
+                )
+                lock.unlock()
+                queue.addOperation(operation)
+            }
+        } onCancel: { [weak self] in
+            self?.cancelWaiter(requestID, for: key)
+        }
+    }
+
+    private func finish(key: String, result: HistogramAnalysis?) {
+        lock.lock()
+        guard let pending = inFlight.removeValue(forKey: key) else {
+            lock.unlock()
+            return
+        }
+        if let result {
+            cache[key] = result
+            touch(key)
+            while cacheOrder.count > cacheLimit {
+                let removed = cacheOrder.removeFirst()
+                cache.removeValue(forKey: removed)
+            }
+        }
+        let waiters = pending.waiters.values
+        lock.unlock()
+        for waiter in waiters {
+            waiter.resume(returning: result)
+        }
+    }
+
+    private func cancelWaiter(_ requestID: UUID, for key: String) {
+        lock.lock()
+        guard let pending = inFlight[key],
+              let waiter = pending.waiters.removeValue(forKey: requestID)
+        else {
+            lock.unlock()
+            return
+        }
+        if pending.waiters.isEmpty {
+            inFlight.removeValue(forKey: key)
+            pending.operation.cancel()
+        }
+        lock.unlock()
+        waiter.resume(returning: nil)
     }
 
     private func touch(_ key: String) {

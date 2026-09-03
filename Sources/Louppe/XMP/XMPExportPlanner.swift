@@ -211,8 +211,8 @@ enum XMPExportPlanner {
             // change, so an abandoned pass must stop instead of finishing a
             // whole-session scan behind the newer one.
             try Task.checkCancellation()
-            // Videos remain ordinary media exports, but the first XMP release
-            // deliberately neither creates nor transfers video sidecars.
+            // Video and audio remain ordinary media exports, but the first
+            // XMP release deliberately neither creates nor transfers their sidecars.
             guard family.disposition != .unsupportedMedia else { continue }
             if family.canonicalSidecar?.entryExists == true {
                 recognizedPacketCount += 1
@@ -376,7 +376,7 @@ enum XMPExportPlanner {
             case .unsupportedMedia:
                 preparedFamilies.append(base.family(
                     category: .unsupportedMedia,
-                    message: "Video media will export without XMP."
+                    message: "Video and audio media export without XMP."
                 ))
             case .publish:
                 guard let canonical = family.canonicalSidecar,

@@ -144,6 +144,99 @@ enum VideoMetadataExtractor {
     }
 }
 
+/// Scan-cached information for a standalone audio file. Like movie metadata,
+/// this is loaded only by FolderScanner's bounded background workers.
+struct AudioScanInfo: Sendable {
+    let duration: TimeInterval?
+    let codec: String?
+    let isPlayable: Bool
+}
+
+enum AudioMetadataExtractor {
+    private final class ResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: AudioScanInfo?
+
+        func store(_ value: AudioScanInfo) {
+            lock.lock()
+            self.value = value
+            lock.unlock()
+        }
+
+        func load() -> AudioScanInfo? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
+    static func scanInfo(for url: URL) -> AudioScanInfo {
+        let box = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = Task.detached(priority: .userInitiated) {
+            box.store(await loadScanInfo(for: url))
+            semaphore.signal()
+        }
+        guard semaphore.wait(timeout: .now() + 15) == .success else {
+            task.cancel()
+            return unavailable
+        }
+        return box.load() ?? unavailable
+    }
+
+    private static func loadScanInfo(for url: URL) async -> AudioScanInfo {
+        let asset = AVURLAsset(url: url)
+        do {
+            async let loadedDuration = asset.load(.duration)
+            async let loadedPlayable = asset.load(.isPlayable)
+            let tracks = try await asset.loadTracks(withMediaType: .audio)
+            let durationSeconds = try await loadedDuration.seconds
+            let duration = VideoMetadataExtractor.sanitizedDuration(
+                durationSeconds
+            )
+            guard let track = tracks.first else { return unavailable }
+            let formatDescriptions = try await track.load(.formatDescriptions)
+            return AudioScanInfo(
+                duration: duration,
+                codec: formatDescriptions.first.map(codecLabel),
+                isPlayable: try await loadedPlayable
+            )
+        } catch {
+            return unavailable
+        }
+    }
+
+    private static let unavailable = AudioScanInfo(
+        duration: nil,
+        codec: nil,
+        isPlayable: false
+    )
+
+    private static func codecLabel(_ description: CMFormatDescription) -> String {
+        let code = CMFormatDescriptionGetMediaSubType(description)
+        let bytes: [UInt8] = [
+            UInt8((code >> 24) & 0xff),
+            UInt8((code >> 16) & 0xff),
+            UInt8((code >> 8) & 0xff),
+            UInt8(code & 0xff),
+        ]
+        let fourCC = String(bytes: bytes, encoding: .macOSRoman)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fourCC, !fourCC.isEmpty else {
+            return String(format: "0x%08X", code)
+        }
+        switch fourCC.lowercased() {
+        case "aac": return "AAC"
+        case "alac": return "Apple Lossless"
+        case "flac": return "FLAC"
+        case "lpcm": return "Linear PCM"
+        case "mp3": return "MP3"
+        case "opus": return "Opus"
+        default: return fourCC.uppercased()
+        }
+    }
+}
+
 enum MediaDurationFormat {
     static func display(_ seconds: TimeInterval?) -> String {
         guard let rounded = MediaNumeric.roundedNonnegativeInt(seconds)

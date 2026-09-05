@@ -54,7 +54,7 @@ enum SourceOrganizationScope: String, CaseIterable, Hashable, Sendable {
 
     var label: String {
         switch self {
-        case .all: return "All"
+        case .all: return "All Media"
         case .filtered: return "Filtered"
         case .selected: return "Selected"
         }

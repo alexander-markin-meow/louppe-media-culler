@@ -40,6 +40,8 @@ struct OrganizeSourceView: View {
         }
         .frame(width: 680, height: 650)
         .background(Color.appBackground)
+        .tint(Color.louppeAccent)
+        .interactiveDismissDisabled(store.isFileOperationRunning)
         .onAppear { refreshPlan() }
         .onDisappear {
             planningCancelFlag?.cancel()
@@ -70,7 +72,7 @@ struct OrganizeSourceView: View {
                         Picker("Apply to", selection: $scope) {
                             ForEach(SourceOrganizationScope.allCases, id: \.self) {
                                 value in
-                                Text("\(value.label) \(store.organizationScopeCount(for: value))")
+                                Text("\(value.label) (\(store.organizationScopeCount(for: value)))")
                                     .tag(value)
                             }
                         }
@@ -486,6 +488,7 @@ struct OrganizeSourceView: View {
                 store.isOrganizePresented = false
             }
             .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
             .disabled(store.isFileOperationRunning)
         }
         .padding(30)

@@ -25,15 +25,13 @@ struct XMPConflictResolverView: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            Text("Resolve RAW + JPEG Metadata")
-                .font(.title2.bold())
+        SheetForm(title: "Resolve RAW + JPEG Metadata") {
             Text("These same-name files have different Louppe metadata. Capture One and other sidecar workflows can store only one set in their shared XMP.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
-            ScrollView {
+            Group {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(conflicts) { conflict in
                         conflictRow(conflict)
@@ -42,7 +40,6 @@ struct XMPConflictResolverView: View {
                 }
                 .padding(.vertical, 2)
             }
-            .frame(minHeight: 210, maxHeight: 430)
 
             HStack {
                 Text("Apply the same choice to all conflicts")
@@ -59,9 +56,11 @@ struct XMPConflictResolverView: View {
             Text("Choosing RAW or JPEG changes the other file’s Louppe decision, stars, and color. The change is one undoable Louppe action; XMP is written only after a new plan is reviewed and confirmed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
+        } actions: {
             HStack {
+                Spacer()
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.cancelAction)
                 Button("Apply Resolutions") {
@@ -73,11 +72,11 @@ struct XMPConflictResolverView: View {
                     })
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
                 .disabled(!hasActionableChoice)
             }
         }
-        .padding(24)
-        .frame(width: 620)
+        .frame(width: 640, height: 620)
     }
 
     private func conflictRow(
@@ -88,6 +87,9 @@ struct XMPConflictResolverView: View {
         return VStack(alignment: .leading, spacing: 9) {
             Text(conflictTitle(conflict))
                 .font(.headline)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .help(conflictTitle(conflict))
 
             metadataHeader
             if let raw {
@@ -124,7 +126,7 @@ struct XMPConflictResolverView: View {
             Text("Type")
                 .frame(width: 38, alignment: .leading)
             Text("File")
-                .frame(width: 158, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text("Decision")
                 .frame(width: 92, alignment: .leading)
             Text("Stars")
@@ -148,7 +150,7 @@ struct XMPConflictResolverView: View {
             Text(member.filename)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 158, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .help(member.filename)
             decisionValue(
                 member.metadata.rating,

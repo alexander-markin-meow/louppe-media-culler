@@ -41,6 +41,8 @@ struct FilterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Filter")
+                .font(.headline)
             searchField
             Divider()
 
@@ -103,6 +105,8 @@ struct FilterView: View {
         .toggleStyle(.checkbox)
         .padding(14)
         .frame(width: 340, height: 560)
+        .background(Color.appBackground)
+        .tint(Color.louppeAccent)
         .onAppear { syncAllSettingDrafts() }
         .onDisappear {
             settingCommitTask?.cancel()
@@ -602,6 +606,8 @@ struct FilterView: View {
                 syncAllSettingDrafts()
             }
             .disabled(!store.filterCanReset)
+            Button("Done") { store.isFilterPresented = false }
+                .keyboardShortcut(.cancelAction)
         }
     }
 

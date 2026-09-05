@@ -5,7 +5,11 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.8.0 (10) — 2026-09-03
+## 1.8.0 (10) — 2026-09-04
+
+- Standardized Filter and Sort popovers and Export/XMP dialogs with consistent
+  spacing, purple primary actions, and scrollable setup and review content.
+  Export keeps its header and actions visible as options grow.
 
 - Polished Organize Source Folder with a stable header and action bar, one
   scrollable setup area, clearer folder-level guidance, and wrapping or

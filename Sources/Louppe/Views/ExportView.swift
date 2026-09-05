@@ -78,8 +78,10 @@ struct ExportView: View {
                 }
             }
         }
-        .padding(24)
-        .frame(width: isRoutingCopies ? 640 : 500)
+        .padding(usesFormLayout ? 0 : 24)
+        .frame(width: 640, height: 620)
+        .background(Color.appBackground)
+        .tint(Color.louppeAccent)
         .interactiveDismissDisabled(isWorking)
         .confirmationDialog(
             "Stop copying?",
@@ -146,6 +148,20 @@ struct ExportView: View {
         }
     }
 
+    private var usesFormLayout: Bool {
+        if mode == .metadataXMP {
+            switch store.xmpPublicationState {
+            case .idle, .awaitingConfirmation: return true
+            default: return false
+            }
+        }
+        switch exporter.state {
+        case .summary, .awaitingXMPConfirmation, .awaitingMultiDestinationConfirmation:
+            return true
+        default: return false
+        }
+    }
+
     private var isWorking: Bool {
         if store.isXMPPublicationRunning { return true }
         if case .preparingXMP = exporter.state { return true }
@@ -159,10 +175,7 @@ struct ExportView: View {
         if isRoutingCopies && mode == .copy {
             routingSummaryView
         } else {
-        VStack(spacing: 14) {
-            Text("Export")
-                .font(.title2.bold())
-
+        SheetForm(title: "Export") {
             Picker("Mode", selection: $mode) {
                 Text("Copy").tag(ExportMode.copy)
                 Text("Move").tag(ExportMode.move)
@@ -328,27 +341,27 @@ struct ExportView: View {
             Text(exportDescription)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
             if mode == .move {
                 Text("Moved items leave the source folder and this session. This can't be undone in Louppe — the files stay safe at the destination.")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
             if selectionSnapshot.mixedDecisionCount > 0 {
                 Text("\(selectionSnapshot.mixedDecisionCount) included RAW+JPEG pair\(selectionSnapshot.mixedDecisionCount == 1 ? " has" : "s have") different file decisions and \(selectionSnapshot.mixedDecisionCount == 1 ? "is" : "are") treated as undecided.")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
             if scopeMixedStarCount > 0 || scopeMixedColorCount > 0 {
                 Text(mixedMetadataNote)
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
             if scopeRatingCount(.undecided) > 0 && !selectedRatings.contains(.undecided) {
@@ -358,10 +371,12 @@ struct ExportView: View {
                     .foregroundStyle(.orange)
             }
 
+        } actions: {
             HStack {
+                Spacer()
                 Button("Cancel") { store.isExportPresented = false }
                     .keyboardShortcut(.cancelAction)
-                Button(mode == .metadataXMP ? "Write Sidecars" : "Choose Destination…") {
+                Button(mode == .metadataXMP ? "Review Sidecars…" : "Choose Destination…") {
                     if mode == .metadataXMP {
                         store.prepareXMPPublication(
                             selected: selectionSnapshot.selectedItems(from: store.items),
@@ -394,6 +409,7 @@ struct ExportView: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
                 .disabled(
                     selectionSnapshot.itemCount == 0
                         || (mode != .metadataXMP && isCheckingExistingXMP)
@@ -414,10 +430,7 @@ struct ExportView: View {
     // MARK: - Multi-destination Copy
 
     private var routingSummaryView: some View {
-        VStack(spacing: 14) {
-            Text("Route Copies")
-                .font(.title2.bold())
-
+        SheetForm(title: "Route Copies") {
             Picker("Mode", selection: $mode) {
                 Text("Copy").tag(ExportMode.copy)
                 Text("Move").tag(ExportMode.move)
@@ -431,12 +444,12 @@ struct ExportView: View {
 
             exportScopeRow
 
-            Text("Each route has one explicit condition and one separately chosen folder. Items matching no route stay in the source folder. Nothing is moved or deleted.")
+            Text("Choose which media to copy into each folder. Items that match no route stay in the source folder.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
-            ScrollView {
+            Group {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach($routingRoutes) { $route in
                         routingRouteEditor($route)
@@ -444,7 +457,6 @@ struct ExportView: View {
                 }
                 .padding(.horizontal, 1)
             }
-            .frame(maxHeight: 250)
 
             HStack {
                 Button("Add Route") {
@@ -463,7 +475,7 @@ struct ExportView: View {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
                     .accessibilityLabel("Routing issue: \(message)")
             }
 
@@ -480,15 +492,17 @@ struct ExportView: View {
 
             Divider()
             Toggle("Include XMP sidecars (off by default)", isOn: $routingIncludesXMP)
-            Text("When enabled, sidecars follow their media in the same journal. Louppe refuses a routing plan that would split one same-stem XMP family across folders.")
+            Text("Sidecars follow their media. Files that share an XMP sidecar must go to the same folder.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
+        } actions: {
             HStack {
+                Spacer()
                 Button("Cancel") { store.isExportPresented = false }
                     .keyboardShortcut(.cancelAction)
-                Button("Review Copy Plan") {
+                Button("Review Copy Plan…") {
                     exporter.prepareMultiDestinationExport(
                         routes: routingRoutes,
                         items: scopedItems,
@@ -512,6 +526,7 @@ struct ExportView: View {
                     )
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
                 .disabled(!routingCanReview)
             }
         }
@@ -775,16 +790,14 @@ struct ExportView: View {
     private func multiDestinationConfirmationView(
         _ plan: MultiDestinationExportPlan
     ) -> some View {
-        VStack(spacing: 14) {
-            Text("Review Routing Copy")
-                .font(.title2.bold())
+        SheetForm(title: "Review Copy Plan") {
             Text("\(plan.totalFiles) file\(plan.totalFiles == 1 ? "" : "s") will be copied. Originals stay where they are.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+            Group {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(plan.routes) { route in
                         VStack(alignment: .leading, spacing: 5) {
                             Text("\(route.route.predicate.displayName) → \(route.destination.path)")
@@ -833,18 +846,20 @@ struct ExportView: View {
                     }
                 }
             }
-            .frame(maxHeight: 360)
 
-            Text("Starting Copy creates one durable recovery record for every route. If a copy is interrupted, verified finished files remain in their listed folders; Louppe never moves or deletes an original.")
+            Text("If copying is interrupted, completed copies remain in their destination folders. Originals stay unchanged.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
+        } actions: {
             HStack {
                 Button("Back") { exporter.backFromMultiDestinationConfirmation() }
                     .keyboardShortcut(.cancelAction)
+                Spacer()
                 Button("Start Copy") { exporter.confirmMultiDestinationExport() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -1182,17 +1197,23 @@ struct ExportView: View {
             VStack(spacing: 2) {
                 Text("\(count)")
                     .font(.title.bold())
-                    .foregroundStyle(isSelected ? color : color.opacity(0.35))
+                    .foregroundStyle(isSelected ? color : Color.secondary)
                 Text(label)
                     .font(.caption)
-                    .foregroundStyle(isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(.secondary)
             }
-            .frame(minWidth: 70)
+            .frame(minWidth: 70, maxWidth: .infinity)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(isSelected ? color.opacity(0.12) : Color.clear)
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(isSelected
+                        ? color.opacity(0.4)
+                        : Color(nsColor: .separatorColor))
+            }
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -1237,11 +1258,12 @@ struct ExportView: View {
             VStack(spacing: 12) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 40))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.secondary)
                 Text(message)
                     .multilineTextAlignment(.center)
                 Button("OK") { store.resetXMPPublication() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -1269,9 +1291,7 @@ struct ExportView: View {
     private func xmpPreflightView(_ plan: XMPPublicationPlan) -> some View {
         let issues = plan.entries.filter { !$0.category.canPublish }
         let changes = plan.changeCounts
-        return VStack(spacing: 14) {
-            Text("Metadata (XMP)")
-                .font(.title2.bold())
+        return SheetForm(title: "Metadata (XMP)") {
             Text("Ready to write with \(plan.profile.displayName)")
                 .font(.headline)
 
@@ -1300,7 +1320,7 @@ struct ExportView: View {
             Text(xmpApplicationNote(plan.profile))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
             if !plan.bestEffortFilenames.isEmpty {
                 warningText("This application may ignore sidecars for JPEG, TIFF, DNG, HEIC, or PNG because it normally expects embedded metadata. Louppe will not modify the original. Affected: \(fileList(plan.bestEffortFilenames))")
@@ -1314,7 +1334,7 @@ struct ExportView: View {
                 Text("\(plan.applicationPacketCount) extension-qualified application packet\(plan.applicationPacketCount == 1 ? "" : "s") will remain unchanged beside the originals.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
             if plan.excludedACRCompanionCount > 0 {
                 warningText("\(plan.excludedACRCompanionCount) Lightroom .acr companion\(plan.excludedACRCompanionCount == 1 ? "" : "s") will remain untouched beside the originals. Louppe does not read or modify Lightroom heavy-edit data.")
@@ -1341,9 +1361,11 @@ struct ExportView: View {
                 warningText(conflictResolutionNotice)
             }
 
+        } actions: {
             HStack {
                 Button("Back") { store.resetXMPPublication() }
                     .keyboardShortcut(.cancelAction)
+                Spacer()
                 if !plan.resolvableSameStemConflicts.isEmpty {
                     Button("Resolve RAW + JPEG Conflicts…") {
                         conflictResolutionNotice = nil
@@ -1357,6 +1379,7 @@ struct ExportView: View {
                     store.startXMPPublication(planID: plan.id)
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
                 .disabled(plan.publishableCount == 0)
             }
         }
@@ -1367,7 +1390,7 @@ struct ExportView: View {
         return VStack(spacing: 14) {
             Image(systemName: result.isClean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(result.isClean ? .green : .orange)
+                .foregroundStyle(result.isClean ? Color.louppeAccent : Color.secondary)
             Text(result.cancelled
                 ? "Metadata writing stopped"
                 : result.isClean
@@ -1413,6 +1436,7 @@ struct ExportView: View {
                     store.isExportPresented = false
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -1494,7 +1518,7 @@ struct ExportView: View {
             ProgressView()
             Text("Checking XMP sidecars…")
                 .font(.headline)
-            Text("Louppe is preparing one immutable, recoverable \(mode == .copy ? "copy" : "move") plan before any file changes.")
+            Text("Checking the selected files and sidecars before \(mode == .copy ? "copying" : "moving") anything.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1509,9 +1533,7 @@ struct ExportView: View {
     ) -> some View {
         let plan = confirmation.plan
         let changes = plan.changeCounts
-        return VStack(spacing: 14) {
-            Text(confirmation.mode == .copy ? "Copy with XMP" : "Move with XMP")
-                .font(.title2.bold())
+        return SheetForm(title: confirmation.mode == .copy ? "Copy with XMP" : "Move with XMP") {
             Text("Ready for \(confirmation.destination.lastPathComponent)")
                 .font(.headline)
 
@@ -1557,18 +1579,18 @@ struct ExportView: View {
                 Text("Existing values to update: \(changes.stars) star, \(changes.colors) color, \(changes.flags) decision flag, \(changes.keywords) keyword set.")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
             if !plan.bestEffortFilenames.isEmpty {
                 Text("Some applications may ignore sidecars for: \(plan.bestEffortFilenames.joined(separator: ", ")). Original media will not be modified.")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
             if !plan.issueFamilies.isEmpty {
-                ScrollView {
+                Group {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(plan.issueFamilies, id: \.id) { family in
                             VStack(alignment: .leading, spacing: 2) {
@@ -1582,24 +1604,25 @@ struct ExportView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 120)
             }
 
             if let conflictResolutionNotice {
                 Text(conflictResolutionNotice)
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
 
-            Text("Media and every included sidecar will enter one recovery plan before the first file changes.")
+            Text("Included XMP sidecars follow their media to the destination.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
 
+        } actions: {
             HStack {
                 Button("Back") { exporter.backFromXMPConfirmation() }
                     .keyboardShortcut(.cancelAction)
+                Spacer()
                 if !plan.resolvableSameStemConflicts.isEmpty {
                     Button("Resolve RAW + JPEG Conflicts…") {
                         conflictResolutionNotice = nil
@@ -1613,6 +1636,7 @@ struct ExportView: View {
                     exporter.confirmXMPExport()
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -1621,7 +1645,7 @@ struct ExportView: View {
         VStack(spacing: 14) {
             Image(systemName: outcome.isClean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(outcome.isClean ? .green : .orange)
+                .foregroundStyle(outcome.isClean ? Color.louppeAccent : Color.secondary)
             Text(finishedTitle(for: outcome))
                 .font(.title3.bold())
             Text(finishedMessage(for: outcome))
@@ -1661,6 +1685,7 @@ struct ExportView: View {
                     exporter.reset()
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -1738,13 +1763,14 @@ struct ExportView: View {
         VStack(spacing: 12) {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(.red)
+                .foregroundStyle(.secondary)
             Text(message)
                 .multilineTextAlignment(.center)
             Button("OK") {
                 exporter.reset()
             }
             .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
         }
     }
 }

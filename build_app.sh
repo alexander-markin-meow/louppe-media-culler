@@ -57,7 +57,34 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" \
     "$APP_DIR/Contents/Frameworks"
 
 cp .build/release/Louppe "$APP_DIR/Contents/MacOS/Louppe"
-cp AppIcon/AppIcon.icns "$APP_DIR/Contents/Resources/AppIcon.icns"
+
+# Compile the Icon Composer source so macOS 26 can render the native Default,
+# Dark, Clear, and Tinted appearances. Shipping only the legacy .icns makes
+# Tahoe place the transparent glyph on its generic gray compatibility tile.
+ICON_SOURCE="$STAGING_ROOT/AppIcon.icon"
+ICON_OUTPUT="$STAGING_ROOT/icon-output"
+ACTOOL="/Applications/Xcode.app/Contents/Developer/usr/bin/actool"
+[[ -x "$ACTOOL" ]] || {
+    echo "Xcode's asset compiler is required to build the app icon." >&2
+    exit 1
+}
+ditto --noextattr --noqtn AppIcon/AppIcon.icon "$ICON_SOURCE"
+xattr -cr "$ICON_SOURCE"
+mkdir -p "$ICON_OUTPUT"
+"$ACTOOL" "$ICON_SOURCE" \
+    --compile "$ICON_OUTPUT" \
+    --app-icon AppIcon \
+    --enable-on-demand-resources NO \
+    --development-region en \
+    --target-device mac \
+    --platform macosx \
+    --minimum-deployment-target 14.0 \
+    --bundle-identifier com.alexandermarkin.louppe \
+    --output-format human-readable-text \
+    --notices --warnings --errors \
+    --output-partial-info-plist "$ICON_OUTPUT/icon.plist"
+cp "$ICON_OUTPUT/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+cp "$ICON_OUTPUT/Assets.car" "$APP_DIR/Contents/Resources/Assets.car"
 cp CHANGELOG.md "$APP_DIR/Contents/Resources/Version History.md"
 cp ThirdPartyLicenses/XMPCore-BSD-3-Clause.txt \
     "$APP_DIR/Contents/Resources/XMPCore License.txt"
@@ -96,6 +123,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>
     <string>Louppe</string>
     <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>

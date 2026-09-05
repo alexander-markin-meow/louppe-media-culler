@@ -50,6 +50,14 @@ verify_app_bundle() {
         || fail "$label marketing version does not match VERSION."
     [[ "$(plist_value "$bundle" CFBundleVersion)" == "$BUILD_NUMBER" ]] \
         || fail "$label build number does not match VERSION."
+    [[ "$(plist_value "$bundle" CFBundleIconFile)" == "AppIcon" ]] \
+        || fail "$label legacy icon name is wrong."
+    [[ "$(plist_value "$bundle" CFBundleIconName)" == "AppIcon" ]] \
+        || fail "$label native icon name is wrong."
+    [[ -f "$bundle/Contents/Resources/AppIcon.icns" ]] \
+        || fail "$label has no legacy app-icon fallback."
+    [[ -f "$bundle/Contents/Resources/Assets.car" ]] \
+        || fail "$label has no native appearance-aware app icon."
     [[ "$(plist_value "$bundle" LSMultipleInstancesProhibited)" == "true" ]] \
         || fail "$label must prohibit a second app instance during file operations."
     cmp -s ThirdPartyLicenses/XMPCore-BSD-3-Clause.txt \

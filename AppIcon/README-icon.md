@@ -1,23 +1,19 @@
-# Louppe app icon (option 1c — "In Review")
+# Louppe app icon ("In Review")
 
 Files here:
+- `AppIcon.icon` — native Icon Composer source for macOS 26 appearances
 - `AppIcon-1024.png` — 1024×1024 master
-- `AppIcon.iconset/` — all sizes macOS needs, named per Apple spec
+- `AppIcon.iconset/` and `AppIcon.icns` — previous legacy bitmap sources
 
-## Build AppIcon.icns
+## Build the app icon
 
-From the `AppIcon/` folder:
+`build_app.sh` compiles `AppIcon.icon` with Xcode's asset compiler. The build
+ships both `Assets.car` for native Default/Dark/Clear/Tinted rendering and an
+automatically generated `AppIcon.icns` fallback.
 
-```
-iconutil -c icns AppIcon.iconset -o AppIcon.icns
-```
+Rebuild with:
 
-That produces `AppIcon/AppIcon.icns`, which is exactly what `build_app.sh`
-already copies into the bundle. Then rebuild:
-
-```
-./build_app.sh
-```
+    ./build_app.sh
 
 (If the Dock/Finder still shows the old icon, it's icon caching — a logout/login
 or `killall Dock Finder` clears it.)

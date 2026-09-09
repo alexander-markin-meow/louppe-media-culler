@@ -1,5 +1,7 @@
 # Louppe Media Culler
 
+Website: [louppe.eu](https://louppe.eu)
+
 Louppe is a fast, keyboard-first, open-source media culler for macOS. Review
 photos, video, and audio; sort and organize your media; clean up unwanted
 files; and export what you want to keep.
@@ -101,8 +103,6 @@ controls keep their normal shortcuts.
 | **⌘⇧← / ⌘⇧→** | Select from the current item to the first / last |
 | **Esc** | Cancel a scan or clear the current selection |
 | **⌘⌫** | Send the selection to the macOS Trash without a dialog |
-
-Learn more at [louppe.eu](https://louppe.eu).
 
 For development, performance, release, and App Store notes, see
 [AGENTS.md](AGENTS.md), [Docs/PERFORMANCE.md](Docs/PERFORMANCE.md),

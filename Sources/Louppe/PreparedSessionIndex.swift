@@ -160,7 +160,7 @@ struct PreparedSessionIndex {
                         key: nil,
                         value: .text("review-\(reviewGroup.id)")
                     ),
-                    title: reviewGroup.title,
+                    title: reviewGroup.title(itemCount: indices.count),
                     indices: indices
                 )
             )

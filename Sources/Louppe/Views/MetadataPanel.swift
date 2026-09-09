@@ -21,6 +21,16 @@ struct MetadataPanel: View {
     @State private var audioLevels: AudioLevelAnalysis?
     @State private var audioLevelsLoadFailed = false
     @State private var audioLevelsRevision: PhotoContentRevision?
+    @State private var isEditingFilename = false
+    @State private var filenameDraft = ""
+    @State private var filenamePlan: SourceOrganizationPlan?
+    @State private var filenamePlanningError: String?
+    @State private var isPlanningFilename = false
+    @State private var filenameSubmissionPending = false
+    @State private var filenamePlanningTask: Task<Void, Never>?
+    @State private var filenamePlanningCancelFlag:
+        SourceOrganizationPlanningCancelFlag?
+    @FocusState private var filenameIsFocused: Bool
     @AppStorage(CameraQualityWarningPreferences.Keys.isEnabled)
     private var cameraQualityWarningsEnabled = true
     @AppStorage(CameraQualityWarningPreferences.Keys.highISOThreshold)
@@ -87,6 +97,11 @@ struct MetadataPanel: View {
         store.selectedIndices.count <= 1
             && (item.isVideo || item.isAudio)
             && item.isPlayableMedia
+    }
+
+    private var filenameExtension: String {
+        let ext = item.primaryURL.pathExtension
+        return ext.isEmpty ? "" : ".\(ext)"
     }
 
     private var audioLevelsLoadID: AudioLevelsLoadID {
@@ -171,15 +186,6 @@ struct MetadataPanel: View {
         displayedFields.filter { !promotedLabels.contains($0.label) }
     }
 
-    private var multiSelectionSummary: PhotoSelectionSummary? {
-        guard store.selectedIndices.count > 1 else { return nil }
-        let selectedItems = store.selectedIndices.sorted().compactMap { index in
-            store.items.indices.contains(index) ? store.items[index] : nil
-        }
-        guard selectedItems.count > 1 else { return nil }
-        return PhotoSelectionSummary(items: selectedItems)
-    }
-
     private var metadataLoadID: MetadataLoadID {
         MetadataLoadID(
             contentRevision: item.contentRevision,
@@ -203,7 +209,7 @@ struct MetadataPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if let multiSelectionSummary {
+                if let multiSelectionSummary = store.multiSelectionSummary {
                     multiSelectionContent(multiSelectionSummary)
                 } else {
                     singlePhotoContent
@@ -291,6 +297,18 @@ struct MetadataPanel: View {
             audioLevels = loaded
             audioLevelsLoadFailed = (loaded == nil)
         }
+        .onChange(of: item.contentRevision) { _, _ in
+            cancelFilenameEditing()
+        }
+        .onChange(of: store.selectedIndices.count > 1) { _, isMultiple in
+            if isMultiple { cancelFilenameEditing() }
+        }
+        .onChange(of: filenameDraft) { _, _ in
+            if isEditingFilename { refreshFilenamePlan() }
+        }
+        .onDisappear {
+            cancelFilenameEditing()
+        }
     }
 
     // MARK: - Single photo
@@ -298,10 +316,7 @@ struct MetadataPanel: View {
     @ViewBuilder
     private var singlePhotoContent: some View {
         HStack(alignment: .center, spacing: 10) {
-            Text(item.displayName)
-                .font(.title3.weight(.semibold))
-                .lineLimit(2)
-                .truncationMode(.middle)
+            filenameControl
 
             Spacer(minLength: 4)
 
@@ -384,6 +399,201 @@ struct MetadataPanel: View {
         }
     }
 
+    private var filenameControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isEditingFilename {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    TextField("Filename", text: $filenameDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.title3.weight(.semibold))
+                        .focused($filenameIsFocused)
+                        .onSubmit { submitFilenameRename() }
+                        .onExitCommand { cancelFilenameEditing() }
+                        .accessibilityLabel("Filename without extension")
+                        .accessibilityHint(
+                            "Edit the name without its extension. Matching RAW, JPEG, and XMP files are renamed together."
+                        )
+                    Text(filenameExtension)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Button {
+                        cancelFilenameEditing()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Cancel filename editing")
+                }
+
+                if isPlanningFilename {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking filename…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let filenamePlanningError {
+                    Label(filenamePlanningError, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let filenamePlan,
+                          !filenamePlan.collisions.isEmpty {
+                    Label(
+                        filenamePlan.collisions[0].message,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if store.isRenamingSource {
+                HStack(spacing: 7) {
+                    Text(item.displayName)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Renaming \(item.displayName)")
+            } else {
+                Button {
+                    beginFilenameEditing()
+                } label: {
+                    Text(item.displayName)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .disabled(!store.canRenameSource)
+                .help("Click to edit filename")
+                .accessibilityLabel(item.displayName)
+                .accessibilityHint("Click to edit the filename in place.")
+            }
+
+            if let operationError = store.organizationError,
+               !isEditingFilename,
+               !store.isRenamingSource {
+                Label(operationError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func beginFilenameEditing() {
+        guard store.canRenameSource else { return }
+        filenamePlanningTask?.cancel()
+        filenameDraft = (item.displayName as NSString).deletingPathExtension
+        filenamePlan = nil
+        filenamePlanningError = nil
+        isEditingFilename = true
+        DispatchQueue.main.async {
+            filenameIsFocused = true
+        }
+        refreshFilenamePlan()
+    }
+
+    private func cancelFilenameEditing() {
+        filenamePlanningCancelFlag?.cancel()
+        filenamePlanningTask?.cancel()
+        filenamePlanningCancelFlag = nil
+        filenamePlanningTask = nil
+        isPlanningFilename = false
+        filenameSubmissionPending = false
+        isEditingFilename = false
+        filenameIsFocused = false
+        filenamePlan = nil
+        filenamePlanningError = nil
+    }
+
+    private func refreshFilenamePlan() {
+        filenameSubmissionPending = false
+        filenamePlanningCancelFlag?.cancel()
+        filenamePlanningTask?.cancel()
+        filenamePlanningTask = nil
+        filenamePlanningCancelFlag = nil
+        filenamePlan = nil
+        filenamePlanningError = nil
+        guard isEditingFilename else {
+            isPlanningFilename = false
+            return
+        }
+        let requestedItemID = item.id
+        let configuration = FileRenamingPlanner.sourceConfiguration(
+            customBaseName: filenameDraft
+        )
+        let cancelFlag = SourceOrganizationPlanningCancelFlag()
+        filenamePlanningCancelFlag = cancelFlag
+        isPlanningFilename = true
+        filenamePlanningTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            guard let snapshot = store.sourceFileRenamingPlanningSnapshot(
+                itemID: requestedItemID
+            ) else {
+                isPlanningFilename = false
+                filenamePlanningError = "This filename can no longer be edited."
+                return
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try SourceOrganizationPlanner.makePlan(
+                        sourceFolder: snapshot.sourceFolder,
+                        selectedItems: snapshot.selectedItems,
+                        familyContextItems: snapshot.familyContextItems,
+                        configuration: configuration,
+                        knownOriginFolderPathBytesByFileID:
+                            snapshot.knownOriginFolderPathBytesByFileID,
+                        pairedFiles: snapshot.pairedFiles,
+                        isCancelled: { cancelFlag.isCancelled }
+                    )
+                }
+            }.value
+            guard !Task.isCancelled, isEditingFilename else { return }
+            filenamePlanningCancelFlag = nil
+            isPlanningFilename = false
+            switch result {
+            case .success(let prepared):
+                filenamePlan = prepared
+            case .failure(let error):
+                filenamePlanningError = error.localizedDescription
+            }
+            if filenameSubmissionPending {
+                filenameSubmissionPending = false
+                submitFilenameRename()
+            }
+        }
+    }
+
+    private func submitFilenameRename() {
+        // Return may arrive while the debounced preflight is still running.
+        // Apply that exact draft when it is ready; editing or cancelling clears
+        // the request so a stale result can never rename a different draft.
+        if isPlanningFilename {
+            filenameSubmissionPending = true
+            return
+        }
+        guard let filenamePlan, filenamePlan.canExecute else {
+            filenameIsFocused = true
+            return
+        }
+        filenamePlanningCancelFlag?.cancel()
+        filenamePlanningTask?.cancel()
+        filenameIsFocused = false
+        isEditingFilename = false
+        store.startSourceRename(filenamePlan, presentsSheet: false)
+    }
+
     // MARK: - Multiple photos
 
     @ViewBuilder
@@ -392,6 +602,11 @@ struct MetadataPanel: View {
             .font(.title3.weight(.semibold))
 
         MetadataEditingControls(store: store)
+
+        Button("Rename Files…") {
+            store.presentMetadataFileRenaming()
+        }
+        .disabled(!store.canRenameSource)
 
         Divider()
 

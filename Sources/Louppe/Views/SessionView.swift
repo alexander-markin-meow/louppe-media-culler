@@ -42,6 +42,9 @@ struct SessionView: View {
             .sheet(isPresented: $store.isOrganizePresented) {
                 OrganizeSourceView(store: store)
             }
+            .sheet(isPresented: $store.isRenamePresented) {
+                RenameFilesView(store: store)
+            }
             .sheet(
                 isPresented: $store.isActionPalettePresented,
                 onDismiss: { store.finishActionPaletteDismissal() }

@@ -7,9 +7,15 @@ import UniformTypeIdentifiers
 enum FolderScanner {
     enum ScanError: LocalizedError {
         case filesChangedDuringScan
+        case unreadableFolder(URL, Error)
 
         var errorDescription: String? {
-            "A media file changed while Louppe was scanning. Nothing was saved; scan the folder again."
+            switch self {
+            case .filesChangedDuringScan:
+                return "A media file changed while Louppe was scanning. Nothing was saved; scan the folder again."
+            case .unreadableFolder(let url, let error):
+                return "Louppe couldn't read \(url.path). Nothing was saved. Check the folder's access and scan again. \(error.localizedDescription)"
+            }
         }
     }
     /// Camera RAW formats macOS's ImageIO can decode (verified against
@@ -219,6 +225,7 @@ enum FolderScanner {
         progress: (Int) -> Void
     ) throws -> [PhotoItem] {
         let fm = FileManager.default
+        var enumerationError: ScanError?
         guard let enumerator = fm.enumerator(
             at: root,
             includingPropertiesForKeys: [
@@ -231,7 +238,11 @@ enum FolderScanner {
                 .volumeURLKey,
                 .volumeUUIDStringKey,
             ],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { url, error in
+                enumerationError = .unreadableFolder(url, error)
+                return false
+            }
         ) else {
             throw NSError(domain: "Louppe", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read that folder."])
         }
@@ -283,6 +294,8 @@ enum FolderScanner {
             )
             if files.count % 25 == 0 { progress(files.count) }
         }
+        if isCancelled() { throw CancellationError() }
+        if let enumerationError { throw enumerationError }
 
         let filenamePolicy = pairingFilenamePolicy(at: root)
 
@@ -302,25 +315,34 @@ enum FolderScanner {
             isCancelled: isCancelled
         )
         try beforeFinalIdentityValidation()
-        try validateScannedIdentities(result)
-        return sortItems(result)
+        try validateScannedIdentities(result, isCancelled: isCancelled)
+        let sorted = sortItems(result)
+        if isCancelled() { throw CancellationError() }
+        return sorted
     }
 
     /// Metadata decoding can take seconds for a large card. Re-stat every
     /// pathname after that work so an atomic replacement cannot combine old
     /// identity/rating state with newly substituted bytes.
-    static func validateScannedIdentities(_ items: [PhotoItem]) throws {
-        for file in items.flatMap(\.individualFiles) {
-            guard let expected = file.scannedIdentity,
-                  let current = try? FileOperationJournal.captureIdentity(
-                    at: file.url
-                  ),
-                  FileOperationJournal.identitiesMatch(
-                    expected: expected,
-                    actual: current,
-                    includeStatusChange: true
-                  ) else {
-                throw ScanError.filesChangedDuringScan
+    static func validateScannedIdentities(
+        _ items: [PhotoItem],
+        isCancelled: @Sendable () -> Bool = { false }
+    ) throws {
+        if isCancelled() { throw CancellationError() }
+        for item in items {
+            for file in item.individualFiles {
+                if isCancelled() { throw CancellationError() }
+                guard let expected = file.scannedIdentity,
+                      let current = try? FileOperationJournal.captureIdentity(
+                        at: file.url
+                      ),
+                      FileOperationJournal.identitiesMatch(
+                        expected: expected,
+                        actual: current,
+                        includeStatusChange: true
+                      ) else {
+                    throw ScanError.filesChangedDuringScan
+                }
             }
         }
     }

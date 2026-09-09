@@ -31,6 +31,7 @@ enum FileOperationKind: Equatable, Sendable {
     case exportCopy
     case exportMove
     case organizeSource
+    case renameSource
 }
 
 enum SessionEmptyReason: Equatable, Sendable {
@@ -77,7 +78,9 @@ struct XMPConflictResolutionOutcome: Equatable, Sendable {
 @MainActor
 final class SessionStore: ObservableObject {
     @Published var phase: AppPhase = .welcome
-    @Published var items: [PhotoItem] = []
+    @Published var items: [PhotoItem] = [] {
+        didSet { cachedSelectionSummary = nil }
+    }
     @Published var currentIndex: Int = 0 {
         didSet {
             if currentIndex != oldValue { videoPlayback.stop() }
@@ -97,6 +100,9 @@ final class SessionStore: ObservableObject {
     private(set) var gridColumnCount = 1
     @Published var isExportPresented = false
     @Published var isOrganizePresented = false
+    @Published var isRenamePresented = false
+    @Published private(set) var fileRenamingPresentationMode:
+        FileRenamingPresentationMode = .metadata
     @Published private(set) var sourceOrganizationLaunchConfiguration:
         SourceOrganizationConfiguration?
     /// The searchable Command Palette. Its modal text field owns normal
@@ -140,6 +146,9 @@ final class SessionStore: ObservableObject {
     @Published private(set) var canOpenMismatchedSessionAnyway = false
     private var pendingLegacySidecarRelocationAuthorization:
         SessionPersistence.LegacySidecarRelocationAuthorization?
+    /// A current-schema session can safely refuse same-path replacement
+    /// ratings while still letting the photographer explicitly start over.
+    @Published private(set) var canOpenIdentityConflictAsNewSession = false
     @Published private(set) var emptySessionReason: SessionEmptyReason?
     /// A non-blocking warning when ratings are safe only in Louppe's backup,
     /// or are not currently persisted anywhere. A successful sidecar write
@@ -220,7 +229,12 @@ final class SessionStore: ObservableObject {
     /// The multi-selection (absolute indices into `items`). Empty is the
     /// normal single-photo state: the selection is just `currentIndex`.
     /// Selection gestures keep `currentIndex` inside the set as the anchor.
-    @Published private(set) var selectedIndices: Set<Int> = []
+    @Published private(set) var selectedIndices: Set<Int> = [] {
+        didSet { cachedSelectionSummary = nil }
+    }
+    /// Scan metadata is immutable between item generations. Rating, playback,
+    /// and other UI publications do not change this potentially large summary.
+    private var cachedSelectionSummary: PhotoSelectionSummary?
     /// Stable authority for the multi-selection. `selectedIndices` is its
     /// render-facing projection into the current `items` generation.
     private var selectionState = SelectionState()
@@ -313,7 +327,7 @@ final class SessionStore: ObservableObject {
         let message = interruptionPrefix + completedNotice
             + "Louppe couldn't finish checking \(count) interrupted file"
             + (count == 1 ? ". " : "s. ")
-            + "It left anything uncertain untouched. You can keep reviewing; Copy, Move, and Clean Up are paused until recovery finishes."
+            + "It left anything uncertain untouched. You can keep reviewing; Copy, Move, Rename, Organize, and Clean Up are paused until recovery finishes."
         return message
     }
     /// A sheet, popover, confirmation, or recovery alert owns keyboard/menu
@@ -322,6 +336,7 @@ final class SessionStore: ObservableObject {
     var isSessionCommandPresentationActive: Bool {
         isExportPresented
             || isOrganizePresented
+            || isRenamePresented
             || isActionPalettePresented
             || isFilterPresented
             || isSortPresented
@@ -336,6 +351,10 @@ final class SessionStore: ObservableObject {
     var isCopyingExport: Bool { activeFileOperation == .exportCopy }
     var isMovingExport: Bool { activeFileOperation == .exportMove }
     var isOrganizingSource: Bool { activeFileOperation == .organizeSource }
+    var isRenamingSource: Bool { activeFileOperation == .renameSource }
+    var isChangingSourceFiles: Bool {
+        isOrganizingSource || isRenamingSource
+    }
     var isXMPPublicationRunning: Bool {
         switch xmpPublicationState {
         case .preflighting, .publishing, .cancelling:
@@ -367,6 +386,7 @@ final class SessionStore: ObservableObject {
             && !isNewFileOperationBlocked
             && !isLegacySessionMigrationConfirmationPresented
     }
+    var canRenameSource: Bool { canOrganizeSource }
     var isExporting: Bool { isCopyingExport || isMovingExport }
 
     /// Retained for the complete filesystem transaction. This prevents idle
@@ -480,6 +500,15 @@ final class SessionStore: ObservableObject {
     private var duplicateBurstAnalysisTask: Task<Void, Never>?
     private var duplicateBurstAnalysisGeneration: UInt64 = 0
     private var duplicateBurstAnalysisResult: DuplicateBurstAnalysis.Result?
+    /// Membership depends on analysis and sensitivity, never ratings, sorting,
+    /// or the ordinary filter. Keep one layout so those changes only project
+    /// existing groups instead of repeating the near-hash search on main.
+    private var duplicateBurstGroupCache: (
+        mode: DuplicateBurstAnalysis.ReviewMode,
+        distance: Int,
+        interval: TimeInterval,
+        groups: [DuplicateBurstAnalysis.Group]
+    )?
     /// Stable content revisions captured when local analysis began. A result
     /// cannot appear after a same-path replacement, rescan, or RAW+JPEG
     /// projection change, even if its detached task reaches completion late.
@@ -637,7 +666,7 @@ final class SessionStore: ObservableObject {
 
     /// Explicitly discard only Louppe's recovery bookkeeping. Media stays at
     /// its current paths, so a permanently ambiguous record cannot disable
-    /// future Copy, Move, or Clean Up actions forever.
+    /// future Copy, Move, Rename, Organize, or Clean Up actions forever.
     func keepInterruptedFilesAsTheyAre() {
         guard canKeepInterruptedFilesAsTheyAre else { return }
         captureRecoveryRescanTargetForCurrentFolder()
@@ -1059,14 +1088,24 @@ final class SessionStore: ObservableObject {
     private func applyGroupedReviewLayoutIfNeeded() {
         guard groupedReviewMode != .off,
               let result = duplicateBurstAnalysisResult else { return }
-        preparedIndex.applyGroupedReview(
-            result.groups(
+        let groups: [DuplicateBurstAnalysis.Group]
+        if let cached = duplicateBurstGroupCache,
+           cached.mode == groupedReviewMode,
+           cached.distance == visualSimilarityDistance,
+           cached.interval == burstGroupingInterval {
+            groups = cached.groups
+        } else {
+            groups = result.groups(
                 for: groupedReviewMode,
                 visualDistance: visualSimilarityDistance,
                 burstInterval: burstGroupingInterval
-            ),
-            to: items
-        )
+            )
+            duplicateBurstGroupCache = (
+                groupedReviewMode, visualSimilarityDistance,
+                burstGroupingInterval, groups
+            )
+        }
+        preparedIndex.applyGroupedReview(groups, to: items)
     }
 
     // MARK: - Duplicate + burst grouped review
@@ -1207,10 +1246,13 @@ final class SessionStore: ObservableObject {
               duplicateBurstAnalysisMatchesCurrentItems(revisions) else { return }
         duplicateBurstAnalysisTask = nil
         duplicateBurstAnalysisResult = result
+        duplicateBurstGroupCache = nil
         duplicateBurstAnalysisRevisions = revisions
         duplicateBurstAnalysisState = .ready
         if let requestedMode {
             groupedReviewMode = requestedMode
+        }
+        if groupedReviewMode != .off {
             applyFilter()
         }
     }
@@ -1239,6 +1281,7 @@ final class SessionStore: ObservableObject {
         duplicateBurstAnalysisTask?.cancel()
         duplicateBurstAnalysisTask = nil
         duplicateBurstAnalysisResult = nil
+        duplicateBurstGroupCache = nil
         duplicateBurstAnalysisRevisions = [:]
         duplicateBurstAnalysisState = .idle
         let wasGrouped = groupedReviewMode != .off
@@ -1708,7 +1751,8 @@ final class SessionStore: ObservableObject {
     private func beginOpeningFolder(
         _ url: URL,
         legacySidecarRelocationAuthorization:
-            SessionPersistence.LegacySidecarRelocationAuthorization? = nil
+            SessionPersistence.LegacySidecarRelocationAuthorization? = nil,
+        replaceSavedSession: Bool = false
     ) {
         let standardizedURL = url.standardizedFileURL
         if sourceFolderAccess?.url != standardizedURL {
@@ -1739,6 +1783,7 @@ final class SessionStore: ObservableObject {
         legacySessionMigrationUsesUnownedBackup = false
         pendingLegacySidecarRelocationAuthorization = nil
         canOpenMismatchedSessionAnyway = false
+        canOpenIdentityConflictAsNewSession = false
         videoPlayback.resetRememberedPositions()
         let isSameFolder =
             sourceFolder?.standardizedFileURL == standardizedURL
@@ -1856,7 +1901,10 @@ final class SessionStore: ObservableObject {
                         url: standardizedURL,
                         generation: generation,
                         scanned: scanned,
-                        persistenceResult: savedSession
+                        persistenceResult: savedSession,
+                        legacySidecarRelocationAuthorization:
+                            legacySidecarRelocationAuthorization,
+                        replaceSavedSession: replaceSavedSession
                     )
                 }
             } catch {
@@ -1987,11 +2035,29 @@ final class SessionStore: ObservableObject {
         )
     }
 
+    /// Replace stale decisions only after an explicit welcome-screen choice.
+    /// The fresh read still establishes the exact sidecar CAS boundary, so an
+    /// external edit cannot be overwritten unnoticed while the folder opens.
+    func openIdentityConflictAsNewSession() {
+        guard case .welcome = phase,
+              canOpenIdentityConflictAsNewSession,
+              let folder = sourceFolder else { return }
+        beginOpeningFolder(
+            folder,
+            legacySidecarRelocationAuthorization:
+                pendingLegacySidecarRelocationAuthorization,
+            replaceSavedSession: true
+        )
+    }
+
     private func finishScan(
         url: URL,
         generation: UInt64,
         scanned: [PhotoItem],
-        persistenceResult: SessionPersistence.ReadResult
+        persistenceResult: SessionPersistence.ReadResult,
+        legacySidecarRelocationAuthorization:
+            SessionPersistence.LegacySidecarRelocationAuthorization?,
+        replaceSavedSession: Bool
     ) {
         guard sourceFolder == url, scanGeneration == generation else { return }
         if let blockingMessage = persistenceResult.blockingMessage {
@@ -2046,7 +2112,7 @@ final class SessionStore: ObservableObject {
         var relocatedLegacySessionHasNoFilenameMatch = false
         var unmatchedLegacyPhysicalFileCount = 0
         var legacySessionNeedsConfirmation = false
-        if let session = persistenceResult.session {
+        if !replaceSavedSession, let session = persistenceResult.session {
             let ratingIndex = SessionRatingIndex(session: session)
             for i in loaded.indices {
                 for file in loaded[i].individualFiles {
@@ -2126,15 +2192,16 @@ final class SessionStore: ObservableObject {
             resetDerivedData()
             visibleIndices = []
             phase = .welcome
+            canOpenIdentityConflictAsNewSession = true
             let count = identityConflicts.count
             let examples = identityConflicts.prefix(3).joined(separator: ", ")
             let exampleText = examples.isEmpty ? "" : " (\(examples))"
             scanError = "Louppe found \(count) photo"
                 + (count == 1 ? " or video" : "s or videos")
                 + " with the same name as saved session entries, but not the same physical file"
-                + exampleText + ". The existing ratings were left untouched. Restore the original "
-                + (count == 1 ? "file" : "files")
-                + ", or rename the replacement so it no longer uses the original filename, then open the folder again. Louppe will retain the saved decision for the missing original."
+                + exampleText + ". To protect the old ratings, Louppe did not apply them to these files. Restore the original "
+                + (count == 1 ? "file, or choose" : "files, or choose")
+                + " Open as New Session to forget the saved decisions for this folder and review the current files."
             return
         }
         if relocatedSessionNeedsIdentityProof {
@@ -2142,10 +2209,13 @@ final class SessionStore: ObservableObject {
             resetDerivedData()
             visibleIndices = []
             phase = .welcome
+            pendingLegacySidecarRelocationAuthorization =
+                legacySidecarRelocationAuthorization
+            canOpenIdentityConflictAsNewSession = true
             if relocatedLegacySessionHasNoFilenameMatch {
-                scanError = "Louppe couldn't match any saved filenames from that session to this folder. The session was left untouched so its ratings cannot be applied to unrelated photos."
+                scanError = "Louppe couldn't match any saved filenames from that session to this folder. The saved decisions were left untouched. Choose Open as New Session to replace them and review the current files unrated."
             } else {
-                scanError = "This folder contains a session from another location, but Louppe couldn't verify any of its exact original files here. The ratings were left untouched so they cannot be applied to a copied or unrelated folder."
+                scanError = "This folder contains a session from another location, but Louppe couldn't verify any of its exact original files here. The saved decisions were left untouched. Choose Open as New Session to replace them and review the current files unrated."
             }
             return
         }
@@ -2178,6 +2248,12 @@ final class SessionStore: ObservableObject {
         }
         if loaded.isEmpty {
             scanError = "No recognised photos or videos were found in that folder."
+        } else if replaceSavedSession {
+            // Replacing the old snapshot is an explicit user change, not
+            // optional maintenance of the just-opened baseline.
+            persistenceWarning = nil
+            markSessionChanged()
+            saveSession()
         } else if legacySessionNeedsConfirmation {
             persistenceWarning = persistenceResult.recoveryMessage
             legacySessionMigrationMissingFileCount =
@@ -2268,27 +2344,44 @@ final class SessionStore: ObservableObject {
     }
 
     var effectiveDecisionState: PhotoItemRatingState {
-        let states = effectiveSelection.sorted().compactMap {
-            items.indices.contains($0) ? items[$0].ratingState : nil
-        }
-        guard let first = states.first else { return .undecided }
-        return states.dropFirst().allSatisfy { $0 == first } ? first : .mixed
+        commonSelectionValue(\.ratingState, empty: .undecided, mixed: .mixed)
     }
 
     var effectiveStarRatingState: PhotoItemStarRatingState {
-        let states = effectiveSelection.sorted().compactMap {
-            items.indices.contains($0) ? items[$0].starRatingState : nil
-        }
-        guard let first = states.first else { return .unrated }
-        return states.dropFirst().allSatisfy { $0 == first } ? first : .mixed
+        commonSelectionValue(\.starRatingState, empty: .unrated, mixed: .mixed)
     }
 
     var effectiveColorLabelState: PhotoItemColorLabelState {
-        let states = effectiveSelection.sorted().compactMap {
-            items.indices.contains($0) ? items[$0].colorLabelState : nil
+        commonSelectionValue(\.colorLabelState, empty: .none, mixed: .mixed)
+    }
+
+    private func commonSelectionValue<Value: Equatable>(
+        _ keyPath: KeyPath<PhotoItem, Value>,
+        empty: Value,
+        mixed: Value
+    ) -> Value {
+        var first: Value?
+        for index in effectiveSelection where items.indices.contains(index) {
+            let value = items[index][keyPath: keyPath]
+            if let first {
+                if value != first { return mixed }
+            } else {
+                first = value
+            }
         }
-        guard let first = states.first else { return .none }
-        return states.dropFirst().allSatisfy { $0 == first } ? first : .mixed
+        return first ?? empty
+    }
+
+    var multiSelectionSummary: PhotoSelectionSummary? {
+        guard selectedIndices.count > 1 else { return nil }
+        if let cachedSelectionSummary { return cachedSelectionSummary }
+        let selectedItems = selectedIndices.compactMap { index in
+            items.indices.contains(index) ? items[index] : nil
+        }
+        guard selectedItems.count > 1 else { return nil }
+        let summary = PhotoSelectionSummary(items: selectedItems)
+        cachedSelectionSummary = summary
+        return summary
     }
 
     func clearSelection() {
@@ -3323,6 +3416,26 @@ final class SessionStore: ObservableObject {
         isOrganizePresented = true
     }
 
+    func presentSingleFileRenaming(itemID: String) {
+        guard canRenameSource,
+              selectedIndices.count <= 1,
+              items.contains(where: { $0.id == itemID }) else { return }
+        flushPendingFilter()
+        fileRenamingPresentationMode = .single(itemID: itemID)
+        organizationOutcome = nil
+        organizationError = nil
+        isRenamePresented = true
+    }
+
+    func presentMetadataFileRenaming() {
+        guard canRenameSource else { return }
+        flushPendingFilter()
+        fileRenamingPresentationMode = .metadata
+        organizationOutcome = nil
+        organizationError = nil
+        isRenamePresented = true
+    }
+
     func sourceOrganizationPlanningSnapshot(
         scope: SourceOrganizationScope
     ) -> SourceOrganizationPlanningSnapshot? {
@@ -3341,34 +3454,144 @@ final class SessionStore: ObservableObject {
             sourceFolder: sourceFolder,
             selectedItems: selected,
             familyContextItems: items,
+            pairedFiles: sourceOrganizationPairedFiles,
             knownOriginFolderPathBytesByFileID:
                 organizationOriginFolderPathBytesByFileID
         )
     }
 
+    func sourceFileRenamingPlanningSnapshot(
+        scope: SourceOrganizationScope
+    ) -> SourceOrganizationPlanningSnapshot? {
+        sourceFileRenamingPlanningSnapshot(
+            scope: scope, mode: fileRenamingPresentationMode
+        )
+    }
+
+    /// Inline editing always targets the displayed filename, independent of
+    /// the batch sheet's last mode or a rubber-band selection elsewhere.
+    func sourceFileRenamingPlanningSnapshot(
+        itemID: String
+    ) -> SourceOrganizationPlanningSnapshot? {
+        sourceFileRenamingPlanningSnapshot(
+            scope: .selected, mode: .single(itemID: itemID)
+        )
+    }
+
+    private func sourceFileRenamingPlanningSnapshot(
+        scope: SourceOrganizationScope,
+        mode: FileRenamingPresentationMode
+    ) -> SourceOrganizationPlanningSnapshot? {
+        guard let sourceFolder, case .ready = phase else { return nil }
+        flushPendingFilter()
+        let selected: [PhotoItem]
+        switch mode {
+        case .metadata:
+            let indices: [Int]
+            switch scope {
+            case .all: indices = Array(items.indices)
+            case .filtered: indices = visibleIndices
+            case .selected: indices = effectiveSelection.sorted()
+            }
+            let scopedItems = indices.compactMap {
+                items.indices.contains($0) ? items[$0] : nil
+            }
+            selected = expandingRAWJPEGPairMembers(in: scopedItems)
+        case .single(let itemID):
+            guard let target = items.first(where: { $0.id == itemID }) else {
+                return nil
+            }
+            selected = expandingRAWJPEGPairMembers(in: [target])
+        }
+        return SourceOrganizationPlanningSnapshot(
+            sourceFolder: sourceFolder,
+            selectedItems: selected,
+            familyContextItems: items,
+            pairedFiles: sourceOrganizationPairedFiles,
+            knownOriginFolderPathBytesByFileID:
+                organizationOriginFolderPathBytesByFileID
+        )
+    }
+
+    private var sourceOrganizationPairedFiles:
+        [SourceOrganizationPairedFiles] {
+        rawJPEGPairs.map {
+            SourceOrganizationPairedFiles(
+                rawFileID: $0.raw.id,
+                jpegFileID: $0.jpeg.id
+            )
+        }
+    }
+
+    /// A file rename always includes the complete physical RAW+JPEG family,
+    /// even when filtering or the default review mode exposes just one member.
+    private func expandingRAWJPEGPairMembers(
+        in scopedItems: [PhotoItem]
+    ) -> [PhotoItem] {
+        var selectedItemIDs = Set(scopedItems.map(\.id))
+        let scopedFileIDs = Set(scopedItems.flatMap(\.individualFiles).map(\.id))
+        for pair in rawJPEGPairs
+        where scopedFileIDs.contains(pair.raw.id)
+            || scopedFileIDs.contains(pair.jpeg.id) {
+            if let index = itemIndexByFileID[pair.raw.id],
+               items.indices.contains(index) {
+                selectedItemIDs.insert(items[index].id)
+            }
+            if let index = itemIndexByFileID[pair.jpeg.id],
+               items.indices.contains(index) {
+                selectedItemIDs.insert(items[index].id)
+            }
+        }
+        return items.filter { selectedItemIDs.contains($0.id) }
+    }
+
     func startSourceOrganization(_ plan: SourceOrganizationPlan) {
+        guard plan.changeKind == .organization else { return }
+        startSourceFileChange(plan)
+    }
+
+    func startSourceRename(
+        _ plan: SourceOrganizationPlan,
+        presentsSheet: Bool = true
+    ) {
+        guard plan.changeKind == .rename else { return }
+        startSourceFileChange(plan, presentsSheet: presentsSheet)
+    }
+
+    private func startSourceFileChange(
+        _ plan: SourceOrganizationPlan,
+        presentsSheet: Bool = true
+    ) {
         guard canOrganizeSource,
               plan.canExecute,
               let folder = sourceFolder,
               folder.standardizedFileURL
                 == plan.sourceFolder.standardizedFileURL else { return }
 
-        var capturedNewOrigin = false
-        for (fileID, origin) in plan.originFolderPathBytesByFileID {
-            if organizationOriginFolderPathBytesByFileID[fileID] == nil {
-                organizationOriginFolderPathBytesByFileID[fileID] = origin
-                capturedNewOrigin = true
+        if plan.changeKind == .organization {
+            var capturedNewOrigin = false
+            for (fileID, origin) in plan.originFolderPathBytesByFileID {
+                if organizationOriginFolderPathBytesByFileID[fileID] == nil {
+                    organizationOriginFolderPathBytesByFileID[fileID] = origin
+                    capturedNewOrigin = true
+                }
             }
+            if capturedNewOrigin { markSessionChanged() }
         }
-        if capturedNewOrigin { markSessionChanged() }
 
         organizationGeneration &+= 1
         let generation = organizationGeneration
-        isOrganizePresented = true
+        if plan.changeKind == .organization {
+            isOrganizePresented = true
+        } else if presentsSheet {
+            isRenamePresented = true
+        }
         organizationOutcome = nil
         organizationError = nil
         videoPlayback.stop()
-        activeFileOperation = .organizeSource
+        activeFileOperation = plan.changeKind == .rename
+            ? .renameSource
+            : .organizeSource
         organizationProgress = SourceOrganizationProgress(
             action: .organizing,
             done: 0,
@@ -3379,11 +3602,13 @@ final class SessionStore: ObservableObject {
             guard let self else { return }
             _ = await self.persistCurrentSessionIfNeededBeforeDiscard()
             guard self.organizationGeneration == generation,
-                  self.isOrganizingSource else { return }
+                  self.isChangingSourceFiles else { return }
             guard self.currentSessionIsDurable else {
                 self.activeFileOperation = nil
                 self.organizationProgress = nil
-                self.organizationError = "Louppe could not save the current ratings safely. Retry Saving before organizing the source folder."
+                self.organizationError = plan.changeKind == .rename
+                    ? "Louppe could not save the current ratings safely. Retry Saving before renaming files."
+                    : "Louppe could not save the current ratings safely. Retry Saving before organizing the source folder."
                 return
             }
             let reporter: SourceOrganizationWorker.Progress = {
@@ -3391,7 +3616,7 @@ final class SessionStore: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self,
                           self.organizationGeneration == generation,
-                          self.isOrganizingSource else { return }
+                          self.isChangingSourceFiles else { return }
                     self.organizationProgress = SourceOrganizationProgress(
                         action: .organizing,
                         done: done,
@@ -3422,7 +3647,7 @@ final class SessionStore: ObservableObject {
         generation: UInt64
     ) {
         guard organizationGeneration == generation,
-              isOrganizingSource else { return }
+              isChangingSourceFiles else { return }
         activeFileOperation = nil
         organizationProgress = nil
         organizationOutcome = SourceOrganizationOutcome(
@@ -3433,7 +3658,9 @@ final class SessionStore: ObservableObject {
         )
         if result.requiresRecovery {
             organizationError = result.failureMessage
-                ?? "The interrupted organization needs recovery before another file operation."
+                ?? (plan.changeKind == .rename
+                    ? "The interrupted rename needs recovery before another file operation."
+                    : "The interrupted organization needs recovery before another file operation.")
             operationRecoveryCause = organizationError
             beginInterruptedOperationRecovery(rescanOnSuccess: true)
             return
@@ -3442,16 +3669,23 @@ final class SessionStore: ObservableObject {
               let folder = sourceFolder else {
             if result.failedItems > 0 {
                 organizationError = result.failureMessage
-                    ?? "Some items could not be organized and stayed in their original folders."
+                    ?? (plan.changeKind == .rename
+                        ? "Some items could not be renamed and kept their previous names."
+                        : "Some items could not be organized and stayed in their original folders.")
             }
             return
         }
 
+        let movedItemIDs = Set(result.movedItemIDs)
         let currentDestinationID = currentItemID.flatMap {
-            plan.destinationItemIDBySourceItemID[$0] ?? $0
+            movedItemIDs.contains($0)
+                ? (plan.destinationItemIDBySourceItemID[$0] ?? $0)
+                : $0
         }
         let selectedDestinationIDs = Set(selectionState.itemIDs.map {
-            plan.destinationItemIDBySourceItemID[$0] ?? $0
+            movedItemIDs.contains($0)
+                ? (plan.destinationItemIDBySourceItemID[$0] ?? $0)
+                : $0
         })
         nextScanResumeIdentityOverride = ScanResumeIdentity(
             folder: folder.standardizedFileURL,
@@ -3471,11 +3705,17 @@ final class SessionStore: ObservableObject {
                 == record.sourceFolder.standardizedFileURL else { return }
         organizationGeneration &+= 1
         let generation = organizationGeneration
-        isOrganizePresented = true
+        if record.changeKind == .rename {
+            isRenamePresented = true
+        } else {
+            isOrganizePresented = true
+        }
         organizationOutcome = nil
         organizationError = nil
         videoPlayback.stop()
-        activeFileOperation = .organizeSource
+        activeFileOperation = record.changeKind == .rename
+            ? .renameSource
+            : .organizeSource
         organizationProgress = SourceOrganizationProgress(
             action: .restoring,
             done: 0,
@@ -3486,7 +3726,7 @@ final class SessionStore: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self,
                       self.organizationGeneration == generation,
-                      self.isOrganizingSource else { return }
+                      self.isChangingSourceFiles else { return }
                 self.organizationProgress = SourceOrganizationProgress(
                     action: .restoring,
                     done: done,
@@ -3528,7 +3768,7 @@ final class SessionStore: ObservableObject {
         generation: UInt64
     ) {
         guard organizationGeneration == generation,
-              isOrganizingSource else { return }
+              isChangingSourceFiles else { return }
         activeFileOperation = nil
         organizationProgress = nil
         organizationOutcome = SourceOrganizationOutcome(
@@ -3546,7 +3786,9 @@ final class SessionStore: ObservableObject {
         }
         guard result.movedFiles > 0, let folder = sourceFolder else {
             organizationError = result.failureMessage
-                ?? "The previous folder layout could not be restored."
+                ?? (record.changeKind == .rename
+                    ? "The previous filenames could not be restored."
+                    : "The previous folder layout could not be restored.")
             return
         }
         // Session persistence follows each physical file back to its previous
@@ -4746,6 +4988,7 @@ final class SessionStore: ObservableObject {
         retainedMissingSessionEntries = []
         pendingLegacySidecarRelocationAuthorization = nil
         canOpenMismatchedSessionAnyway = false
+        canOpenIdentityConflictAsNewSession = false
         if retrySaveRequest == nil {
             persistenceWarning = nil
             persistenceRejectedInvalidSnapshot = false
@@ -4776,6 +5019,7 @@ final class SessionStore: ObservableObject {
         isFilterPresented = false
         isSortPresented = false
         isOrganizePresented = false
+        isRenamePresented = false
         isActionPalettePresented = false
         actionPaletteFollowUp = nil
         isGroupingEnabled = true

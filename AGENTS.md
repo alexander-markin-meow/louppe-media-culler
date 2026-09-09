@@ -1,4 +1,4 @@
-# Louppe — guidance for AI assistants
+# Louppe Media Culler — guidance for AI assistants
 
 Native macOS photo-culling app. Swift/SwiftUI, plain SwiftPM executable —
 **no Xcode project**. Apple Command Line Tools 26.6 are selected and are
@@ -93,7 +93,7 @@ truth, created in `LouppeApp` and passed to every view.
 | `Sources/Louppe/SelectionState.swift` | Pure stable-ID/index selection authority: range, edge, toggle, rubber-band, filter intersection, and generation remapping; projected by `SessionStore` |
 | `Sources/Louppe/SessionPersistence.swift` | Actor that binds an open folder to stable directory identity, serializes typed sidecar/identity-keyed-backup outcomes, cross-process lineage locking, raw-byte CAS, monotonic generations, schema validation, and durable atomic writes off-main |
 | `Sources/Louppe/DurableFileIO.swift` | POSIX write/sync/rename/directory-sync boundary shared by sessions and file-operation journals |
-| `Sources/Louppe/FileOperationJournal.swift` | Per-file durable Copy/Move/Organize/Trash/undo checkpoints, stable file identity, and launch recovery |
+| `Sources/Louppe/FileOperationJournal.swift` | Per-file durable Copy/Move/Rename/Organize/Trash/undo checkpoints, stable file identity, and launch recovery |
 | `Sources/Louppe/CleanUpWorker.swift` | Background Trash/restore file loops, progress throttling, pair rollback, O(n+k) restoration merge |
 | `Sources/Louppe/FolderScanner.swift` | Recursive scan, deterministic volume-aware RAW+JPEG pairing, lazy partner-JPEG metadata enrichment, in-memory pairing projection, chronological sort |
 | `Sources/Louppe/ImagePipeline.swift` | ImageIO decoding + AVFoundation first-frame generation, thumbnail memory+disk caches, prefetching |
@@ -108,8 +108,9 @@ truth, created in `LouppeApp` and passed to every view.
 | `Sources/Louppe/ExportManager.swift` | Export dialog state machine: destination prompt, copy/move orchestration |
 | `Sources/Louppe/ExportWorker.swift` | Background copy/move loops, pair-wide collision planning and rollback |
 | `Sources/Louppe/ExportDestinationValidator.swift` | Export preflight: source-tree exclusion, destination permission and capacity |
-| `Sources/Louppe/SourceOrganization.swift` | Pure source-folder hierarchy, exact-path collision/XMP-family preflight, and preview planning |
-| `Sources/Louppe/SourceOrganizationWorker.swift` | Journaled source-folder moves, exact directory creation, and in-session layout restoration |
+| `Sources/Louppe/SourceOrganization.swift` | Pure source-folder hierarchy/rename, exact-path collision/XMP-family preflight, and preview planning |
+| `Sources/Louppe/SourceOrganizationWorker.swift` | Journaled source-folder moves/renames, exact directory creation, and in-session undo restoration |
+| `Sources/Louppe/FileRenaming.swift` | Pure filename recipes, fixed date/time rendering, sanitization, sequencing, and source-rename configuration |
 | `Sources/Louppe/Models.swift` | Physical `PhotoFile` records, projected `PhotoItem` groups, ratings/filter models, sidecar codables |
 | `Sources/Louppe/Views/RootView.swift` | Phase switch (welcome/scanning/session), `Color.appBackground` |
 | `Sources/Louppe/Views/WelcomeView.swift` | Start screen + cancellable scanning progress |
@@ -128,6 +129,7 @@ truth, created in `LouppeApp` and passed to every view.
 | `Sources/Louppe/Views/VideoPlayerView.swift` | Native AVPlayerView bridge for Gallery/Grid playback |
 | `Sources/Louppe/Views/ExportView.swift` | Export dialog (mode + rating tiles → progress → done) |
 | `Sources/Louppe/Views/OrganizeSourceView.swift` | Source-folder scope, draggable folder levels, preview, confirmation, progress, and outcome sheet |
+| `Sources/Louppe/Views/RenameFilesView.swift` | Single-family and metadata-batch source rename preview, confirmation, progress, and outcome sheet |
 | `Tests/PerformanceChecks/main.swift` | Dependency-free search, ordered persistence, restoration-merge, and export copy/move regression checks |
 
 See `Docs/PERFORMANCE.md` before changing concurrency, caching, filtering, or
@@ -155,9 +157,14 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   (2026-08-17) moves a confirmed All/Filtered/Selected scope inside the opened
   source folder according to its previewed metadata hierarchy; it retains old
   folders, never overwrites or renames a collision, and ⌘Z restores file
-  locations during the open session. No other code path may move originals;
+  locations during the open session. (4) **Rename Files…** and the Info-panel
+  pencil (2026-09-04) rename original filename stems inside their current
+  folders after an exact preview or explicit single-name submission. Extensions
+  and contents never change; RAW+JPEG and recognized XMP names follow as one
+  journaled family, collisions and `.acr` companions block the plan, and ⌘Z
+  restores the prior names during the open session. No other code path may move originals;
   nothing ever hard-deletes.
-- Copy, Move, Organize, Trash, and their supported undo paths must activate a
+- Copy, Move, Rename, Organize, Trash, and their supported undo paths must activate a
   `FileOperationJournal` before their first filesystem change. Recovery must
   verify stable file identity, never overwrite an existing path, never infer
   ownership from a filename alone, and keep unresolved journals retryable until
@@ -326,7 +333,7 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   loops back on the main actor. While `isCleaningUp`, keep item-index mutations
   blocked, folder switching disabled, and Quit refused so pair rollback and ⌘Z
   remain exact. Export follows the same boundary (`ExportWorker`). The shared
-  `activeFileOperation` covers Clean Up, Copy, Move, and Source Organization;
+  `activeFileOperation` covers Clean Up, Copy, Move, Source Rename, and Source Organization;
   it blocks folder
   switching, rescan, undo, update checks/installation, and Quit until the
   worker completes or Copy cancels after rolling back its in-progress pair.
@@ -338,7 +345,7 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   may be removed through the journal's two reserved paths. Do not add a second
   independent in-flight flag. A recovery pass that is actively touching files
   remains mutually exclusive with new work. An unresolved journal awaiting
-  attention blocks only new Copy, Move, Organize, Trash/Clean Up, and Trash
+  attention blocks only new Copy, Move, Rename, Organize, Trash/Clean Up, and Trash
   undo actions;
   it must never block reviewing, rating, navigation, folder open/close/rescan,
   saving, updates, or Quit.
@@ -369,7 +376,7 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
 
 ## Repo conventions
 
-- GitHub: `alexander-markin-meow/louppe` (public). Commit/push only when the
+- GitHub: `alexander-markin-meow/louppe-media-culler` (public). Commit/push only when the
   owner asks; he reviews PRs via the GitHub UI "Merge" button or asks here.
 - **Use `main` only.** Do not create or retain local or remote feature branches
   unless the owner explicitly asks for one. Commit directly to `main` only when

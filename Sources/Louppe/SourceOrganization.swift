@@ -25,13 +25,56 @@ struct SourceOrganizationOutcome: Equatable, Sendable {
     let wasUndo: Bool
 
     var succeeded: Bool { failedItems == 0 && message == nil }
+
+    func title(for kind: SourceFileChangeKind) -> String {
+        if wasUndo {
+            guard succeeded else { return "Restore finished with problems" }
+            return kind == .rename
+                ? "Previous filenames restored" : "Previous folders restored"
+        }
+        if kind == .rename {
+            return succeeded ? "Files renamed" : "Rename finished with problems"
+        }
+        return succeeded ? "Source folder organized" : "Organization finished with problems"
+    }
+
+    func fileCountDescription(for kind: SourceFileChangeKind) -> String {
+        let noun = movedFiles == 1 ? "file" : "files"
+        let action = wasUndo ? "restored" : (kind == .rename ? "renamed" : "moved")
+        return "\(movedFiles) \(noun) \(action)"
+    }
 }
 
 struct SourceOrganizationPlanningSnapshot: Sendable {
     let sourceFolder: URL
     let selectedItems: [PhotoItem]
     let familyContextItems: [PhotoItem]
+    let pairedFiles: [SourceOrganizationPairedFiles]
     let knownOriginFolderPathBytesByFileID: [String: Data]
+}
+
+/// The scanner's exact, unambiguous RAW+JPEG relationship. Renaming carries
+/// this separately from the current review projection because the default
+/// projection presents the two physical files as independent items.
+struct SourceOrganizationPairedFiles: Equatable, Hashable, Sendable {
+    let rawFileID: String
+    let jpegFileID: String
+}
+
+enum SourceFileChangeKind: Equatable, Sendable {
+    case organization
+    case rename
+}
+
+enum SourceOrganizationDestinationMode: Equatable, Sendable {
+    case organizedFolders
+    case keepExistingFolders
+}
+
+enum SourceFileNaming: Equatable, Sendable {
+    case unchanged
+    case customBaseName(String)
+    case metadata(FileRenamingConfiguration)
 }
 
 final class SourceOrganizationPlanningCancelFlag: @unchecked Sendable {
@@ -137,6 +180,12 @@ struct SourceOrganizationConfiguration: Equatable, Sendable {
     var dateGranularity: SourceOrganizationDateGranularity
     var existingFolderDepth: SourceOrganizationExistingFolderDepth
     var containerName: String
+    var destinationMode: SourceOrganizationDestinationMode = .organizedFolders
+    var fileNaming: SourceFileNaming = .unchanged
+
+    var changeKind: SourceFileChangeKind {
+        destinationMode == .keepExistingFolders ? .rename : .organization
+    }
 
     static func initial(hasMultipleTopLevelFolders: Bool) -> Self {
         Self(
@@ -227,6 +276,8 @@ struct SourceOrganizationPlan: Sendable {
     let sidecarFileCount: Int
     let excludedACRCompanionCount: Int
 
+    var changeKind: SourceFileChangeKind { configuration.changeKind }
+
     var canExecute: Bool {
         !sourceItems.isEmpty
             && !workerPlan.items.isEmpty
@@ -237,6 +288,8 @@ struct SourceOrganizationPlan: Sendable {
 enum SourceOrganizationPlanner {
     enum PlannerError: LocalizedError {
         case invalidContainerName
+        case invalidFileName(String)
+        case noFilenameParts
         case unsafeSourcePath(URL)
         case invalidExistingFolder
 
@@ -244,6 +297,10 @@ enum SourceOrganizationPlanner {
             switch self {
             case .invalidContainerName:
                 return "Choose a single, non-empty folder name for the organized files."
+            case .invalidFileName(let reason):
+                return reason
+            case .noFilenameParts:
+                return "Choose at least one filename part."
             case .unsafeSourcePath(let url):
                 return "Louppe could not preserve the exact source path for \(url.lastPathComponent)."
             case .invalidExistingFolder:
@@ -258,12 +315,50 @@ enum SourceOrganizationPlanner {
         familyContextItems: [PhotoItem],
         configuration: SourceOrganizationConfiguration,
         knownOriginFolderPathBytesByFileID: [String: Data],
+        pairedFiles: [SourceOrganizationPairedFiles] = [],
         isCancelled: @escaping @Sendable () -> Bool = { false }
     ) throws -> SourceOrganizationPlan {
         if isCancelled() { throw CancellationError() }
-        guard isValidContainerName(configuration.containerName),
-              !configuration.enabledLevels.isEmpty else {
-            throw PlannerError.invalidContainerName
+        let projectedPairs = familyContextItems.compactMap {
+            item -> SourceOrganizationPairedFiles? in
+            guard item.individualFiles.count == 2,
+                  let raw = item.individualFiles.first(where: {
+                    FolderScanner.rawExtensions.contains(
+                        $0.url.pathExtension.lowercased()
+                    )
+                  }),
+                  let jpeg = item.individualFiles.first(where: {
+                    ["jpg", "jpeg"].contains(
+                        $0.url.pathExtension.lowercased()
+                    )
+                  }) else { return nil }
+            return SourceOrganizationPairedFiles(
+                rawFileID: raw.id,
+                jpegFileID: jpeg.id
+            )
+        }
+        let effectivePairedFiles = Array(Set(pairedFiles + projectedPairs))
+        switch configuration.destinationMode {
+        case .organizedFolders:
+            guard isValidContainerName(configuration.containerName),
+                  !configuration.enabledLevels.isEmpty else {
+                throw PlannerError.invalidContainerName
+            }
+        case .keepExistingFolders:
+            switch configuration.fileNaming {
+            case .unchanged:
+                throw PlannerError.noFilenameParts
+            case .customBaseName(let value):
+                if let reason = FileRenamingPlanner.validationMessage(
+                    forCustomBaseName: value
+                ) {
+                    throw PlannerError.invalidFileName(reason)
+                }
+            case .metadata(let naming):
+                guard !naming.enabledParts.isEmpty else {
+                    throw PlannerError.noFilenameParts
+                }
+            }
         }
         let rootPath = try XMPExactFileSystemPath(url: sourceFolder)
         let sourceFolderIdentity = try SessionPersistence.SourceFolderIdentity
@@ -274,21 +369,31 @@ enum SourceOrganizationPlanner {
         let volumeValues = try? sourceFolder.resourceValues(forKeys: [
             .volumeSupportsCaseSensitiveNamesKey,
         ])
+        let volumeSupportsCaseSensitiveNames =
+            volumeValues?.volumeSupportsCaseSensitiveNames
         let volumeUsesCaseSensitiveNames =
-            volumeValues?.volumeSupportsCaseSensitiveNames ?? false
-        let containerComponent = Data(configuration.containerName.utf8)
-        let destinationRoot = try rootPath.appending(
-            componentBytes: containerComponent
-        )
+            volumeSupportsCaseSensitiveNames ?? false
+        let destinationRoot: XMPExactFileSystemPath?
+        switch configuration.destinationMode {
+        case .organizedFolders:
+            let containerComponent = Data(configuration.containerName.utf8)
+            destinationRoot = try rootPath.appending(
+                componentBytes: containerComponent
+            )
+        case .keepExistingFolders:
+            destinationRoot = nil
+        }
 
         var origins = knownOriginFolderPathBytesByFileID
-        for file in familyContextItems.flatMap(\.individualFiles) {
-            if isCancelled() { throw CancellationError() }
-            if origins[file.id] == nil {
-                origins[file.id] = try relativeParentBytes(
-                    of: file.url,
-                    under: sourceFolder
-                )
+        if configuration.destinationMode == .organizedFolders {
+            for file in familyContextItems.flatMap(\.individualFiles) {
+                if isCancelled() { throw CancellationError() }
+                if origins[file.id] == nil {
+                    origins[file.id] = try relativeParentBytes(
+                        of: file.url,
+                        under: sourceFolder
+                    )
+                }
             }
         }
 
@@ -298,6 +403,8 @@ enum SourceOrganizationPlanner {
         )
         var mappings: [SourceOrganizationFileMapping] = []
         var targetDirectoryByMediaPath:
+            [XMPExactFileSystemPath: XMPExactFileSystemPath] = [:]
+        var targetMediaPathBySourceMediaPath:
             [XMPExactFileSystemPath: XMPExactFileSystemPath] = [:]
         var selectedItemIndexByMediaPath: [XMPExactFileSystemPath: Int] = [:]
         var destinationItemIDs: [String: String] = [:]
@@ -313,6 +420,60 @@ enum SourceOrganizationPlanner {
             repeating: true,
             count: selectedItems.count
         )
+        var disjointSet = DisjointSet(count: selectedItems.count)
+        let itemIndexByFileID = Dictionary(
+            uniqueKeysWithValues: selectedItems.enumerated().flatMap {
+                index, item in item.individualFiles.map { ($0.id, index) }
+            }
+        )
+        for pair in effectivePairedFiles {
+            guard let rawIndex = itemIndexByFileID[pair.rawFileID],
+                  let jpegIndex = itemIndexByFileID[pair.jpegFileID] else {
+                continue
+            }
+            disjointSet.union(rawIndex, jpegIndex)
+        }
+
+        // One representative supplies both metadata and the sequence number
+        // for every physical RAW+JPEG family. Prefer the RAW member when the
+        // pair is shown as two separate review items.
+        var representativeIndexByRoot: [Int: Int] = [:]
+        for index in selectedItems.indices {
+            let root = disjointSet.find(index)
+            if representativeIndexByRoot[root] == nil {
+                representativeIndexByRoot[root] = index
+            }
+        }
+        for pair in effectivePairedFiles {
+            guard let rawIndex = itemIndexByFileID[pair.rawFileID] else {
+                continue
+            }
+            let root = disjointSet.find(rawIndex)
+            representativeIndexByRoot[root] = rawIndex
+        }
+        let representativeItems = representativeIndexByRoot.values
+            .sorted()
+            .map { selectedItems[$0] }
+        let sequenceByRepresentativeID = FileRenamingPlanner.sequenceByItemID(
+            representativeItems
+        )
+        var generatedBaseNameByItemIndex: [Int: String?] = [:]
+        for index in selectedItems.indices {
+            let root = disjointSet.find(index)
+            let representativeIndex = representativeIndexByRoot[root] ?? index
+            let representative = selectedItems[representativeIndex]
+            generatedBaseNameByItemIndex[index] = try FileRenamingPlanner
+                .baseName(
+                    for: representative,
+                    naming: configuration.fileNaming,
+                    sequence: sequenceByRepresentativeID[
+                        representative.id
+                    ] ?? 1,
+                    sequenceWidth: FileRenamingPlanner.sequenceWidth(
+                        for: representativeItems.count
+                    )
+                )
+        }
 
         func reserve(
             source: URL,
@@ -336,6 +497,15 @@ enum SourceOrganizationPlanner {
             }
             if targetExact.entryExists,
                pathsReferToSameFile(source, target) {
+                if configuration.fileNaming == .unchanged {
+                    return false
+                }
+                collisions.append(SourceOrganizationCollision(
+                    id: "equivalent-name:\(targetExact.bytes.base64EncodedString())",
+                    destination: target,
+                    sources: [source],
+                    message: "This drive treats the new spelling as the same filename. Choose a more distinct name."
+                ))
                 return false
             }
             let key = collisionKey(
@@ -351,7 +521,8 @@ enum SourceOrganizationPlanner {
                 ))
                 return false
             }
-            if targetExact.entryExists {
+            if targetExact.entryExists,
+               !pathsReferToSameFile(source, target) {
                 collisions.append(SourceOrganizationCollision(
                     id: "existing:\(key)",
                     destination: target,
@@ -371,58 +542,70 @@ enum SourceOrganizationPlanner {
         for (itemIndex, item) in selectedItems.enumerated() {
             if isCancelled() { throw CancellationError() }
             let metadata = item.metadataState
-            var targetDirectory = destinationRoot
-            for level in configuration.enabledLevels {
-                switch level.kind {
-                case .existingFolder:
-                    let origin = origins[item.primaryFile.id] ?? Data()
-                    let components = try existingFolderComponents(
-                        origin,
-                        depth: configuration.existingFolderDepth
-                    )
-                    for component in components {
+            var organizedTargetDirectory = destinationRoot
+            if var targetDirectory = organizedTargetDirectory {
+                for level in configuration.enabledLevels {
+                    switch level.kind {
+                    case .existingFolder:
+                        let origin = origins[item.primaryFile.id] ?? Data()
+                        let components = try existingFolderComponents(
+                            origin,
+                            depth: configuration.existingFolderDepth
+                        )
+                        for component in components {
+                            targetDirectory = try targetDirectory.appending(
+                                componentBytes: component
+                            )
+                        }
+                    default:
+                        let label = folderLabel(
+                            for: level.kind,
+                            item: item,
+                            metadata: metadata,
+                            dateGranularity: configuration.dateGranularity
+                        )
                         targetDirectory = try targetDirectory.appending(
-                            componentBytes: component
+                            componentBytes: Data(safeFolderComponent(label).utf8)
                         )
                     }
-                default:
-                    let label = folderLabel(
-                        for: level.kind,
-                        item: item,
-                        metadata: metadata,
-                        dateGranularity: configuration.dateGranularity
-                    )
-                    targetDirectory = try targetDirectory.appending(
-                        componentBytes: Data(safeFolderComponent(label).utf8)
-                    )
                 }
+                organizedTargetDirectory = targetDirectory
             }
-            destinationDirectories.insert(targetDirectory)
-            if let unsafe = unsafeExistingDirectory(
-                onPathTo: targetDirectory,
-                under: rootPath
-            ) {
-                collisions.append(SourceOrganizationCollision(
-                    id: "unsafe-directory:\(unsafe.bytes.base64EncodedString())",
-                    destination: unsafe.url,
-                    sources: item.allURLs,
-                    message: "A destination component already exists but is not a normal folder."
-                ))
-            }
-            let previewPath = displayRelativePath(
-                targetDirectory.bytes,
-                under: rootPath.bytes
-            )
-            previewCounts[previewPath, default: (0, 0)].items += 1
-            previewCounts[previewPath, default: (0, 0)].mediaFiles +=
-                item.individualFiles.count
+
+            let generatedBaseName = generatedBaseNameByItemIndex[itemIndex]
+                ?? nil
+            var previewDirectories = Set<XMPExactFileSystemPath>()
 
             for file in item.individualFiles {
                 let sourcePath = try XMPExactFileSystemPath(url: file.url)
+                let targetDirectory = organizedTargetDirectory
+                    ?? sourcePath.parent
+                previewDirectories.insert(targetDirectory)
+                if configuration.destinationMode == .organizedFolders {
+                    destinationDirectories.insert(targetDirectory)
+                    if let unsafe = unsafeExistingDirectory(
+                        onPathTo: targetDirectory,
+                        under: rootPath
+                    ) {
+                        collisions.append(SourceOrganizationCollision(
+                            id: "unsafe-directory:\(unsafe.bytes.base64EncodedString())",
+                            destination: unsafe.url,
+                            sources: item.allURLs,
+                            message: "A destination component already exists but is not a normal folder."
+                        ))
+                    }
+                }
+                let targetComponent = generatedBaseName.map {
+                    FileRenamingPlanner.filenameComponent(
+                        baseName: $0,
+                        preservingExtensionOf: sourcePath.lastComponentBytes
+                    )
+                } ?? sourcePath.lastComponentBytes
                 let targetPath = try targetDirectory.appending(
-                    componentBytes: sourcePath.lastComponentBytes
+                    componentBytes: targetComponent
                 )
                 targetDirectoryByMediaPath[sourcePath] = targetDirectory
+                targetMediaPathBySourceMediaPath[sourcePath] = targetPath
                 selectedItemIndexByMediaPath[sourcePath] = itemIndex
                 mappings.append(SourceOrganizationFileMapping(
                     itemID: item.id,
@@ -445,6 +628,15 @@ enum SourceOrganizationPlanner {
                     )
                 }
             }
+            for targetDirectory in previewDirectories {
+                let previewPath = displayRelativePath(
+                    targetDirectory.bytes,
+                    under: rootPath.bytes
+                )
+                previewCounts[previewPath, default: (0, 0)].items += 1
+                previewCounts[previewPath, default: (0, 0)].mediaFiles +=
+                    item.individualFiles.count
+            }
             if let primaryMapping = mappings.last(where: {
                 $0.itemID == item.id && $0.source == item.primaryURL
             }) {
@@ -452,6 +644,77 @@ enum SourceOrganizationPlanner {
                     of: primaryMapping.destination,
                     under: sourceFolder
                 )
+            }
+        }
+
+        // A rename must not accidentally create a new RAW+JPEG family. Run
+        // the scanner's folder-wide pairing rule over the complete projected
+        // destination, then reject any relationship that did not exist in the
+        // scan snapshot. This also covers pairs spanning subfolders.
+        if configuration.fileNaming != .unchanged {
+            let contextFiles = familyContextItems.flatMap(\.individualFiles)
+            var sourceFileIDByResultPath: [String: String] = [:]
+            let resultURLs = try contextFiles.map { file -> URL in
+                let source = try XMPExactFileSystemPath(url: file.url)
+                let target = targetMediaPathBySourceMediaPath[source] ?? source
+                sourceFileIDByResultPath[
+                    FolderScanner.fileSystemIdentityPath(for: target.url)
+                ] = file.id
+                return target.url
+            }
+            let knownPairs = Set(effectivePairedFiles.map {
+                pairedFileKey($0.rawFileID, $0.jpegFileID)
+            })
+            let projectedPairs = FolderScanner.pairFiles(
+                resultURLs,
+                pairingMode: .together,
+                caseSensitiveNames: volumeSupportsCaseSensitiveNames ?? true
+            )
+            var projectedPairKeys = Set<String>()
+            for projected in projectedPairs {
+                guard let jpeg = projected.paired,
+                      let rawID = sourceFileIDByResultPath[
+                        FolderScanner.fileSystemIdentityPath(
+                            for: projected.primary
+                        )
+                      ],
+                      let jpegID = sourceFileIDByResultPath[
+                        FolderScanner.fileSystemIdentityPath(for: jpeg)
+                      ] else {
+                    continue
+                }
+                let projectedKey = pairedFileKey(rawID, jpegID)
+                projectedPairKeys.insert(projectedKey)
+                guard !knownPairs.contains(projectedKey) else { continue }
+                let destination = projected.primary
+                if let raw = contextFiles.first(where: { $0.id == rawID }),
+                   let jpegFile = contextFiles.first(where: {
+                       $0.id == jpegID
+                   }) {
+                    collisions.append(SourceOrganizationCollision(
+                        id: "new-media-family:\(rawID):\(jpegID)",
+                        destination: destination,
+                        sources: [raw.url, jpegFile.url],
+                        message: "These files would acquire the same stem and could be mistaken for a RAW + JPEG pair. Add Sequence or choose another name."
+                    ))
+                }
+            }
+            let contextFileIDs = Set(contextFiles.map(\.id))
+            for pair in effectivePairedFiles
+            where contextFileIDs.contains(pair.rawFileID)
+                && contextFileIDs.contains(pair.jpegFileID)
+                && !projectedPairKeys.contains(
+                    pairedFileKey(pair.rawFileID, pair.jpegFileID)
+                ) {
+                let members = contextFiles.filter {
+                    $0.id == pair.rawFileID || $0.id == pair.jpegFileID
+                }
+                collisions.append(SourceOrganizationCollision(
+                    id: "broken-media-family:\(pair.rawFileID):\(pair.jpegFileID)",
+                    destination: members.first?.url ?? sourceFolder,
+                    sources: members.map(\.url),
+                    message: "These names would make an existing RAW + JPEG pair ambiguous. Add Sequence or choose another name."
+                ))
             }
         }
 
@@ -477,7 +740,6 @@ enum SourceOrganizationPlanner {
             parentGroups[member.mediaPath.parent, default: []].append(member)
         }
 
-        var disjointSet = DisjointSet(count: selectedItems.count)
         var sidecarFiles = 0
         var excludedACR = Set<XMPExactFileSystemPath>()
         for members in parentGroups.values {
@@ -488,7 +750,8 @@ enum SourceOrganizationPlanner {
                     targetDirectoryByMediaPath[$0.mediaPath] != nil
                 }
                 guard !selectedMembers.isEmpty else { continue }
-                if family.disposition == .unsupportedMedia { continue }
+                if family.disposition == .unsupportedMedia,
+                   configuration.fileNaming == .unchanged { continue }
                 if family.disposition == .filenameCollision {
                     collisions.append(SourceOrganizationCollision(
                         id: "xmp-filename:\(selectedMembers[0].mediaPath.bytes.base64EncodedString())",
@@ -498,8 +761,25 @@ enum SourceOrganizationPlanner {
                     ))
                     continue
                 }
+                let connectedItemIndices = selectedMembers.compactMap {
+                    selectedItemIndexByMediaPath[$0.mediaPath]
+                }
+                if let first = connectedItemIndices.first {
+                    for index in connectedItemIndices.dropFirst() {
+                        disjointSet.union(first, index)
+                    }
+                }
                 for acr in family.excludedACRCompanions {
                     excludedACR.insert(acr)
+                    if configuration.fileNaming != .unchanged,
+                       !selectedMembers.isEmpty {
+                        collisions.append(SourceOrganizationCollision(
+                            id: "acr-rename:\(acr.bytes.base64EncodedString())",
+                            destination: acr.url,
+                            sources: selectedMembers.map(\.mediaPath.url),
+                            message: "This media family has a Lightroom .acr companion. Louppe leaves .acr files untouched, so rename this family outside Louppe."
+                        ))
+                    }
                 }
 
                 if let canonical = family.canonicalSidecar,
@@ -509,13 +789,22 @@ enum SourceOrganizationPlanner {
                     let targetDirectories = Set(selectedMembers.compactMap {
                         targetDirectoryByMediaPath[$0.mediaPath]
                     })
+                    let targetStems = Set(selectedMembers.compactMap {
+                        targetMediaPathBySourceMediaPath[$0.mediaPath].map {
+                            FileRenamingPlanner.stemBytes(
+                                of: $0.lastComponentBytes
+                            )
+                        }
+                    })
                     guard everyMemberSelected, targetDirectories.count == 1,
-                          let targetDirectory = targetDirectories.first else {
+                          targetStems.count == 1,
+                          let targetDirectory = targetDirectories.first,
+                          let targetStem = targetStems.first else {
                         collisions.append(SourceOrganizationCollision(
                             id: "shared-xmp:\(canonical.bytes.base64EncodedString())",
                             destination: canonical.url,
                             sources: selectedMembers.map(\.mediaPath.url),
-                            message: "A shared XMP sidecar would be separated from part of its media family."
+                            message: "A shared XMP sidecar would be separated from part of its media family or its files would receive different names."
                         ))
                         continue
                     }
@@ -526,8 +815,14 @@ enum SourceOrganizationPlanner {
                         for index in itemIndices.dropFirst() {
                             disjointSet.union(first, index)
                         }
+                        let targetComponent = configuration.fileNaming
+                            == .unchanged
+                            ? canonical.lastComponentBytes
+                            : targetStem + FileRenamingPlanner.extensionBytes(
+                                of: canonical.lastComponentBytes
+                            )
                         let target = try targetDirectory.appending(
-                            componentBytes: canonical.lastComponentBytes
+                            componentBytes: targetComponent
                         )
                         mappings.append(SourceOrganizationFileMapping(
                             itemID: selectedItems[first].id,
@@ -551,7 +846,10 @@ enum SourceOrganizationPlanner {
                                 )
                             )
                             sidecarFiles += 1
-                            destinationDirectories.insert(targetDirectory)
+                            if configuration.destinationMode
+                                == .organizedFolders {
+                                destinationDirectories.insert(targetDirectory)
+                            }
                         }
                     }
                 }
@@ -573,11 +871,21 @@ enum SourceOrganizationPlanner {
                     guard let targetDirectory = targetDirectoryByMediaPath[
                               owner.mediaPath
                           ],
+                          let targetMedia = targetMediaPathBySourceMediaPath[
+                              owner.mediaPath
+                          ],
                           let itemIndex = selectedItemIndexByMediaPath[
                               owner.mediaPath
                           ] else { continue }
+                    let targetComponent = configuration.fileNaming
+                        == .unchanged
+                        ? packet.lastComponentBytes
+                        : targetMedia.lastComponentBytes
+                            + FileRenamingPlanner.extensionBytes(
+                                of: packet.lastComponentBytes
+                            )
                     let target = try targetDirectory.appending(
-                        componentBytes: packet.lastComponentBytes
+                        componentBytes: targetComponent
                     )
                     mappings.append(SourceOrganizationFileMapping(
                         itemID: selectedItems[itemIndex].id,
@@ -601,7 +909,9 @@ enum SourceOrganizationPlanner {
                             )
                         )
                         sidecarFiles += 1
-                        destinationDirectories.insert(targetDirectory)
+                        if configuration.destinationMode == .organizedFolders {
+                            destinationDirectories.insert(targetDirectory)
+                        }
                     }
                 }
             }
@@ -854,6 +1164,11 @@ enum SourceOrganizationPlanner {
             .lowercased(with: Locale(identifier: "en_US_POSIX"))
     }
 
+    private static func pairedFileKey(_ rawFileID: String, _ jpegFileID: String)
+        -> String {
+        "\(rawFileID.utf8.count):\(rawFileID)\(jpegFileID)"
+    }
+
     private static func pathsReferToSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
         guard let left = try? FileOperationJournal.captureIdentity(at: lhs),
               let right = try? FileOperationJournal.captureIdentity(at: rhs)
@@ -898,6 +1213,7 @@ enum SourceOrganizationPlanner {
         onPathTo directory: XMPExactFileSystemPath,
         under root: XMPExactFileSystemPath
     ) -> XMPExactFileSystemPath? {
+        if directory == root { return nil }
         var prefix = root.bytes
         if prefix.last != UInt8(ascii: "/") {
             prefix.append(UInt8(ascii: "/"))

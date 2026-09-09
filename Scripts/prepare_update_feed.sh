@@ -10,8 +10,8 @@ MARKETING_VERSION="$(awk -F= '$1 == "MARKETING_VERSION" { print $2 }' "$VERSION_
 BUILD_NUMBER="$(awk -F= '$1 == "BUILD_NUMBER" { print $2 }' "$VERSION_FILE")"
 TAG="v$MARKETING_VERSION"
 ACCOUNT="com.alexandermarkin.louppe"
-RELEASE_URL="https://github.com/alexander-markin-meow/louppe/releases/tag/$TAG"
-DOWNLOAD_PREFIX="https://github.com/alexander-markin-meow/louppe/releases/download/$TAG/"
+RELEASE_URL="https://github.com/alexander-markin-meow/louppe-media-culler/releases/tag/$TAG"
+DOWNLOAD_PREFIX="https://github.com/alexander-markin-meow/louppe-media-culler/releases/download/$TAG/"
 
 if [[ ! -f "$ARCHIVE" ]]; then
     echo "Missing dist/Louppe.zip. Run ./build_app.sh first." >&2

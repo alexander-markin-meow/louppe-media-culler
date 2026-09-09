@@ -31,6 +31,7 @@ swiftc \
     Sources/Louppe/CleanUpWorker.swift \
     Sources/Louppe/ExportWorker.swift \
     Sources/Louppe/ExportDestinationValidator.swift \
+    Sources/Louppe/FileRenaming.swift \
     Sources/Louppe/SourceOrganization.swift \
     Sources/Louppe/SourceOrganizationWorker.swift \
     Sources/Louppe/SecurityScopedAccess.swift \

@@ -1,16 +1,16 @@
-# Louppe
+# Louppe Media Culler
 
 (˶ᵔ ᵕ ᵔ˶)
 
-**A fast, open-source photo, video, and audio culling app for Mac.**
+**Louppe is a fast, open-source media culler for photos, video, and audio on Mac.**
 
 Louppe helps review a folder or memory card, mark the shots you want to
 keep, and export them.
 
 Your photos stay in their original quality. Export copies them by default.
-Louppe only moves originals when you deliberately choose **Move to…**, send
-photos to the macOS Trash, or confirm **Organize Source Folder**. It never
-permanently deletes a file.
+Louppe only moves or renames originals when you deliberately choose **Move
+to…**, send photos to the macOS Trash, confirm **Organize Source Folder**, or
+confirm a rename. It never permanently deletes a file.
 
 macOS 14 or newer.
 
@@ -19,7 +19,7 @@ Learn more at [louppe.eu](https://louppe.eu).
 ## Download
 
 Download `Louppe.zip` from the
-[latest release](https://github.com/alexander-markin-meow/louppe/releases/latest),
+[latest release](https://github.com/alexander-markin-meow/louppe-media-culler/releases/latest),
 unzip it, and drag `Louppe.app` into Applications.
 
 Louppe is not notarized by Apple. The first time you open it, macOS may say it
@@ -52,6 +52,21 @@ camera, lens, file type, and media type can all be levels; date folder names
 follow the Mac's language, region, and custom short-date format. The Command
 Palette includes **Organize by Date Taken Only…** to open this screen with Full
 date as the sole enabled folder level, ready for preview and confirmation.
+
+Rename one item directly where its filename is shown in the Info panel. Click
+the filename, edit the base name, and press Return; the extension stays
+unchanged, matching RAW+JPEG files keep one shared name, and recognized XMP
+sidecars follow. For a batch, select multiple items and choose **Rename Files…**
+in the Info panel, or search **⌘K** for **Rename Files from Metadata**.
+Choose All, Filtered, or Selected, then combine and order Date taken, Time
+taken, Camera, Lens, Original name, and Sequence. The preview shows every new
+name before confirmation. Sequence order is deterministic—capture time first,
+then the original path—and is enabled by default to distinguish shots captured
+in the same second. Missing metadata is written explicitly as Unknown rather
+than silently omitted. Renaming never changes file contents, extensions, or
+folders, never overwrites, and one **⌘Z** restores the previous names during
+the open session. A Lightroom `.acr` companion blocks the affected rename so
+it cannot be left under a misleading old name.
 
 Matching RAW+JPEG files are separate photos by default. In Filter → File types,
 **Treat matching RAW + JPEG as one photo** groups an unambiguous match, including
@@ -141,10 +156,10 @@ are not treated as visually similar photos or still-photo bursts.
 |---|---|
 | **E** or **⌘E** | Open Export |
 | **R** | Clear all Yes/No decisions. Large sets ask for confirmation; **Return** confirms |
-| **Z** or **⌘Z** | Undo the last decision, star, color-label, decision reset, Trash action, or source-folder organization |
+| **Z** or **⌘Z** | Undo the last decision, star, color-label, decision reset, Trash action, source rename, or source-folder organization |
 | **⌘O** | Open a different folder |
 | **⌘R** | Scan the current folder again |
-| **⌘K** | Open the Command Palette to search actions, metadata tools, filters, and folder operations |
+| **⌘K** | Open the Command Palette to search actions, renaming, metadata tools, filters, and folder operations |
 | **⌘A** | Select every item currently shown by the filter |
 | **⌘← / ⌘→** | Choose a slower / faster speed for playable video or audio. On a photo, select the previous / next visible item |
 | **⌘⇧← / ⌘⇧→** | Select from the current item to the first / last |
@@ -245,13 +260,20 @@ alone, so the main review workflow can be completed with the keyboard.
   preserves the same physical file during a move, and keeps the bytes intact;
   it moves no photo if that check fails. Keep the card connected and the Mac
   awake until the operation finishes.
+- **Rename Files** changes originals only after an exact plan. A single rename
+  starts where the filename is shown in the Info panel; metadata batches use All, Filtered,
+  or Selected scope and sortable filename parts. Extensions and folders stay
+  unchanged. Recognized RAW+JPEG/XMP families move as one journaled unit, while
+  `.acr`, ambiguous sidecars, occupied names, case-equivalent names, and names
+  that could create a false RAW+JPEG pair block the plan. No suffix is invented
+  silently and nothing is overwritten. **⌘Z** restores the prior names.
 - Matching RAW+JPEG files, if grouped, move or copy together.
 - Louppe keeps a small safety record during file operations. If the app is
   interrupted, Louppe checks the exact files and never overwrites an existing
   file. A completed Trash action stays in Trash—it is never silently undone on
   the next launch. If an unusual file action still needs attention, reviewing,
   rating, opening folders, saving, and quitting remain available; only another
-  Copy, Move, Organize, Clean Up, or Trash undo waits. Retry when the relevant
+  Copy, Move, Rename, Organize, Clean Up, or Trash undo waits. Retry when the relevant
   drive is available, or choose **Keep Files As They Are** to set aside only Louppe's
   recovery record—without deleting its contents—and continue with the files
   exactly where they are.
@@ -262,7 +284,9 @@ alone, so the main review workflow can be completed with the keyboard.
   Ratings follow the
   verified physical file across a rename, remain saved while a file is
   temporarily missing, and current identity-bound ratings are never silently
-  applied to a same-named replacement. Louppe also refuses to overwrite a session file changed by
+  applied to a same-named replacement. If a reused card or folder contains
+  different files with those names, **Open as New Session** explicitly replaces
+  the stale saved decisions and opens the current files unrated. Louppe also refuses to overwrite a session file changed by
   another app and will not confuse two cards or folders that later use the
   same path. An older filename-only session upgrades automatically when every
   saved filename is still present. If its saved folder path differs, Louppe

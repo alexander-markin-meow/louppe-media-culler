@@ -15,12 +15,15 @@ enum FileOperationJournal {
         case exportMove
         case organizeSource
         case restoreOrganization
+        case renameSource
+        case restoreRename
         case moveToTrash
         case restoreFromTrash
 
         var isAtomicMove: Bool {
             switch self {
-            case .exportMove, .organizeSource, .restoreOrganization:
+            case .exportMove, .organizeSource, .restoreOrganization,
+                 .renameSource, .restoreRename:
                 return true
             case .exportCopy, .moveToTrash, .restoreFromTrash:
                 return false
@@ -514,7 +517,7 @@ enum FileOperationJournal {
                 let temporary: URL?
                 switch kind {
                 case .exportCopy, .exportMove, .organizeSource,
-                     .restoreOrganization:
+                     .restoreOrganization, .renameSource, .restoreRename:
                     guard let destination else {
                         throw JournalError.unsafePlan(creating)
                     }
@@ -1004,7 +1007,8 @@ enum FileOperationJournal {
                 fileIndex: fileIndex,
                 planVersion: planVersion
             )
-        case .exportMove, .organizeSource, .restoreOrganization:
+        case .exportMove, .organizeSource, .restoreOrganization,
+             .renameSource, .restoreRename:
             return try recoverMove(
                 file,
                 state: state,
@@ -1801,7 +1805,8 @@ enum FileOperationJournal {
         kind: Kind,
         file: PlannedFile
     ) -> DurableFileIO.DirectorySyncPolicy {
-        guard kind == .organizeSource || kind == .restoreOrganization else {
+        guard kind == .organizeSource || kind == .restoreOrganization
+                || kind == .renameSource || kind == .restoreRename else {
             return .required
         }
         let volumeRoot = URL(
@@ -1816,7 +1821,8 @@ enum FileOperationJournal {
         kind: Kind,
         file: PlannedFile
     ) -> DurableFileIO.NoOverwriteRenameStrategy {
-        guard kind == .organizeSource || kind == .restoreOrganization else {
+        guard kind == .organizeSource || kind == .restoreOrganization
+                || kind == .renameSource || kind == .restoreRename else {
             return .exclusivePOSIX
         }
         let volumeRoot = URL(
@@ -2799,7 +2805,7 @@ enum FileOperationJournal {
 
             switch plan.kind {
             case .exportCopy, .exportMove, .organizeSource,
-                 .restoreOrganization:
+                 .restoreOrganization, .renameSource, .restoreRename:
                 guard let destinationPath = file.destinationPath,
                       let temporaryPath = file.temporaryPath else {
                     throw JournalError.corruptPlan(operationURL)

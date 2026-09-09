@@ -464,13 +464,9 @@ struct OrganizeSourceView: View {
                 .foregroundStyle(outcome.succeeded
                     ? Color.louppeAccent
                     : Color.secondary)
-            Text(outcome.wasUndo
-                ? "Previous folders restored"
-                : (outcome.succeeded
-                    ? "Source folder organized"
-                    : "Organization finished with problems"))
+            Text(outcome.title(for: .organization))
                 .font(.title2.weight(.semibold))
-            Text("\(outcome.movedFiles) files moved")
+            Text(outcome.fileCountDescription(for: .organization))
                 .foregroundStyle(.secondary)
             if let message = store.organizationError ?? outcome.message {
                 Text(message)
@@ -603,6 +599,7 @@ struct OrganizeSourceView: View {
                         configuration: requestedConfiguration,
                         knownOriginFolderPathBytesByFileID:
                             snapshot.knownOriginFolderPathBytesByFileID,
+                        pairedFiles: snapshot.pairedFiles,
                         isCancelled: { cancelFlag.isCancelled }
                     )
                 }

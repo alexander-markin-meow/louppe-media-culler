@@ -201,6 +201,19 @@ struct ActionPaletteView: View {
                 perform: { store.presentExport() }
             ),
             ActionPaletteAction(
+                id: "rename-files-from-metadata",
+                category: "Files",
+                title: "Rename Files from Metadata…",
+                detail: "Preview names built from date, time, camera, lens, and sequence",
+                symbol: "textformat",
+                keywords: [
+                    "rename", "filename", "batch", "bulk", "metadata",
+                    "date", "time", "camera", "lens", "sequence",
+                ],
+                isEnabled: store.canRenameSource,
+                perform: { store.presentMetadataFileRenaming() }
+            ),
+            ActionPaletteAction(
                 id: "organize",
                 category: "Files",
                 title: "Organize Source Folder…",

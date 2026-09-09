@@ -3,6 +3,86 @@ import XCTest
 
 @MainActor
 final class SelectionStateTests: XCTestCase {
+    func testSelectionSummaryFollowsSelectionFilteringAndItemReplacement() {
+        let store = readyStore()
+        XCTAssertNil(store.multiSelectionSummary)
+        store.selectAllVisible()
+        XCTAssertEqual(store.multiSelectionSummary?.count, 4)
+        XCTAssertEqual(store.multiSelectionSummary?.totalBytes, 4)
+
+        // Warm the summary, then replace metadata at the same numeric index.
+        store.items[0] = PhotoItem(
+            id: "Replacement.JPG",
+            primaryURL: URL(fileURLWithPath: "/tmp/Replacement.JPG"),
+            pairedURL: nil,
+            captureDate: nil,
+            cameraModel: "New camera",
+            lensModel: nil,
+            fileSize: 100
+        )
+        XCTAssertEqual(store.multiSelectionSummary?.totalBytes, 103)
+        XCTAssertEqual(store.multiSelectionSummary?.cameras, ["New camera", "Unknown"])
+
+        store.filter.excludedTypes = ["PNG"]
+        XCTAssertEqual(store.multiSelectionSummary?.count, 2)
+        XCTAssertEqual(store.multiSelectionSummary?.totalBytes, 101)
+        store.clearSelection()
+        XCTAssertNil(store.multiSelectionSummary)
+        store.setSelection([1, 3])
+        XCTAssertEqual(store.multiSelectionSummary?.totalBytes, 2)
+        store.items = []
+        XCTAssertNil(store.multiSelectionSummary)
+    }
+
+    func testSelectionMetadataReadsStayLiveForUniformMixedAndEmptySelections() {
+        let store = readyStore()
+        store.selectAllVisible()
+        store.setStarRating(.four)
+        store.setColorLabel(.purple)
+        store.toggleRating(at: 0)
+        XCTAssertEqual(store.effectiveDecisionState, .yes)
+        XCTAssertEqual(store.effectiveStarRatingState, .stars(.four))
+        XCTAssertEqual(store.effectiveColorLabelState, .label(.purple))
+
+        store.clearSelection()
+        store.setIndex(2)
+        store.setStarRating(.one)
+        store.setColorLabel(.red)
+        store.toggleRating(at: 2)
+        store.selectAllVisible()
+        XCTAssertEqual(store.effectiveDecisionState, .mixed)
+        XCTAssertEqual(store.effectiveStarRatingState, .mixed)
+        XCTAssertEqual(store.effectiveColorLabelState, .mixed)
+
+        store.filter.excludedTypes = ["JPEG", "PNG"]
+        XCTAssertEqual(store.effectiveDecisionState, .undecided)
+        XCTAssertEqual(store.effectiveStarRatingState, .unrated)
+        XCTAssertEqual(store.effectiveColorLabelState, .none)
+    }
+
+    func testLargeSelectionSummaryAndMetadataReadCost() {
+        let store = SessionStore()
+        store.items = (0..<20_000).map { makeItem("\($0).JPG") }
+        store.sort = PhotoSort(key: .name, ascending: true)
+        store.phase = .ready
+        store.selectAllVisible()
+
+        let start = Date.timeIntervalSinceReferenceDate
+        let legacyItems = store.selectedIndices.sorted().map { store.items[$0] }
+        let expected = PhotoSelectionSummary(items: legacyItems)
+        let cold = Date.timeIntervalSinceReferenceDate - start
+        XCTAssertEqual(store.multiSelectionSummary, expected)
+        let warmStart = Date.timeIntervalSinceReferenceDate
+        for _ in 0..<100 {
+            XCTAssertEqual(store.multiSelectionSummary, expected)
+        }
+        let warm = (Date.timeIntervalSinceReferenceDate - warmStart) / 100
+        print("20k selection summary: previous path \(cold)s, cached read \(warm)s")
+        XCTAssertEqual(store.effectiveDecisionState, .undecided)
+        XCTAssertEqual(store.effectiveStarRatingState, .unrated)
+        XCTAssertEqual(store.effectiveColorLabelState, .none)
+    }
+
     func testFileOperationPreventsIdleSystemSleepUntilCompletion() {
         let store = readyStore()
         XCTAssertFalse(store.isPreventingIdleSystemSleep)

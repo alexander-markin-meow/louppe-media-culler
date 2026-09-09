@@ -4,6 +4,7 @@ import Foundation
 struct SourceOrganizationUndoRecord: Sendable {
     let sourceFolder: URL
     let storageSafety: SourceOrganizationStorageSafety
+    let changeKind: SourceFileChangeKind
     let reversePlan: ExportWorker.Plan
     let affectedDestinationItemIDs: [String]
     let sourceItemIDByDestinationItemID: [String: String]
@@ -57,7 +58,9 @@ enum SourceOrganizationWorker {
             to: plan.sourceFolder,
             preparedPlan: plan.workerPlan,
             journalDirectory: journalDirectory,
-            journalKind: .organizeSource,
+            journalKind: plan.changeKind == .rename
+                ? .renameSource
+                : .organizeSource,
             directorySyncPolicy: plan.storageSafety.directorySyncPolicy,
             renameStrategy: plan.storageSafety.noOverwriteRenameStrategy,
             prepareDestinationDirectories: {
@@ -97,6 +100,7 @@ enum SourceOrganizationWorker {
             undo = SourceOrganizationUndoRecord(
                 sourceFolder: plan.sourceFolder,
                 storageSafety: plan.storageSafety,
+                changeKind: plan.changeKind,
                 reversePlan: ExportWorker.Plan(items: reverseItems),
                 affectedDestinationItemIDs: result.movedItemIDs.compactMap {
                     plan.destinationItemIDBySourceItemID[$0]
@@ -134,7 +138,9 @@ enum SourceOrganizationWorker {
             to: record.sourceFolder,
             preparedPlan: record.reversePlan,
             journalDirectory: journalDirectory,
-            journalKind: .restoreOrganization,
+            journalKind: record.changeKind == .rename
+                ? .restoreRename
+                : .restoreOrganization,
             directorySyncPolicy: record.storageSafety.directorySyncPolicy,
             renameStrategy: record.storageSafety.noOverwriteRenameStrategy,
             progress: progress
@@ -175,6 +181,7 @@ enum SourceOrganizationWorker {
         under root: XMPExactFileSystemPath,
         syncPolicy: DurableFileIO.DirectorySyncPolicy
     ) throws {
+        if directory == root { return }
         var prefix = root.bytes
         if prefix.last != UInt8(ascii: "/") {
             prefix.append(UInt8(ascii: "/"))

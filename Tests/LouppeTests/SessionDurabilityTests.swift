@@ -778,7 +778,9 @@ final class SessionDurabilityTests: XCTestCase {
         )
         try Data(contentsOf: replacementFixture).write(to: source)
 
-        let store = SessionStore(persistence: persistence)
+        let store = SessionStore(
+            persistence: SessionPersistence(backupDirectory: fixture.backup)
+        )
         store.openFolder(fixture.photos)
         try await waitForIdentityConflict(in: store)
 
@@ -786,8 +788,26 @@ final class SessionDurabilityTests: XCTestCase {
         XCTAssertTrue(
             store.scanError?.contains("not the same physical file") == true
         )
+        XCTAssertTrue(store.canOpenIdentityConflictAsNewSession)
         XCTAssertEqual(try Data(contentsOf: sidecar), savedSidecar)
         XCTAssertEqual(try Data(contentsOf: backupFile), savedBackup)
+
+        store.openIdentityConflictAsNewSession()
+        try await waitForReadySession(store)
+        XCTAssertFalse(store.canOpenIdentityConflictAsNewSession)
+        XCTAssertEqual(store.items.first?.rating, .undecided)
+
+        let saveFinished = await store.waitForPersistenceIdleForTesting()
+        XCTAssertTrue(saveFinished)
+        XCTAssertNil(store.persistenceWarning)
+        let replaced = try XCTUnwrap(readSidecar(in: fixture.photos))
+        XCTAssertEqual(replaced.entries.count, 1)
+        XCTAssertEqual(replaced.entries.first?.filename, "A.png")
+        XCTAssertEqual(replaced.entries.first?.rating, Rating.undecided.rawValue)
+        XCTAssertEqual(
+            replaced.entries.first?.fileIdentity,
+            store.items.first?.primaryFile.scannedIdentity
+        )
     }
 
     func testMissingPhysicalFileRatingSurvivesAutosaveAndReturns() async throws {
@@ -960,7 +980,7 @@ final class SessionDurabilityTests: XCTestCase {
         XCTAssertEqual(migrated.entries.count, 1)
     }
 
-    func testRelocatedSidecarWithoutPhysicalMatchStaysBlocked() async throws {
+    func testRelocatedSidecarWithoutPhysicalMatchCanStartNewSession() async throws {
         let fixture = try makeFixture(named: "UnverifiedRelocation")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let persistence = SessionPersistence(backupDirectory: fixture.backup)
@@ -1008,7 +1028,9 @@ final class SessionDurabilityTests: XCTestCase {
         let preservedData = try Data(contentsOf: originalSidecar)
         try preservedData.write(to: copiedSidecar)
 
-        let store = SessionStore(persistence: persistence)
+        let store = SessionStore(
+            persistence: SessionPersistence(backupDirectory: fixture.backup)
+        )
         store.openFolder(unrelated)
         for _ in 0..<240 {
             if case .welcome = store.phase,
@@ -1023,8 +1045,19 @@ final class SessionDurabilityTests: XCTestCase {
         }
         XCTAssertTrue(store.items.isEmpty)
         XCTAssertTrue(store.scanError?.contains("another location") == true)
-        XCTAssertFalse(store.canOpenMismatchedSessionAnyway)
+        XCTAssertTrue(store.canOpenIdentityConflictAsNewSession)
         XCTAssertEqual(try Data(contentsOf: copiedSidecar), preservedData)
+
+        store.openIdentityConflictAsNewSession()
+        try await waitForReadySession(store)
+        XCTAssertEqual(store.items.first?.id, "B.png")
+        XCTAssertEqual(store.items.first?.rating, .undecided)
+        let saveFinished = await store.waitForPersistenceIdleForTesting()
+        XCTAssertTrue(saveFinished)
+
+        let replaced = try XCTUnwrap(readSidecar(in: unrelated))
+        XCTAssertEqual(replaced.sourcePath, unrelated.path)
+        XCTAssertEqual(replaced.entries.map(\.filename), ["B.png"])
     }
 
     func testRenamedOriginalLetsSamePathReplacementStartUndecided() async throws {

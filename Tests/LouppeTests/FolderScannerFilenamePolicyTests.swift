@@ -3,6 +3,35 @@ import XCTest
 @testable import Louppe
 
 final class FolderScannerFilenamePolicyTests: XCTestCase {
+    func testScanRejectsUnreadableSubfolderInsteadOfReturningPartialSession() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("LouppeUnreadable-\(UUID())")
+        let locked = root.appendingPathComponent("Locked", isDirectory: true)
+        try fm.createDirectory(at: locked, withIntermediateDirectories: true)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+            try? fm.removeItem(at: root)
+        }
+        try Data("photo".utf8).write(to: locked.appendingPathComponent("hidden.jpg"))
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        XCTAssertThrowsError(try FolderScanner.scan(root) { _ in })
+    }
+
+    func testScanHonorsCancellationAtFinalValidation() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("LouppeCancelScan-\(UUID())")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let cancelled = FolderScanner.CancelFlag()
+        XCTAssertThrowsError(try FolderScanner.scan(
+            root,
+            isCancelled: { cancelled.isSet },
+            beforeFinalIdentityValidation: { cancelled.set() }
+        ) { _ in }) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testRawJPEGPairsExcludeStandaloneAndAmbiguousFiles() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "Louppe-Pair-Discovery-\(UUID().uuidString)",

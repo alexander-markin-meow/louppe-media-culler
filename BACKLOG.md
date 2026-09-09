@@ -1,4 +1,4 @@
-# Louppe app backlog
+# Louppe Media Culler backlog
 
 This is the live backlog for the macOS app. Product and technical work belong
 here because they change with the app and should be visible to everyone working

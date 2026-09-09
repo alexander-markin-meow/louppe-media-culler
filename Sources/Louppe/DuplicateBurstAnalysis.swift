@@ -121,7 +121,10 @@ enum DuplicateBurstAnalysis {
         let itemIDs: [String]
 
         var title: String {
-            let count = itemIDs.count
+            title(itemCount: itemIDs.count)
+        }
+
+        func title(itemCount count: Int) -> String {
             let itemText = count == 1 ? "item" : "items"
             switch mode {
             case .exactDuplicates:
@@ -250,14 +253,14 @@ enum DuplicateBurstAnalysis {
                             break outer
                         }
                         guard (left ^ right).nonzeroBitCount <= distance,
-                              let leftItems = identifiersByHash[left],
-                              let rightItems = identifiersByHash[right]
+                              let leftItem = identifiersByHash[left]?.first,
+                              let rightItem = identifiersByHash[right]?.first
                         else { continue }
-                        for leftItem in leftItems {
-                            for rightItem in rightItems {
-                                sets.union(leftItem, rightItem)
-                            }
-                        }
+                        // Equal hashes already form one component each. One
+                        // representative joins both complete families; joining
+                        // every cross-product member would be quadratic even
+                        // though the number of compared hashes is bounded.
+                        sets.union(leftItem, rightItem)
                     }
                 }
             }

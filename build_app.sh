@@ -143,7 +143,7 @@ PLIST
 if ! $APP_STORE; then
     cat >> "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/alexander-markin-meow/louppe/main/appcast.xml</string>
+    <string>https://raw.githubusercontent.com/alexander-markin-meow/louppe-media-culler/main/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>ZT/Kv98/mVd/uo2iUyBb0Gj0ShZqZ+FdfthHBjyH86k=</string>
     <key>SUEnableAutomaticChecks</key>

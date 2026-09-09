@@ -38,6 +38,7 @@ struct WelcomeView: View {
     @ObservedObject var store: SessionStore
     @State private var isFolderDropTarget = false
     @State private var folderDropError: String?
+    @State private var isNewSessionConfirmationPresented = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -119,6 +120,13 @@ struct WelcomeView: View {
                         .accessibilityHint(
                             "Verifies saved filenames, then uses this legacy session with the current folder"
                         )
+                    } else if store.canOpenIdentityConflictAsNewSession {
+                        Button("Open as New Session") {
+                            isNewSessionConfirmationPresented = true
+                        }
+                        .accessibilityHint(
+                            "Forgets saved decisions for this folder and opens the current files unrated"
+                        )
                     }
                 }
             }
@@ -142,6 +150,19 @@ struct WelcomeView: View {
                 }
                 .padding(.top, 8)
             }
+        }
+        .alert(
+            "Open as a New Session?",
+            isPresented: $isNewSessionConfirmationPresented
+        ) {
+            Button("Open as New Session", role: .destructive) {
+                store.openIdentityConflictAsNewSession()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This replaces the saved Louppe decisions for this folder and opens the current files unrated. Your photos and videos are not changed."
+            )
         }
         .padding(40)
         .toolbar { LaunchToolbarTitle() }

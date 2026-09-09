@@ -19,6 +19,8 @@ struct MetadataEditingControls: View {
     var showsDecision = true
 
     var body: some View {
+        let stars = store.effectiveStarRatingState
+        let color = store.effectiveColorLabelState
         VStack(alignment: .leading, spacing: 9) {
             if showsDecision {
                 HStack {
@@ -50,11 +52,11 @@ struct MetadataEditingControls: View {
                     Button {
                         store.setStarRating(rating)
                     } label: {
-                        Image(systemName: starSymbol(for: rating))
+                        Image(systemName: starSymbol(for: rating, state: stars))
                             .frame(width: 18, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(starColor(for: rating))
+                    .foregroundStyle(starColor(for: rating, state: stars))
                     .disabled(!store.canRate)
                     .accessibilityLabel("Set \(rating.count) stars")
                 }
@@ -74,22 +76,22 @@ struct MetadataEditingControls: View {
                         }
                     }
                 } label: {
-                    Text(colorLabelText)
-                        .foregroundStyle(colorLabelTint)
+                    Text(colorLabelText(for: color))
+                        .foregroundStyle(colorLabelTint(for: color))
                         .lineLimit(1)
                 }
                 .menuStyle(.borderlessButton)
-                .tint(colorLabelTint)
+                .tint(colorLabelTint(for: color))
                 .fixedSize()
                 .disabled(!store.canRate)
                 .accessibilityLabel("Color label")
-                .accessibilityValue(colorLabelText)
+                .accessibilityValue(colorLabelText(for: color))
             }
         }
     }
 
-    private func starSymbol(for rating: StarRating) -> String {
-        switch store.effectiveStarRatingState {
+    private func starSymbol(for rating: StarRating, state: PhotoItemStarRatingState) -> String {
+        switch state {
         case .stars(let selected) where selected.count >= rating.count:
             return "star.fill"
         default:
@@ -97,8 +99,8 @@ struct MetadataEditingControls: View {
         }
     }
 
-    private func starColor(for rating: StarRating) -> Color {
-        switch store.effectiveStarRatingState {
+    private func starColor(for rating: StarRating, state: PhotoItemStarRatingState) -> Color {
+        switch state {
         case .stars(let selected) where selected.count >= rating.count:
             return .louppeAccent
         case .mixed:
@@ -108,16 +110,16 @@ struct MetadataEditingControls: View {
         }
     }
 
-    private var colorLabelText: String {
-        switch store.effectiveColorLabelState {
+    private func colorLabelText(for state: PhotoItemColorLabelState) -> String {
+        switch state {
         case .none: return "None"
         case .label(let label): return label.displayName
         case .mixed: return "Mixed"
         }
     }
 
-    private var colorLabelTint: Color {
-        switch store.effectiveColorLabelState {
+    private func colorLabelTint(for state: PhotoItemColorLabelState) -> Color {
+        switch state {
         case .none: return .secondary
         case .label(let label): return label.swatchColor
         case .mixed: return .louppeAccent
@@ -131,12 +133,13 @@ struct MetadataDecisionButton: View {
     let size: CGFloat
 
     var body: some View {
+        let decision = store.effectiveDecisionState
         Button {
             store.toggleRating(at: store.currentIndex)
         } label: {
             RatingBadge(
-                rating: store.effectiveDecisionState.effectiveRating,
-                isMixed: store.effectiveDecisionState == .mixed,
+                rating: decision.effectiveRating,
+                isMixed: decision == .mixed,
                 size: size
             )
             .frame(width: size + 6, height: size + 6)
@@ -146,7 +149,7 @@ struct MetadataDecisionButton: View {
         .accessibilityLabel("Change decision")
         .accessibilityValue(
             MediaTileAccessibility.decisionDescription(
-                for: store.effectiveDecisionState
+                for: decision
             )
         )
         .help("Change Yes/No decision")

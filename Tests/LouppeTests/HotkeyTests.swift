@@ -861,6 +861,11 @@ final class HotkeyTests: XCTestCase {
         XCTAssertFalse(view.handleKey(commandK, context: .focusedSession))
         store.isExportPresented = false
 
+        store.isRenamePresented = true
+        XCTAssertTrue(store.isSessionCommandPresentationActive)
+        XCTAssertFalse(view.handleKey(commandK, context: .focusedSession))
+        store.isRenamePresented = false
+
         let textEditing = SessionKeyRoutingContext(
             sessionOwnsEvent: true,
             hasModalPresentation: false,
@@ -959,6 +964,30 @@ final class HotkeyTests: XCTestCase {
                 })
             ).isEnabled
         )
+    }
+
+    func testCommandPaletteKeepsBatchRenameButNotSingleFileRename() throws {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let actions = ActionPaletteView(store: store).actions
+        XCTAssertNil(actions.first { $0.id == "rename-current-file" })
+        let metadata = try XCTUnwrap(actions.first {
+            $0.id == "rename-files-from-metadata"
+        })
+
+        XCTAssertTrue(metadata.isEnabled)
+        XCTAssertTrue(metadata.searchText.contains("camera"))
+        XCTAssertTrue(metadata.searchText.contains("sequence"))
+
+        metadata.perform()
+        XCTAssertTrue(store.isRenamePresented)
+        XCTAssertEqual(store.fileRenamingPresentationMode, .metadata)
+
+        store.isRenamePresented = false
+        store.selectAllVisible()
+        let selectedActions = ActionPaletteView(store: store).actions
+        XCTAssertTrue(try XCTUnwrap(selectedActions.first {
+            $0.id == "rename-files-from-metadata"
+        }).isEnabled)
     }
 
     func testCommandPaletteIncludesPairedComponentCleanUpActions() throws {

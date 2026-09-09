@@ -5,11 +5,52 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.8.0 (10) — 2026-09-04
+## 1.8.0 (10) — 2026-09-09
+
+- Renamed the public project and GitHub repository to **Louppe Media Culler**
+  for clearer discovery while keeping the installed app, executable, bundle
+  identifier, preferences, sessions, and XMP namespace named **Louppe**.
+
+- Reused cards and folders no longer become impossible to open when their new
+  files reuse names from an identity-bound saved session. Louppe still refuses
+  to apply the old ratings automatically, but now offers **Open as New Session**
+  with an explicit confirmation that replaces only the stale decisions and
+  leaves every photo and video untouched.
+
+- Large multi-selections reuse their Info summary across redraws. Decision,
+  star, and color controls avoid repeated selection sorting and stop checking
+  once a mixed value is found. Inline filename editing always targets the
+  displayed photo family, cancels when that content changes, and waits until
+  typing pauses before preparing its snapshot. Return during a filename check
+  now completes the rename when that check succeeds instead of being ignored.
+  Rename and Organize now report partial Undo failures accurately and use
+  singular file counts for single-file results.
+
+- Folder scans now report unreadable subfolders instead of opening incomplete
+  sessions, and honor Cancel during final file-identity validation. Similar-photo
+  grouping avoids repeated comparisons within already-matched families and
+  reuses membership across filter, sort, and rating changes. Group headers count
+  only visible members, and rerunning analysis refreshes the active review.
 
 - Standardized Filter and Sort popovers and Export/XMP dialogs with consistent
   spacing, purple primary actions, and scrollable setup and review content.
-  Export keeps its header and actions visible as options grow.
+  Export keeps its header and actions visible as options grow, and single-file
+  Rename now scrolls long previews and conflicts instead of crowding its buttons.
+
+- Single-file renaming now works inline from the filename in the Info panel,
+  following Finder's direct-edit pattern. The separate File-menu and single-file
+  Command Palette entry are removed; batch metadata renaming remains available from
+  the multi-selection Info panel and Command Palette.
+
+- Added safe source-file renaming. The Info panel now renames one filename stem
+  while preserving its extension, and File → Rename Files offers a minimal
+  All/Filtered/Selected batch builder for date, time, camera, lens, original
+  name, and deterministic sequence parts. Both actions are searchable through
+  **⌘K**, show exact previews, keep RAW+JPEG and recognized XMP names together,
+  refuse collisions, misleading new pair stems, ambiguous sidecars, and `.acr`
+  companions, and restore every previous name with one **⌘Z**. Rename and undo
+  use dedicated crash-recovery journals and preserve ratings and current-item
+  continuity through the required same-folder rescan.
 
 - Polished Organize Source Folder with a stable header and action bar, one
   scrollable setup area, clearer folder-level guidance, and wrapping or

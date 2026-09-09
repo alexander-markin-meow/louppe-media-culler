@@ -67,7 +67,11 @@ final class RecoveryGatingTests: XCTestCase {
 
         let mismatchMessage = store.recoveryAttentionMessage ?? ""
         XCTAssertFalse(mismatchMessage.localizedCaseInsensitiveContains("reconnect"))
-        XCTAssertTrue(mismatchMessage.contains("Copy, Move, and Clean Up are paused"))
+        XCTAssertTrue(
+            mismatchMessage.contains(
+                "Copy, Move, Rename, Organize, and Clean Up are paused"
+            )
+        )
 
         var unavailable = mismatch
         unavailable.unavailableVolumes = ["/Volumes/CAMERA CARD"]

@@ -3,6 +3,89 @@ import XCTest
 @testable import Louppe
 
 final class DuplicateBurstAnalysisTests: XCTestCase {
+    @MainActor
+    func testGroupedReviewCacheFollowsFiltersSensitivityAndFreshAnalysis() async throws {
+        let store = SessionStore()
+        let start = Date(timeIntervalSince1970: 1_000)
+        store.items = [
+            item(id: "A.JPG", captureDate: start),
+            item(id: "B.JPG", captureDate: start.addingTimeInterval(1)),
+            item(id: "C.PNG", captureDate: start.addingTimeInterval(5)),
+        ]
+        store.phase = .ready
+        store.rebuildDerivedDataForTesting()
+        store.setBurstGroupingInterval(2)
+        store.enterGroupedReview(.captureBursts)
+        try await waitForAnalysis(store)
+        XCTAssertEqual(store.visibleIndices, [0, 1])
+
+        store.setBurstGroupingInterval(10)
+        XCTAssertEqual(store.visibleIndices, [0, 1, 2])
+        store.filter.excludedTypes = ["PNG"]
+        XCTAssertEqual(store.visibleIndices, [0, 1])
+        XCTAssertEqual(store.visibleGroups.first?.title,
+                       "Capture burst · 2 items · close capture times")
+        store.filter.excludedTypes = []
+        XCTAssertEqual(store.visibleIndices, [0, 1, 2])
+
+        // A refreshed analysis must invalidate membership even when the user
+        // keeps the same review mode and sensitivity selected.
+        store.items = [
+            item(id: "A.JPG", captureDate: start),
+            item(id: "B.JPG", captureDate: start.addingTimeInterval(20)),
+            item(id: "C.PNG", captureDate: start.addingTimeInterval(21)),
+        ]
+        store.rebuildDerivedDataForTesting()
+        store.analyzeDuplicateAndBurstGroups()
+        try await waitForAnalysis(store)
+        XCTAssertEqual(store.visibleIndices, [1, 2])
+        store.exitGroupedReview()
+        XCTAssertEqual(store.visibleIndices, [0, 1, 2])
+    }
+
+    @MainActor
+    private func waitForAnalysis(_ store: SessionStore) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while store.isDuplicateBurstAnalysisRunning, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(store.duplicateBurstAnalysisState, .ready)
+    }
+
+    func testLargeNearMatchingFamiliesStayOneGroup() {
+        let fingerprints = (0..<4_000).map { index in
+            DuplicateBurstAnalysis.VisualFingerprint(
+                itemID: String(format: "%05d", index),
+                hash: index < 2_000 ? 0 : 1
+            )
+        }
+        let result = DuplicateBurstAnalysis.Result(
+            exactDuplicateItemSets: [], visualFingerprints: fingerprints,
+            burstCandidates: [], analyzedExactFileCount: 0,
+            analyzedVisualPhotoCount: fingerprints.count
+        )
+        let start = Date()
+        let groups = result.groups(for: .likelySimilarPhotos, visualDistance: 1, burstInterval: 2)
+        print("Large similar families: \(Date().timeIntervalSince(start)) seconds")
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.itemIDs, fingerprints.map(\.itemID))
+    }
+
+    func testFilteredGroupTitleCountsOnlyVisibleMembers() {
+        let items = [item(id: "A.JPG"), item(id: "B.JPG"), item(id: "C.PNG")]
+        var index = PreparedSessionIndex()
+        index.rebuildItems(items, sort: PhotoSort())
+        var filter = PhotoFilter()
+        filter.excludedTypes = ["PNG"]
+        index.applyFilter(filter, to: items, sort: PhotoSort(), isGroupingEnabled: true)
+        index.applyGroupedReview([
+            .init(id: "group", mode: .exactDuplicates, itemIDs: items.map(\.id))
+        ], to: items)
+        XCTAssertEqual(index.visibleGroups.first?.indices, [0, 1])
+        XCTAssertEqual(index.visibleGroups.first?.title,
+                       "Exact duplicates · 2 items · matching file fingerprints")
+    }
+
     func testExactDuplicateFilesMergeRAWJPEGProjectionIntoOneReviewGroup() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("LouppeDuplicateTests-\(UUID().uuidString)", isDirectory: true)
@@ -153,12 +236,12 @@ final class DuplicateBurstAnalysisTests: XCTestCase {
         )
     }
 
-    private func item(id: String) -> PhotoItem {
+    private func item(id: String, captureDate: Date? = nil) -> PhotoItem {
         PhotoItem(
             id: id,
             primaryURL: URL(fileURLWithPath: "/tmp/\(id)"),
             pairedURL: nil,
-            captureDate: nil,
+            captureDate: captureDate,
             cameraModel: nil,
             lensModel: nil,
             fileSize: 1

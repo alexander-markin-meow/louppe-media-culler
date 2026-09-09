@@ -124,6 +124,12 @@ operations belong elsewhere:
   `SessionStore.openFolder` bridges task cancellation through
   `FolderScanner.CancelFlag` via `withTaskCancellationHandler`.
 
+Folder enumeration fails visibly when any subfolder cannot be read; an
+incomplete traversal must never become a successful session snapshot. Final
+identity validation iterates physical files without allocating a second flat
+array and checks cancellation between files, including before an empty pass.
+Sorting also checks cancellation before returning its completed result.
+
 Do not move filesystem loops or JSON encoding back onto `SessionStore`.
 
 ## Shared review-metadata storage
@@ -146,6 +152,14 @@ put the mutable fields back directly into the large value array. Clear All
 remains O(N), but it mutates only the small rating records and publishes once;
 normal single-photo culling is O(1). The large-session rating, clear-all, batch
 rating, pairing, persistence, and undo checks enforce these boundaries.
+
+The Info panel's multi-selection summary is cached by `SessionStore` and
+invalidated on every `items` or `selectedIndices` assignment, including an
+item replacement at the same index. It contains only scan metadata; decisions,
+stars, colors, playback, and other view publications do not invalidate it.
+Review controls read each aggregate once per body evaluation, iterate the
+selection without sorting or allocating a states array, and stop at the first
+mixed value. These live aggregates must not use the immutable-summary cache.
 
 ## Lazy thumbnail invalidation
 
@@ -292,6 +306,17 @@ pathological bucket with more than 256 distinct signatures and performs at most
 visual group **Likely Similar**. Burst grouping uses cached still-photo capture
 dates and a configurable consecutive gap (0.5–10 seconds), so changing it is
 O(N) and performs no I/O.
+
+Equal visual hashes are joined first, then near-hash matches join only one
+representative from each existing component. Never expand that join into the
+Cartesian product of the matching families: a 4,000-item/two-hash debug fixture
+took 5.95 seconds before this fix and about 0.024 seconds afterward. SessionStore
+retains one group's membership layout keyed by review mode and sensitivity;
+ordinary filter, sort, and rating changes only project that membership. A fresh
+analysis or structural invalidation clears it. Projected headers count visible
+members rather than the original unfiltered group size. Initial grouping and
+sensitivity changes still run synchronously; moving those to cancellable
+background work is a separate improvement for very large sessions.
 
 Same-name XMP conflict preflight retains typed stable file IDs, scan identities,
 exact metadata snapshots, and exact filesystem paths. Resolution is one small
@@ -496,7 +521,7 @@ could not be restored.
 
 ## Process-crash file-operation journal
 
-Copy, Move, Source Organization and its undo, Trash, and Trash undo create an
+Copy, Move, Source Rename/Organization and their undo, Trash, and Trash undo create an
 immutable plan in
 `~/Library/Application Support/Louppe/Operations/` before their first
 filesystem change. The plan directory is activated with one atomic rename.
@@ -614,7 +639,7 @@ the journal and enters conservative recovery instead of claiming success.
 
 `SessionStore` runs recovery off-main. While the pass is actively reconciling
 files, conflicting transitions remain blocked. If a journal remains unresolved,
-it becomes nonmodal attention: only new Copy, Move, Source Organization, Clean
+it becomes nonmodal attention: only new Copy, Move, Source Rename/Organization, Clean
 Up/Trash, and Trash undo wait. Reviewing, rating, navigation,
 opening/closing/rescanning folders, saving, updating, and Quit remain available,
 and a requested launch folder is
@@ -674,7 +699,7 @@ the worker. When XMP is included, a same-stem family may belong to only one
 route; a split is refused rather than generating competing sidecars.
 
 `SessionStore.activeFileOperation` is the only in-flight authority for Clean
-Up, Copy, Move, and Source Organization. It blocks folder switching, rescan,
+Up, Copy, Move, Source Rename, and Source Organization. It blocks folder switching, rescan,
 rating/selection mutation, undo, Clear All Ratings, conflicting operations, updater
 installation, and Quit. The same state retains one `ProcessInfo` activity with
 `idleSystemSleepDisabled` for the complete transaction (recovery owns it too),
@@ -745,11 +770,37 @@ journal activation and before moving media, the worker creates two random
 operation-owned probe files and proves Foundation's documented move contract
 refuses an occupied destination. It then proves a move to a free destination
 preserves the exact inode and bytes before removing the probes. Only ExFAT
-Source Organization, its rollback, undo, and recovery use that Foundation
-no-overwrite path; source and destination devices are rechecked before every
-move and the existing post-move identity checks remain mandatory. Only
-unsupported directory-sync results are tolerated. APFS and every
-non-organization operation retain `RENAME_EXCL` and required directory syncing.
+Source Organization or Source Renaming, their rollback, undo, and recovery use
+that Foundation no-overwrite path; source and destination devices are rechecked
+before every move and the existing post-move identity checks remain mandatory.
+Only unsupported directory-sync results are tolerated. APFS retains
+`RENAME_EXCL` and required directory syncing.
+
+## Source Renaming lifecycle
+
+Source Renaming deliberately has its own Info-panel and batch UI, but reuses
+the Source Organization snapshot → plan → background move → rescan boundary.
+The pure naming recipe emits fixed `yyyy-MM-dd` and `HH-mm-ss` components,
+sanitized camera/lens/original-name parts, and a deterministic sequence ordered
+by capture time and stable item ID. The default Date + Time + Sequence recipe
+therefore stays sortable and does not depend on the visible session sort.
+
+The planner keeps each exact source directory and extension, reserves every
+complete filename, and also reserves resulting directory+stem families. That
+second check prevents unrelated RAW and JPEG files from acquiring one stem and
+being falsely paired by the next scan. Existing destinations, duplicate output,
+case-equivalent aliases, ambiguous/shared partial XMP families, and Lightroom
+`.acr` companions block the whole plan. Canonical and extension-qualified XMP
+names follow a complete family without rewriting packet contents.
+
+The worker records `.renameSource` before its first filesystem mutation and
+uses `.restoreRename` for ⌘Z. A RAW+JPEG/XMP family shares one journal item even
+when RAW and JPEG are currently presented separately, so recovery preserves a
+fully completed family or rolls an incomplete family back as a unit. Successful
+rename and undo both rescan instead of mutating immutable `PhotoFile` paths in
+memory; persistence follows verified physical identities to the new item IDs,
+while current item, selection, ratings, stars, colors, and organization-origin
+metadata are remapped through the ordinary scan path.
 
 ## Prepared session index
 

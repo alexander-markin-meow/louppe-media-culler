@@ -23,12 +23,12 @@ ARCHIVE="$PWD/dist/Louppe.zip"
 APPCAST="$PWD/appcast.xml"
 ACCOUNT="com.alexandermarkin.louppe"
 EXPECTED_PUBLIC_KEY="ZT/Kv98/mVd/uo2iUyBb0Gj0ShZqZ+FdfthHBjyH86k="
-EXPECTED_FEED_URL="https://raw.githubusercontent.com/alexander-markin-meow/louppe/main/appcast.xml"
+EXPECTED_FEED_URL="https://raw.githubusercontent.com/alexander-markin-meow/louppe-media-culler/main/appcast.xml"
 
 MARKETING_VERSION="$(awk -F= '$1 == "MARKETING_VERSION" { print $2 }' "$VERSION_FILE")"
 BUILD_NUMBER="$(awk -F= '$1 == "BUILD_NUMBER" { print $2 }' "$VERSION_FILE")"
 EXPECTED_TAG="v$MARKETING_VERSION"
-EXPECTED_DOWNLOAD_URL="https://github.com/alexander-markin-meow/louppe/releases/download/$EXPECTED_TAG/Louppe.zip"
+EXPECTED_DOWNLOAD_URL="https://github.com/alexander-markin-meow/louppe-media-culler/releases/download/$EXPECTED_TAG/Louppe.zip"
 
 fail() {
     echo "Release preflight failed: $1" >&2

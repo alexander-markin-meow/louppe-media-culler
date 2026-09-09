@@ -114,7 +114,7 @@ struct LouppeApp: App {
         credits.append(NSAttributedString(string: "louppe.eu", attributes: link))
         credits.append(NSAttributedString(string: "\n", attributes: base))
 
-        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe/releases")!
+        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe-media-culler/releases")!
         credits.append(NSAttributedString(string: "Version History", attributes: link))
         credits.append(NSAttributedString(string: "\n\n", attributes: base))
 
@@ -125,7 +125,7 @@ struct LouppeApp: App {
         credits.append(NSAttributedString(string: "a@alex-markin.com", attributes: link))
         credits.append(NSAttributedString(string: "\n", attributes: base))
 
-        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe")!
+        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe-media-culler")!
         credits.append(NSAttributedString(string: "GitHub", attributes: link))
 
         return credits
@@ -324,6 +324,9 @@ private final class LouppeApplicationDelegate: NSObject, NSApplicationDelegate {
             case .organizeSource:
                 alert.messageText = "The source folder is still being organized"
                 alert.informativeText = "Wait for Louppe to finish moving or restoring the files, then quit."
+            case .renameSource:
+                alert.messageText = "Files are still being renamed"
+                alert.informativeText = "Wait for Louppe to finish renaming or restoring the files, then quit."
             case .cleanUp:
                 alert.messageText = "Clean Up is still running"
                 alert.informativeText = "Wait for the Trash or restore progress to finish, then quit Louppe."

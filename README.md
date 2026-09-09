@@ -21,8 +21,10 @@ verified. Right-click the app, choose **Open**, then choose **Open** again.
 3. Press **F** to mark an item Yes or **D** to mark it No.
 4. Filter, sort, select, clean up, organize, or export your media.
 
-Export copies by default and can also move selected media or write metadata as
-XMP sidecars. **Clean Up** sends unwanted files to the macOS Trash.
+Export copies by default and can also move selected media or write your
+decisions, star ratings, and color labels as XMP sidecars—small metadata files
+saved beside your media for use in other apps. **Clean Up** sends unwanted
+files to the macOS Trash.
 **Organize Source Folder** sorts files into folders using decisions, dates,
 ratings, camera details, and other metadata.
 

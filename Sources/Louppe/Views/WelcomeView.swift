@@ -46,15 +46,12 @@ struct WelcomeView: View {
             Text("Louppe")
                 .font(.largeTitle.bold())
                 .foregroundStyle(Color.louppeAccent)
-            Text("Pick a folder of photos, videos, and audio, mark each one Yes or No,\nthen export the keepers. Export copies by default. Originals move only when you explicitly choose Move or Trash.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
 
             VStack(spacing: 10) {
                 Button {
                     store.promptForSourceFolder()
                 } label: {
-                    Label("Choose Photo Folder…", systemImage: "folder")
+                    Label("Choose Media Folder…", systemImage: "folder")
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                 }
@@ -64,7 +61,7 @@ struct WelcomeView: View {
                 Label(
                     isFolderDropTarget
                         ? "Release to open this folder"
-                        : "or drag a photo folder here",
+                        : "or drag a media folder here",
                     systemImage: isFolderDropTarget
                         ? "folder.badge.plus"
                         : "arrow.down.doc"
@@ -92,7 +89,7 @@ struct WelcomeView: View {
                 perform: openDroppedFolder
             )
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Open a photo folder")
+            .accessibilityLabel("Open a media folder")
             .accessibilityHint("Choose a folder or drag a folder here to start reviewing it")
 
             if let folderDropError {

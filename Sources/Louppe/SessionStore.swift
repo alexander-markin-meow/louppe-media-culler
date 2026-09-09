@@ -1700,7 +1700,7 @@ final class SessionStore: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose the folder with photos, videos, or audio to review (an SD card's DCIM folder works too)."
+        panel.message = "Choose the media folder with photos, videos, or audio to review (an SD card's DCIM folder works too)."
         panel.prompt = "Open Folder"
         if panel.runModal() == .OK, let url = panel.url {
             openFolder(url)
@@ -2247,7 +2247,7 @@ final class SessionStore: ObservableObject {
             pushUndo(.organization(organizationUndo))
         }
         if loaded.isEmpty {
-            scanError = "No recognised photos or videos were found in that folder."
+            scanError = "No recognised media was found in that folder."
         } else if replaceSavedSession {
             // Replacing the old snapshot is an explicit user change, not
             // optional maintenance of the just-opened baseline.
@@ -4759,10 +4759,10 @@ final class SessionStore: ObservableObject {
                 persistenceWarning = "This folder is read-only. Your ratings are safe in Louppe's backup, "
                     + "but not beside the photos. Restore write access, then retry."
             case .outOfSpace:
-                persistenceWarning = "The photo volume is out of space. Your ratings are safe in Louppe's backup, "
+                persistenceWarning = "The media volume is out of space. Your ratings are safe in Louppe's backup, "
                     + "but not beside the photos. Free some space, then retry."
             case .volumeUnavailable:
-                persistenceWarning = "The photo volume is unavailable. Your ratings are safe in Louppe's backup. "
+                persistenceWarning = "The media volume is unavailable. Your ratings are safe in Louppe's backup. "
                     + "Reconnect it, then retry."
             case .busy:
                 persistenceWarning = "Another Louppe window is saving this folder. Your ratings are safe in Louppe's backup. Retry in a moment."
@@ -4836,9 +4836,9 @@ final class SessionStore: ObservableObject {
         case .permissionDenied:
             return "No new ratings are waiting to be saved. The folder session file is still read-only; restore write access to repair it."
         case .outOfSpace:
-            return "No new ratings are waiting to be saved. The folder session file couldn't be repaired because the photo volume is full."
+            return "No new ratings are waiting to be saved. The folder session file couldn't be repaired because the media volume is full."
         case .volumeUnavailable:
-            return "No new ratings are waiting to be saved. Reconnect the photo volume to repair its folder session file."
+            return "No new ratings are waiting to be saved. Reconnect the media volume to repair its folder session file."
         case .busy:
             return "No new ratings are waiting to be saved. Another Louppe window is using this folder; retry the sidecar repair in a moment."
         case .encoding, .other:

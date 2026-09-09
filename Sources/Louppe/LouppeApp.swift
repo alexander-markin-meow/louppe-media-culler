@@ -417,7 +417,7 @@ private final class LouppeApplicationDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Your latest ratings aren't saved"
         alert.informativeText = store.persistenceWarning
-            ?? "Louppe couldn't save them in the photo folder or its backup. Retry in a moment."
+            ?? "Louppe couldn't save them in the media folder or its backup. Retry in a moment."
         alert.alertStyle = .critical
         alert.addButton(withTitle: "Retry Saving")
         alert.addButton(withTitle: "Cancel Quit")

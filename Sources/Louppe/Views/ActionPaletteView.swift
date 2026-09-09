@@ -244,7 +244,7 @@ struct ActionPaletteView: View {
                 id: "open-folder",
                 category: "Files",
                 title: "Open Different Folder…",
-                detail: "Save this session, then choose another photo folder",
+                detail: "Save this session, then choose another media folder",
                 symbol: "folder",
                 shortcut: "⌘O",
                 keywords: ["recent", "session", "open"],

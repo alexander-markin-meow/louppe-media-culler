@@ -7,6 +7,12 @@ release bundle.
 
 ## 1.8.0 (10) — 2026-09-09
 
+- Removed the explanatory paragraph from the welcome screen so the folder
+  action is the clear starting point.
+
+- Updated the welcome screen and folder-related messages to use **media folder**
+  terminology, reflecting support for photos, videos, and audio.
+
 - Renamed the public project and GitHub repository to **Louppe Media Culler**
   for clearer discovery while keeping the installed app, executable, bundle
   identifier, preferences, sessions, and XMP namespace named **Louppe**.

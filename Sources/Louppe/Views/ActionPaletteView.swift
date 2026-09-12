@@ -400,10 +400,10 @@ struct ActionPaletteView: View {
             ActionPaletteAction(
                 id: "pair-raw-jpeg",
                 category: "Find and arrange",
-                title: "Review Matching RAW + JPEG Together",
+                title: RawJPEGPairingMode.togetherControlTitle,
                 detail: "Rate and act on matching files as one photo",
                 symbol: "link",
-                keywords: ["pair", "pairing", "raw", "jpeg"],
+                keywords: ["pair", "pairing", "raw", "jpeg", "review", "together"],
                 isEnabled: store.rawJPEGPairingMode != .together
                     && !store.isFileOperationRunning
                     && !store.isXMPPublicationRunning,

@@ -69,6 +69,8 @@ enum MediaKind: String, Hashable, Sendable {
 enum RawJPEGPairingMode: String, Hashable, Sendable {
     case together
     case separate
+
+    static let togetherControlTitle = "Treat matching RAW + JPEG as one photo"
 }
 
 struct PhotoFileMetadataSnapshot: Equatable, Sendable {

@@ -5,7 +5,13 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.8.0 (10) — 2026-09-09
+## 1.8.0 (10) — 2026-09-12
+
+- Matched the RAW + JPEG pairing wording in Filter and the command palette,
+  while retaining the previous wording as a search term.
+
+- Simplified the source-organization confirmation to show only where files
+  will move, what stays unchanged, and how to safely move from an ExFAT card.
 
 - Removed the explanatory paragraph from the welcome screen so the folder
   action is the clear starting point.

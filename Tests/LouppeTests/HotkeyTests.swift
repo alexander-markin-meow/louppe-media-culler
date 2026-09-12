@@ -1047,6 +1047,21 @@ final class HotkeyTests: XCTestCase {
         }).isEnabled)
     }
 
+    func testCommandPaletteUsesFilterWordingForRAWJPEGPairing() throws {
+        let store = readyStore(itemCount: 2, firstItemIsVideo: false)
+        let pairingAction = try XCTUnwrap(
+            ActionPaletteView(store: store).actions.first {
+                $0.id == "pair-raw-jpeg"
+            }
+        )
+
+        XCTAssertEqual(
+            pairingAction.title,
+            RawJPEGPairingMode.togetherControlTitle
+        )
+        XCTAssertTrue(pairingAction.searchText.contains("review"))
+    }
+
     func testAppCommandsRemainAvailableFromNonTextControlFocus() {
         let store = readyStore(itemCount: 3, firstItemIsVideo: false)
         let view = SessionView(store: store)

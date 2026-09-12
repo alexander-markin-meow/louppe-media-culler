@@ -38,7 +38,7 @@ struct OrganizeSourceView: View {
                 setupView
             }
         }
-        .frame(width: 680, height: 650)
+        .frame(width: 680, height: confirmationSheetHeight)
         .background(Color.appBackground)
         .tint(Color.louppeAccent)
         .interactiveDismissDisabled(store.isFileOperationRunning)
@@ -364,10 +364,13 @@ struct OrganizeSourceView: View {
     private func confirmationView(
         _ plan: SourceOrganizationPlan
     ) -> some View {
-        VStack(spacing: 0) {
+        let fileNoun = plan.movingFileCount == 1 ? "file" : "files"
+        let folderNoun = plan.previewGroups.count == 1 ? "folder" : "folders"
+
+        return VStack(spacing: 0) {
             sheetHeader(
-                title: "Move \(plan.movingFileCount) files?",
-                subtitle: "Review the exact source-folder change before Louppe moves anything."
+                title: "Move \(plan.movingFileCount) \(fileNoun)?",
+                subtitle: "Into \(plan.previewGroups.count) \(folderNoun) inside “\(plan.configuration.containerName)”"
             )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
@@ -378,17 +381,11 @@ struct OrganizeSourceView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        confirmationRow("Items", "\(plan.movingItemCount)")
-                        confirmationRow("Media files", "\(plan.movingFileCount - plan.sidecarFileCount)")
-                        confirmationRow("XMP sidecars", "\(plan.sidecarFileCount)")
-                        confirmationRow("Destination folders", "\(plan.previewGroups.count)")
-                        confirmationRow("Already organized", "\(plan.alreadyOrganizedItemCount)")
-                    }
+                    Text("Names and contents stay unchanged. Existing files are never overwritten.")
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Divider()
-
-                    Text("Louppe will move these files inside “\(plan.configuration.containerName)” without changing their contents or filenames. Existing files are never overwritten. Previous folders and unrelated files remain. You can undo this organization with ⌘Z during this open session.")
+                    Text("Other files and folders stay where they are. Undo with ⌘Z before closing this session.")
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if plan.storageSafety.usesReducedDirectoryDurability {
@@ -397,9 +394,9 @@ struct OrganizeSourceView: View {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(.title3)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("ExFAT card — reduced crash protection")
+                                Text("ExFAT card — keep it connected")
                                     .font(.headline)
-                                Text("macOS cannot make folder changes on ExFAT as crash-resistant as on APFS. Louppe will first test that collision-safe moves work, will never overwrite an existing file, and will keep its recovery record. Do not eject the card, close the Mac, or remove power until the move finishes.")
+                                Text("If the move is interrupted, the new folder organization may be incomplete. Keep the card connected and your Mac on until Louppe finishes.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -418,9 +415,7 @@ struct OrganizeSourceView: View {
                 Button("Cancel", role: .cancel) {
                     store.isOrganizePresented = false
                 }
-                Button(plan.storageSafety.usesReducedDirectoryDurability
-                    ? "Move Files Anyway"
-                    : "Move Files") {
+                Button("Move Files") {
                     store.startSourceOrganization(plan)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -430,6 +425,16 @@ struct OrganizeSourceView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 14)
         }
+    }
+
+    private var confirmationSheetHeight: CGFloat {
+        if store.organizationProgress == nil,
+           store.organizationOutcome == nil,
+           isReviewingMove,
+           let plan {
+            return plan.storageSafety.usesReducedDirectoryDurability ? 410 : 330
+        }
+        return 650
     }
 
     private func progressView(
@@ -516,16 +521,6 @@ struct OrganizeSourceView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .monospacedDigit()
-    }
-
-    private func confirmationRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        }
     }
 
     private func levelBinding(

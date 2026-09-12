@@ -529,7 +529,7 @@ struct FilterView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Toggle(isOn: rawJPEGPairingBinding) {
                     HStack {
-                        Text("Treat matching RAW + JPEG as one photo")
+                        Text(RawJPEGPairingMode.togetherControlTitle)
                         Spacer()
                         if store.isChangingRawJPEGPairingMode {
                             ProgressView()

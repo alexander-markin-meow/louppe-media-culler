@@ -97,6 +97,7 @@ controls keep their normal shortcuts.
 | **Z / ⌘Z** | Undo the latest review or file action |
 | **⌘O** | Open another folder |
 | **⌘R** | Rescan the current folder |
+| **⌘F** | Open Filter and focus Search |
 | **⌘K** | Open the Command Palette |
 | **⌘A** | Select all visible items |
 | **⌘← / ⌘→** | Slower / faster playback; previous / next item for photos |

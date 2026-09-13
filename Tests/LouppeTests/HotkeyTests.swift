@@ -833,6 +833,24 @@ final class HotkeyTests: XCTestCase {
         XCTAssertFalse(store.isExportPresented)
     }
 
+    func testCommandFFocusesFilterSearchThroughFocusedSessionGate() {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let view = SessionView(store: store)
+        let commandF = keyEvent(
+            code: 3,
+            characters: "f",
+            modifiers: [.command]
+        )
+
+        XCTAssertFalse(view.handleKey(commandF, context: .blocked))
+        XCTAssertFalse(store.isFilterPresented)
+
+        XCTAssertTrue(view.handleKey(commandF, context: .focusedSession))
+        XCTAssertTrue(store.isFilterPresented)
+        XCTAssertTrue(store.takeFilterSearchFocusRequest())
+        XCTAssertFalse(store.takeFilterSearchFocusRequest())
+    }
+
     func testCommandPaletteUsesFocusedSessionGateAndRunsAfterDismissal() {
         let store = readyStore(itemCount: 3, firstItemIsVideo: false)
         let view = SessionView(store: store)

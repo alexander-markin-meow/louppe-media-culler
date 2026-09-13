@@ -15,7 +15,7 @@ import AppKit
 ///   ⌘←/→ slower/faster media (photo: prev/next) · ⌘A select all
 ///   ⌘⇧←/→ select to first/last
 ///   Esc clear selection
-///   ⌘K Command Palette
+///   ⌘F Filter search · ⌘K Command Palette
 ///   ⌘⌫ trash selection (no confirmation — ⌘Z restores)
 ///   (⇧-click range and ⌘-click add/remove live in the thumbnail views)
 struct SessionView: View {
@@ -683,6 +683,9 @@ struct SessionView: View {
         // key equivalents so another window or a focused editor owns its keys.
         if acceptsAppCommand, modifiers == [.command] {
             switch event.charactersIgnoringModifiers?.lowercased() {
+            case "f":
+                store.presentFilterSearch()
+                return true
             case "k":
                 store.presentActionPalette()
                 return store.isActionPalettePresented

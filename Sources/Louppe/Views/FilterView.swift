@@ -29,6 +29,7 @@ struct FilterView: View {
     @State private var videoFrameRateFromText = ""
     @State private var videoFrameRateToText = ""
     @State private var settingCommitTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
     @FocusState private var focusedSettingField: SettingField?
 
     private enum SettingField: Hashable {
@@ -107,7 +108,12 @@ struct FilterView: View {
         .frame(width: 340, height: 560)
         .background(Color.appBackground)
         .tint(Color.louppeAccent)
-        .onAppear { syncAllSettingDrafts() }
+        .onAppear {
+            syncAllSettingDrafts()
+            if store.takeFilterSearchFocusRequest() {
+                isSearchFocused = true
+            }
+        }
         .onDisappear {
             settingCommitTask?.cancel()
             settingCommitTask = nil
@@ -231,6 +237,7 @@ struct FilterView: View {
                 .foregroundStyle(.secondary)
             TextField("Search name, type, camera, lens…", text: $store.filter.searchText)
                 .textFieldStyle(.plain)
+                .focused($isSearchFocused)
             if !store.filter.searchText.isEmpty {
                 Button {
                     store.filter.searchText = ""

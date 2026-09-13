@@ -5,7 +5,9 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.8.0 (10) — 2026-09-12
+## 1.8.0 (10) — 2026-09-13
+
+- Added ⌘F to open the Filter menu with its Search field ready for typing.
 
 - Matched the RAW + JPEG pairing wording in Filter and the command palette,
   while retaining the previous wording as a search term.

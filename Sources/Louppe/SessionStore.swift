@@ -110,6 +110,8 @@ final class SessionStore: ObservableObject {
     @Published var isActionPalettePresented = false
     @Published var isFilterPresented = false
     @Published var isSortPresented = false
+    private var filterSearchFocusRequestGeneration: UInt64 = 0
+    private var fulfilledFilterSearchFocusRequestGeneration: UInt64 = 0
     /// Whether same-named RAW and JPEG files are reviewed and acted on as one
     /// photo item. A fresh store starts with the safer per-file projection;
     /// the photographer can opt into pair-wide actions for this app lifetime.
@@ -346,6 +348,22 @@ final class SessionStore: ObservableObject {
             || cleanUpError != nil
             || isRecoveringInterruptedOperations
             || operationRecoveryReportRequiresAcknowledgement
+    }
+
+    /// Opens Filter for Command-F and lets its search field claim focus once.
+    /// Keeping the request in the store bridges the toolbar popover's delayed
+    /// creation without making ordinary toolbar clicks steal keyboard focus.
+    func presentFilterSearch() {
+        filterSearchFocusRequestGeneration &+= 1
+        isFilterPresented = true
+    }
+
+    func takeFilterSearchFocusRequest() -> Bool {
+        guard fulfilledFilterSearchFocusRequestGeneration
+                != filterSearchFocusRequestGeneration else { return false }
+        fulfilledFilterSearchFocusRequestGeneration =
+            filterSearchFocusRequestGeneration
+        return true
     }
     var isCleaningUp: Bool { activeFileOperation == .cleanUp }
     var isCopyingExport: Bool { activeFileOperation == .exportCopy }

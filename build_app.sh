@@ -1,13 +1,18 @@
 #!/bin/zsh
-# Builds Louppe.app from source. Run: ./build_app.sh [--app-store]
+# Builds Louppe.app from source.
+# Run: ./build_app.sh [--app-store|--developer-id 'Developer ID Application: …']
 set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_STORE=false
+DEVELOPER_IDENTITY=""
+EXPECTED_DEVELOPER_TEAM_ID="P6F95J4ZPA"
 if [[ $# -eq 1 && "$1" == "--app-store" ]]; then
     APP_STORE=true
+elif [[ $# -eq 2 && "$1" == "--developer-id" ]]; then
+    DEVELOPER_IDENTITY="$2"
 elif [[ $# -ne 0 ]]; then
-    echo "Usage: $0 [--app-store]" >&2
+    echo "Usage: $0 [--app-store|--developer-id 'Developer ID Application: …']" >&2
     exit 2
 fi
 
@@ -29,8 +34,26 @@ if ! grep -Fq "## $MARKETING_VERSION ($BUILD_NUMBER) " "$CHANGELOG_FILE"; then
     exit 1
 fi
 
+if [[ -n "$DEVELOPER_IDENTITY" ]]; then
+    if [[ "$DEVELOPER_IDENTITY" != "Developer ID Application: "* ]]; then
+        echo "Developer ID builds require a Developer ID Application identity." >&2
+        exit 1
+    fi
+    if [[ "$DEVELOPER_IDENTITY" != *"($EXPECTED_DEVELOPER_TEAM_ID)" ]]; then
+        echo "Developer ID builds must use the SAMO DANNI EOOD team ($EXPECTED_DEVELOPER_TEAM_ID)." >&2
+        exit 1
+    fi
+    if ! security find-identity -v -p codesigning | \
+        grep -Fq "\"$DEVELOPER_IDENTITY\""; then
+        echo "The requested Developer ID Application identity is not available in Keychain." >&2
+        exit 1
+    fi
+fi
+
 if $APP_STORE; then
     echo "Compiling App Store Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
+elif [[ -n "$DEVELOPER_IDENTITY" ]]; then
+    echo "Compiling Developer ID Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
 else
     echo "Compiling direct-download Louppe $MARKETING_VERSION ($BUILD_NUMBER)…"
 fi
@@ -167,6 +190,27 @@ PLIST
 xattr -cr "$APP_DIR"
 if $APP_STORE; then
     codesign --force --sign - --entitlements "$PWD/Louppe.entitlements" "$APP_DIR"
+elif [[ -n "$DEVELOPER_IDENTITY" ]]; then
+    # Sparkle's distributed helpers are ad-hoc signed. Re-sign each nested code
+    # object from the inside out, preserving the Downloader service entitlement,
+    # so hardened-runtime library validation and notarization both succeed.
+    SPARKLE_VERSION="$APP_DIR/Contents/Frameworks/Sparkle.framework/Versions/B"
+    codesign --force --options runtime --timestamp \
+        --sign "$DEVELOPER_IDENTITY" \
+        "$SPARKLE_VERSION/XPCServices/Installer.xpc"
+    codesign --force --options runtime --timestamp \
+        --preserve-metadata=entitlements \
+        --sign "$DEVELOPER_IDENTITY" \
+        "$SPARKLE_VERSION/XPCServices/Downloader.xpc"
+    codesign --force --options runtime --timestamp \
+        --sign "$DEVELOPER_IDENTITY" "$SPARKLE_VERSION/Autoupdate"
+    codesign --force --options runtime --timestamp \
+        --sign "$DEVELOPER_IDENTITY" "$SPARKLE_VERSION/Updater.app"
+    codesign --force --options runtime --timestamp \
+        --sign "$DEVELOPER_IDENTITY" \
+        "$APP_DIR/Contents/Frameworks/Sparkle.framework"
+    codesign --force --options runtime --timestamp \
+        --sign "$DEVELOPER_IDENTITY" "$APP_DIR"
 else
     codesign --force --sign - "$APP_DIR"
 fi
@@ -180,6 +224,8 @@ cp "$STAGING_ROOT/Louppe.zip" "$OUTPUT_ARCHIVE"
 
 if $APP_STORE; then
     "$PWD/Scripts/verify_release.sh" --app-store
+elif [[ -n "$DEVELOPER_IDENTITY" ]]; then
+    "$PWD/Scripts/verify_release.sh" --developer-id
 else
     "$PWD/Scripts/verify_release.sh"
 fi

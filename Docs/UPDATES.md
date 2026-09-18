@@ -13,6 +13,8 @@ Photographers can turn automatic checks and downloads on or off in
 
 - The appcast is served over HTTPS from `appcast.xml` on `main`.
 - Both the feed and update archive are signed with Sparkle's Ed25519 key.
+- Public builds are signed with Developer ID, use the hardened runtime, and
+  carry a stapled Apple notarization ticket for offline Gatekeeper checks.
 - Louppe requires the signed feed and verifies the archive before extracting
   it. A changed or forged download is rejected.
 - Only the public key is embedded in `Louppe.app`. The private key remains in
@@ -48,24 +50,37 @@ building Louppe neither needs nor requests access to a saved GitHub login.
 
 1. Confirm `VERSION` and the top `CHANGELOG.md` entry are final. The normal
    one-bump-per-release-cycle rule still applies.
-2. Build the app and release archive:
+2. Confirm the Mac has a valid **Developer ID Application** certificate and a
+   `notarytool` Keychain profile. Build the signed app and archive:
 
    ```sh
-   ./build_app.sh
+   ./build_app.sh --developer-id \
+     'Developer ID Application: Your Name (TEAMID)'
    ```
 
-3. Sign the archive and regenerate the signed feed:
+3. Submit that archive to Apple, staple the accepted ticket, and recreate the
+   archive from the exact stapled app:
+
+   ```sh
+   ./Scripts/notarize_release.sh --keychain-profile louppe-notary
+   ```
+
+   The script saves Apple's result as `dist/notarization.json` and the detailed
+   log as `dist/notarization-log.json`. Preserve both with the release records;
+   they contain the request ID and results, but no credentials.
+
+4. Sign the notarized archive for Sparkle and regenerate the signed feed:
 
    ```sh
    ./Scripts/prepare_update_feed.sh
    ./Scripts/verify_release.sh --publishing
    ```
 
-4. Create GitHub release `v<MARKETING_VERSION>` and upload the exact generated
+5. Create GitHub release `v<MARKETING_VERSION>` and upload the exact generated
    `dist/Louppe.zip`. Do not recompress or replace it after the feed is made.
-5. Commit and push the generated `appcast.xml`. Verify its enclosure URL
+6. Commit and push the generated `appcast.xml`. Verify its enclosure URL
    downloads the GitHub release asset.
-6. From the previous public Louppe version, choose **Check for Updates…** and
+7. From the previous public Louppe version, choose **Check for Updates…** and
    complete one real update before announcing the release.
 
 The archive name stays `Louppe.zip`; its versioned GitHub tag makes the URL
@@ -73,7 +88,9 @@ unique. `prepare_update_feed.sh` embeds only the current changelog entry,
 creates no delta files, signs the archive reference, and signs the complete
 feed. `verify_release.sh --publishing` then refuses the release if its
 version/build, archive length or signature, feed signature, enclosure URL,
-minimum macOS version, embedded framework, or app signature is inconsistent.
+minimum macOS version, embedded framework, Developer ID signature, hardened
+runtime, notarization ticket, Gatekeeper acceptance, or app signature is
+inconsistent.
 
 ## Local verification
 

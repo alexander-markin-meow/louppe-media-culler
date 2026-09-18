@@ -1,18 +1,22 @@
 #!/bin/zsh
 # Verifies the exact app/archive/feed inputs used for a Louppe release.
-# Use --publishing after prepare_update_feed.sh; --app-store checks the
-# sandboxed Store variant, which deliberately contains no Sparkle updater.
+# Use --developer-id before notarization and --publishing after notarization
+# and prepare_update_feed.sh. --app-store checks the sandboxed Store variant,
+# which deliberately contains no Sparkle updater.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PUBLISHING=false
 APP_STORE=false
+DEVELOPER_ID=false
 if [[ "${1:-}" == "--publishing" ]]; then
     PUBLISHING=true
 elif [[ "${1:-}" == "--app-store" ]]; then
     APP_STORE=true
+elif [[ "${1:-}" == "--developer-id" ]]; then
+    DEVELOPER_ID=true
 elif [[ $# -ne 0 ]]; then
-    echo "Usage: $0 [--publishing|--app-store]" >&2
+    echo "Usage: $0 [--publishing|--app-store|--developer-id]" >&2
     exit 2
 fi
 
@@ -24,6 +28,7 @@ APPCAST="$PWD/appcast.xml"
 ACCOUNT="com.alexandermarkin.louppe"
 EXPECTED_PUBLIC_KEY="ZT/Kv98/mVd/uo2iUyBb0Gj0ShZqZ+FdfthHBjyH86k="
 EXPECTED_FEED_URL="https://raw.githubusercontent.com/alexander-markin-meow/louppe-media-culler/main/appcast.xml"
+EXPECTED_DEVELOPER_TEAM_ID="P6F95J4ZPA"
 
 MARKETING_VERSION="$(awk -F= '$1 == "MARKETING_VERSION" { print $2 }' "$VERSION_FILE")"
 BUILD_NUMBER="$(awk -F= '$1 == "BUILD_NUMBER" { print $2 }' "$VERSION_FILE")"
@@ -70,6 +75,57 @@ verify_app_bundle() {
         || fail "$label does not contain the reviewed privacy manifest."
     plutil -lint "$bundle/Contents/Resources/PrivacyInfo.xcprivacy" >/dev/null \
         || fail "$label privacy manifest is invalid."
+
+    if $DEVELOPER_ID || $PUBLISHING; then
+        local signing_details
+        local team_identifier
+        signing_details="$(codesign -dvvv "$bundle" 2>&1)"
+        print -r -- "$signing_details" | grep -Fq \
+            'Authority=Developer ID Application:' \
+            || fail "$label is not signed with a Developer ID Application certificate."
+        print -r -- "$signing_details" | grep -Eq \
+            '^TeamIdentifier=[A-Z0-9]{10}$' \
+            || fail "$label has no valid Apple Developer team identifier."
+        print -r -- "$signing_details" | grep -Eq \
+            '^flags=.*\(runtime\)' \
+            || fail "$label does not enable the hardened runtime."
+
+        team_identifier="$(print -r -- "$signing_details" | \
+            awk -F= '$1 == "TeamIdentifier" { print $2 }')"
+        [[ "$team_identifier" == "$EXPECTED_DEVELOPER_TEAM_ID" ]] \
+            || fail "$label is not signed by the SAMO DANNI EOOD Apple Developer team."
+        local sparkle_version="$bundle/Contents/Frameworks/Sparkle.framework/Versions/B"
+        local -a nested_code
+        nested_code=(
+            "$sparkle_version/XPCServices/Installer.xpc"
+            "$sparkle_version/XPCServices/Downloader.xpc"
+            "$sparkle_version/Autoupdate"
+            "$sparkle_version/Updater.app"
+            "$bundle/Contents/Frameworks/Sparkle.framework"
+        )
+        local code nested_details nested_team
+        for code in "${nested_code[@]}"; do
+            [[ -e "$code" ]] || fail "$label is missing signed Sparkle code at $code."
+            nested_details="$(codesign -dvvv "$code" 2>&1)"
+            print -r -- "$nested_details" | grep -Fq \
+                'Authority=Developer ID Application:' \
+                || fail "$label contains Sparkle code without a Developer ID signature."
+            nested_team="$(print -r -- "$nested_details" | \
+                awk -F= '$1 == "TeamIdentifier" { print $2 }')"
+            [[ "$nested_team" == "$team_identifier" ]] \
+                || fail "$label contains Sparkle code signed by another Apple Developer team."
+            print -r -- "$nested_details" | grep -Eq \
+                '^flags=.*\(runtime\)' \
+                || fail "$label contains Sparkle code without the hardened runtime."
+        done
+    fi
+
+    if $PUBLISHING; then
+        xcrun stapler validate "$bundle" >/dev/null \
+            || fail "$label has no valid stapled notarization ticket."
+        spctl --assess --type execute --verbose=4 "$bundle" \
+            || fail "$label is not accepted by Gatekeeper."
+    fi
 
     if $APP_STORE; then
         local entitlements

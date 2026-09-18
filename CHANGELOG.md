@@ -15,6 +15,9 @@ release bundle.
 - Simplified the source-organization confirmation to show only where files
   will move, what stays unchanged, and how to safely move from an ExFAT card.
 
+- Added Developer ID signing, hardened-runtime, Apple notarization, stapling,
+  Gatekeeper, and release-provenance checks for trusted direct downloads.
+
 - Removed the explanatory paragraph from the welcome screen so the folder
   action is the clear starting point.
 

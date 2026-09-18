@@ -87,7 +87,7 @@ verify_app_bundle() {
             '^TeamIdentifier=[A-Z0-9]{10}$' \
             || fail "$label has no valid Apple Developer team identifier."
         print -r -- "$signing_details" | grep -Eq \
-            '^flags=.*\(runtime\)' \
+            'flags=.*\(runtime\)' \
             || fail "$label does not enable the hardened runtime."
 
         team_identifier="$(print -r -- "$signing_details" | \
@@ -115,7 +115,7 @@ verify_app_bundle() {
             [[ "$nested_team" == "$team_identifier" ]] \
                 || fail "$label contains Sparkle code signed by another Apple Developer team."
             print -r -- "$nested_details" | grep -Eq \
-                '^flags=.*\(runtime\)' \
+                'flags=.*\(runtime\)' \
                 || fail "$label contains Sparkle code without the hardened runtime."
         done
     fi

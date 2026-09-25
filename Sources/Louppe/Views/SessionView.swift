@@ -232,7 +232,8 @@ struct SessionView: View {
         case .trashNo:
             parts.append("Among the items being considered, items marked “Yes” and unrated items stay in the folder.")
         case .keepOnlyYes:
-            parts.append("Among the items being considered, only those marked “Yes” stay in the folder.")
+            let decisions = store.cleanUpDecisionBreakdown(for: mode)
+            parts.insert("Includes \(decisions.no) No and \(decisions.undecided) Undecided items. Stars and color labels do not protect these items. Mixed RAW + JPEG decisions stay in the folder.", at: 0)
         case .pairedJPEGs, .pairedRAWs:
             break // These modes return through their dedicated message above.
         }
@@ -267,11 +268,11 @@ struct SessionView: View {
         let position = store.visibleIndices.isEmpty
             ? 0
             : (store.currentVisiblePosition ?? 0) + 1
-        var text = "\(position) of \(store.visibleIndices.count)"
+        var text = "Item \(position) of \(store.visibleIndices.count)"
         if store.filter.isActive {
             text += " (of \(store.items.count) total)"
         }
-        text += "  ·  ✓ \(store.yesCount)  ✗ \(store.noCount)  · \(store.undecidedCount) left"
+        text += "  ·  \(store.yesCount + store.noCount)/\(store.items.count) reviewed"
         if store.mixedCount > 0 {
             text += "  ·  \(store.mixedCount) mixed"
         }
@@ -342,6 +343,9 @@ struct SessionView: View {
                         .transition(.move(edge: .trailing))
                 }
             }
+            Divider()
+            SessionReviewFooter(store: store)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1253,11 +1257,11 @@ struct CleanUpMenuItems: View {
         .pickerStyle(.inline)
         .disabled(store.isNewFileOperationBlocked)
         Divider()
-        Button("Move “No” to Trash…") {
+        Button("Trash No…") {
             store.requestCleanUp(.trashNo)
         }
         .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .trashNo))
-        Button("Keep Only “Yes”…") {
+        Button("Trash No + Undecided…") {
             store.requestCleanUp(.keepOnlyYes)
         }
         .disabled(store.isNewFileOperationBlocked || !store.hasCleanUpTargets(for: .keepOnlyYes))

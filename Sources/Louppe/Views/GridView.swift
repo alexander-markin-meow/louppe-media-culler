@@ -67,11 +67,13 @@ struct GridView: View {
                         .padding(.top, 80)
                     } else if store.visibleIndices.isEmpty
                                 && store.filter.isActive {
-                        ContentUnavailableView(
-                            "No items match the filter",
-                            systemImage: "line.3.horizontal.decrease.circle",
-                            description: Text("Adjust or reset the filter in the toolbar to see media again.")
-                        )
+                        ContentUnavailableView {
+                            Label("No items match the filter", systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text("Try different choices or clear the filters to see media again.")
+                        } actions: {
+                            Button("Clear Filters") { store.resetFilter() }
+                        }
                         .padding(.top, 80)
                     }
                     // One lazy grid gives SwiftUI one stable row-height model.

@@ -90,6 +90,11 @@ final class SessionStore: ObservableObject {
     @Published var showMetadataPanel = true
     @Published var showBrowser = true
     @Published var zoomMode: ZoomMode = .fit
+    @Published private(set) var photoZoomScale: CGFloat = 1
+    @Published private(set) var fittedPhotoZoomScale: CGFloat?
+    private var fittedPhotoZoomRevision: PhotoContentRevision?
+    private var fittedPhotoZoomMode: ZoomMode?
+    private var lastGestureZoomPublication: CFAbsoluteTime = 0
     @Published var showClippingWarnings = false
     let actualSizeViewport = ActualSizeViewport()
     @Published var gridThumbSize: CGFloat = 170
@@ -99,6 +104,7 @@ final class SessionStore: ObservableObject {
     // force a redundant second grid redraw after every resize/thumbnail zoom.
     private(set) var gridColumnCount = 1
     @Published var isExportPresented = false
+    @Published var exportKeepersRequested = false
     @Published var isOrganizePresented = false
     @Published var isRenamePresented = false
     @Published private(set) var fileRenamingPresentationMode:
@@ -602,6 +608,7 @@ final class SessionStore: ObservableObject {
     /// Exact unambiguous RAW+JPEG relationships, cached at the same structural
     /// boundary as the item/file index so menu enablement stays O(1).
     private var rawJPEGPairs: [(raw: PhotoFile, jpeg: PhotoFile)] = []
+    var rawJPEGPairCount: Int { rawJPEGPairs.count }
 
     @Published private(set) var availableTypes: [String] = []
     @Published private(set) var availableMediaKinds: [MediaKind] = []
@@ -1600,8 +1607,9 @@ final class SessionStore: ObservableObject {
     /// Restores the visible controls to their folder-wide defaults. This is
     /// deliberately different from a bare `PhotoFilter()` because DatePicker
     /// selections must already lie inside the current folder's limits.
-    func resetFilter() {
+    func resetFilter(keepersOnly: Bool = false) {
         var reset = PhotoFilter()
+        if keepersOnly { reset.excludedDecisionStates = [.no, .undecided, .mixed] }
         if let available = captureDateRange {
             reset.dateFrom = available.lowerBound
             reset.dateTo = available.upperBound
@@ -1807,6 +1815,7 @@ final class SessionStore: ObservableObject {
             sourceFolder?.standardizedFileURL == standardizedURL
         if !isSameFolder {
             actualSizeViewport.reset()
+            photoZoomScale = 1
             showClippingWarnings = false
         }
         let preservesCurrentFilter = isSameFolder && !items.isEmpty
@@ -2265,7 +2274,7 @@ final class SessionStore: ObservableObject {
             pushUndo(.organization(organizationUndo))
         }
         if loaded.isEmpty {
-            scanError = "No recognised media was found in that folder."
+            scanError = "No recognised media was found in “\(url.lastPathComponent)”. Choose another folder or check Supported Formats."
         } else if replaceSavedSession {
             // Replacing the old snapshot is an explicit user change, not
             // optional maintenance of the just-opened baseline.
@@ -3025,9 +3034,34 @@ final class SessionStore: ObservableObject {
         return count > 1 ? "Move \(count) Selected to Trash…" : "Move Selected to Trash…"
     }
 
-    func presentExport() {
+    func presentExport(keepersOnly: Bool = false) {
         guard canExport else { return }
+        exportKeepersRequested = keepersOnly
         isExportPresented = true
+    }
+
+    /// Computed from the same generation authority used by Close and Quit.
+    /// A completed older write must never make a newer decision look saved.
+    var sessionSaveStatus: String {
+        if isLegacySessionMigrationConfirmationPresented { return "Not saved" }
+        if persistenceWarning != nil {
+            if sessionChangeGeneration == 0 { return "Check saving" }
+            return currentSessionIsDurable ? "Saved · see notice" : "Not saved"
+        }
+        if activePersistenceSaveCount > 0 { return "Saving…" }
+        if sessionChangeGeneration == 0 { return "No unsaved changes" }
+        return currentSessionIsDurable ? "Saved" : "Saving…"
+    }
+
+    var isReviewComplete: Bool { !items.isEmpty && undecidedCount == 0 }
+
+    /// Resolve counts only when a confirmation is requested, not per tile.
+    func cleanUpDecisionBreakdown(for mode: CleanUpMode) -> (no: Int, undecided: Int) {
+        let targets = cleanUpTargets(for: mode)
+        return (
+            targets.reduce(0) { $0 + (items[$1].rating == .no ? 1 : 0) },
+            targets.reduce(0) { $0 + (items[$1].rating == .undecided ? 1 : 0) }
+        )
     }
 
     // MARK: - Command Palette
@@ -3265,7 +3299,7 @@ final class SessionStore: ObservableObject {
         switch mode {
         case .selection: action = "Move Selected to Trash"
         case .trashNo: action = "Move “No” to Trash"
-        case .keepOnlyYes: action = "Keep Only Yes"
+        case .keepOnlyYes: action = "Trash No + Undecided"
         case .pairedJPEGs: action = "Move Paired JPEGs to Trash"
         case .pairedRAWs: action = "Move Paired RAWs to Trash"
         }
@@ -4445,16 +4479,80 @@ final class SessionStore: ObservableObject {
         if mode == .actual {
             // S defines one inspection run. Enter centered; pressing S again
             // returns to Fit and clears the position carried across photos.
+            let returnsToFit = isAtActualSize
             actualSizeViewport.reset()
+            photoZoomScale = 1
+            zoomMode = returnsToFit ? .fit : .actual
+            return
         }
         zoomMode = (zoomMode == mode) ? .fit : mode
+    }
+
+    var isAtActualSize: Bool {
+        zoomMode == .actual && abs(photoZoomScale - 1) < 0.001
+    }
+
+    /// The slider follows the currently displayed photo, not the last custom
+    /// zoom from a different file. Fit/Phone is unavailable until the current
+    /// source dimensions and viewport have been measured.
+    var displayedPhotoZoomScale: CGFloat? {
+        if zoomMode == .actual { return photoZoomScale }
+        guard fittedPhotoZoomRevision == currentItem?.contentRevision,
+              fittedPhotoZoomMode == zoomMode else { return nil }
+        return fittedPhotoZoomScale
+    }
+
+    func reportFittedPhotoZoomScale(
+        _ scale: CGFloat,
+        revision: PhotoContentRevision,
+        mode: ZoomMode
+    ) {
+        guard mode != .actual,
+              zoomMode == mode,
+              currentItem?.contentRevision == revision,
+              scale.isFinite, scale > 0 else { return }
+        let scale = ActualSizeGeometry.clampedZoom(scale)
+        if fittedPhotoZoomRevision == revision,
+           fittedPhotoZoomMode == mode,
+           let fittedPhotoZoomScale,
+           abs(fittedPhotoZoomScale - scale) < 0.001 { return }
+        fittedPhotoZoomRevision = revision
+        fittedPhotoZoomMode = mode
+        fittedPhotoZoomScale = scale
     }
 
     /// Gallery double-click enters 100% with the clicked image point under the
     /// viewport center. Unlike S, it deliberately does not reset to center.
     func zoomToActual(at position: NormalizedImagePosition) {
         actualSizeViewport.request(position: position)
+        photoZoomScale = 1
         zoomMode = .actual
+    }
+
+    func setPhotoZoomScale(
+        _ scale: CGFloat,
+        at position: NormalizedImagePosition? = nil,
+        viewportAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    ) {
+        let scale = ActualSizeGeometry.clampedZoom(scale)
+        if let position {
+            actualSizeViewport.request(
+                position: position,
+                viewportAnchor: viewportAnchor
+            )
+        }
+        photoZoomScale = scale
+        zoomMode = .actual
+    }
+
+    /// Native AppKit pinch is already smooth; publish only occasional values
+    /// for the footer readout so Browser and Info do not redraw at gesture FPS.
+    func reportPhotoZoomScaleFromGesture(_ scale: CGFloat, ended: Bool) {
+        let scale = ActualSizeGeometry.clampedZoom(scale)
+        let now = CFAbsoluteTimeGetCurrent()
+        guard ended || now - lastGestureZoomPublication >= 0.05 else { return }
+        lastGestureZoomPublication = now
+        if abs(photoZoomScale - scale) >= 0.001 { photoZoomScale = scale }
     }
 
     /// A second Gallery double-click leaves the saved inspection point intact
@@ -4992,6 +5090,7 @@ final class SessionStore: ObservableObject {
         cancelScheduledSave()
         videoPlayback.resetRememberedPositions()
         zoomMode = .fit
+        photoZoomScale = 1
         showClippingWarnings = false
         actualSizeViewport.reset()
         scanTask?.cancel()

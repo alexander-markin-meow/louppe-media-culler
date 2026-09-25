@@ -81,6 +81,34 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" \
 
 cp .build/release/Louppe "$APP_DIR/Contents/MacOS/Louppe"
 
+# Xcode 27's SwiftPM linker can record the deployment target (14.0) as the
+# linked SDK even though compilation used the current SDK. macOS then presents
+# the app with the older toolbar appearance. Correct that load-command marker
+# before signing; keep the deployment target and linker version unchanged.
+CURRENT_SDK="$(xcrun --sdk macosx --show-sdk-version)"
+BUILD_VERSION="$(vtool -show-build "$APP_DIR/Contents/MacOS/Louppe")"
+LINKED_MINIMUM="$(print -r -- "$BUILD_VERSION" | awk '$1 == "minos" { print $2; exit }')"
+LINKED_SDK="$(print -r -- "$BUILD_VERSION" | awk '$1 == "sdk" { print $2; exit }')"
+LINKER_VERSION="$(print -r -- "$BUILD_VERSION" | awk '$1 == "version" { print $2; exit }')"
+if [[ -z "$LINKED_MINIMUM" || -z "$LINKED_SDK" || -z "$LINKER_VERSION" ]]; then
+    echo "Could not inspect Louppe's linked macOS SDK." >&2
+    exit 1
+fi
+if [[ "$LINKED_SDK" != "$CURRENT_SDK" ]]; then
+    vtool -set-build-version macos "$LINKED_MINIMUM" "$CURRENT_SDK" \
+        -tool ld "$LINKER_VERSION" -replace \
+        -output "$STAGING_ROOT/Louppe-current-sdk" \
+        "$APP_DIR/Contents/MacOS/Louppe"
+    mv "$STAGING_ROOT/Louppe-current-sdk" "$APP_DIR/Contents/MacOS/Louppe"
+    chmod +x "$APP_DIR/Contents/MacOS/Louppe"
+fi
+FINAL_LINKED_SDK="$(vtool -show-build "$APP_DIR/Contents/MacOS/Louppe" | \
+    awk '$1 == "sdk" { print $2; exit }')"
+if [[ "$FINAL_LINKED_SDK" != "$CURRENT_SDK" ]]; then
+    echo "Louppe links as SDK $FINAL_LINKED_SDK, expected $CURRENT_SDK." >&2
+    exit 1
+fi
+
 # Compile the Icon Composer source so macOS 26 can render the native Default,
 # Dark, Clear, and Tinted appearances. Shipping only the legacy .icns makes
 # Tahoe place the transparent glyph on its generic gray compatibility tile.

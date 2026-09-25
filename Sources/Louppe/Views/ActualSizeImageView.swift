@@ -11,6 +11,8 @@ struct ActualSizeImageView: NSViewRepresentable {
     let viewport: ActualSizeViewport
     let onDoubleClick: () -> Void
     let onLoading: (Bool) -> Void
+    var zoomScale: CGFloat = 1
+    var onZoomScaleChanged: (CGFloat, Bool) -> Void = { _, _ in }
 
     func makeNSView(context: Context) -> ActualSizeScrollView {
         ActualSizeScrollView()
@@ -26,7 +28,9 @@ struct ActualSizeImageView: NSViewRepresentable {
             showsClippingWarnings: showsClippingWarnings,
             viewport: viewport,
             onDoubleClick: onDoubleClick,
-            onLoading: onLoading
+            onLoading: onLoading,
+            zoomScale: zoomScale,
+            onZoomScaleChanged: onZoomScaleChanged
         )
     }
 
@@ -49,6 +53,14 @@ final class ActualSizeScrollView: NSScrollView {
     private var isApplyingViewport = false
     private var viewport: ActualSizeViewport?
     private var onLoading: (Bool) -> Void = { _ in }
+    private var onZoomScaleChanged: (CGFloat, Bool) -> Void = { _, _ in }
+    private var pendingPlacement: (position: NormalizedImagePosition, anchor: CGPoint)?
+    private var isNativeMagnifying = false
+    private var nativeMagnificationHasEnded = false
+    private var displayedItemName = "photo"
+    private var panStart: (windowPoint: CGPoint, contentOrigin: CGPoint)?
+    private var zoomAnimationTask: Task<Void, Never>?
+    private var animatedViewportPosition: NormalizedImagePosition?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -58,14 +70,42 @@ final class ActualSizeScrollView: NSScrollView {
         hasVerticalScroller = true
         autohidesScrollers = true
         scrollerStyle = .overlay
+        allowsMagnification = true
+        minMagnification = ActualSizeGeometry.minimumZoom
+        maxMagnification = ActualSizeGeometry.maximumZoom
         documentView = canvas
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(liveMagnificationStarted(_:)),
+            name: NSScrollView.willStartLiveMagnifyNotification,
+            object: self
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(liveMagnificationEnded(_:)),
+            name: NSScrollView.didEndLiveMagnifyNotification,
+            object: self
+        )
         canvas.onTileActivityChanged = { [weak self] active in
             self?.onLoading(active)
+        }
+        canvas.onPanStart = { [weak self] point in
+            self?.beginPhotoPan(at: point) ?? false
+        }
+        canvas.onPanMove = { [weak self] point in
+            self?.movePhotoPan(to: point)
+        }
+        canvas.onPanEnd = { [weak self] in
+            self?.endPhotoPan()
         }
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     func configure(
@@ -74,13 +114,17 @@ final class ActualSizeScrollView: NSScrollView {
         showsClippingWarnings: Bool,
         viewport: ActualSizeViewport,
         onDoubleClick: @escaping () -> Void = {},
-        onLoading: @escaping (Bool) -> Void
+        onLoading: @escaping (Bool) -> Void,
+        zoomScale: CGFloat = 1,
+        onZoomScaleChanged: @escaping (CGFloat, Bool) -> Void = { _, _ in }
     ) {
         self.viewport = viewport
         self.onLoading = onLoading
-        setAccessibilityLabel("100% view of \(item.displayName)")
+        self.onZoomScaleChanged = onZoomScaleChanged
+        displayedItemName = item.displayName
+        updateAccessibilityZoomLabel()
         setAccessibilityHelp(
-            "Scroll to inspect the photo. Double-click to return to Fit. The position follows navigation until S resets it."
+            "Scroll or pinch to inspect the photo. Double-click to return to Fit. The position follows navigation until S resets it."
         )
         canvas.onTileActivityChanged = { [weak self] active in
             self?.onLoading(active)
@@ -94,7 +138,15 @@ final class ActualSizeScrollView: NSScrollView {
         let requestedRevision = item.contentRevision
         let itemChanged = currentContentRevision != requestedRevision
         if itemChanged {
-            captureViewport()
+            if zoomAnimationTask != nil {
+                // The store has already requested the centered S destination.
+                // Do not let a transient animation frame replace it on a
+                // quick navigation to the next photo.
+                cancelZoomAnimation()
+            } else {
+                captureViewport()
+            }
+            pendingPlacement = nil
             currentContentRevision = requestedRevision
             sourceGeneration &+= 1
             let generation = sourceGeneration
@@ -116,26 +168,68 @@ final class ActualSizeScrollView: NSScrollView {
             }
         }
 
+        let requestedScale = ActualSizeGeometry.clampedZoom(zoomScale)
         let positionRequestChanged =
             appliedPositionRequestGeneration
                 != viewport.positionRequestGeneration
+        if zoomAnimationTask != nil,
+           (requestedScale != 1 || positionRequestChanged) {
+            cancelZoomAnimation()
+        }
+        if !isNativeMagnifying,
+           zoomAnimationTask == nil,
+           abs(magnification - requestedScale) > 0.001 {
+            if !itemChanged,
+               positionRequestChanged,
+               requestedScale == 1,
+               canvas.source != nil,
+               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                appliedPositionRequestGeneration = viewport.positionRequestGeneration
+                pendingPlacement = nil
+                animateCenteredReset(to: viewport.position)
+                return
+            }
+            let retained = viewport.position
+            isApplyingViewport = true
+            setMagnification(
+                requestedScale,
+                centeredAt: CGPoint(
+                    x: contentView.bounds.midX,
+                    y: contentView.bounds.midY
+                )
+            )
+            updateDocumentGeometry()
+            scrollToViewportPosition(retained)
+            isApplyingViewport = false
+            updateAccessibilityZoomLabel()
+        }
+        canvas.setUsesSourceTiles(magnification >= 1)
+
         if positionRequestChanged {
             appliedPositionRequestGeneration =
                 viewport.positionRequestGeneration
+            pendingPlacement = (
+                viewport.position,
+                viewport.placementAnchor
+            )
             applyViewportPosition()
         } else if itemChanged, canvas.source != nil {
             applyViewportPosition()
         }
-        if clippingChanged {
+        if clippingChanged || canvas.source != nil {
             canvas.updateVisibleRect(contentView.documentVisibleRect)
         }
     }
 
     func prepareForRemoval() {
+        endPhotoPan()
+        let wasAnimating = zoomAnimationTask != nil
+        cancelZoomAnimation()
         // S requests the centered viewport before SwiftUI removes this
         // representable. Do not capture the old scroll position over a newer
         // explicit position request.
-        if appliedPositionRequestGeneration
+        if !wasAnimating,
+           appliedPositionRequestGeneration
             == viewport?.positionRequestGeneration {
             captureViewport()
         }
@@ -151,29 +245,186 @@ final class ActualSizeScrollView: NSScrollView {
     override func reflectScrolledClipView(_ clipView: NSClipView) {
         super.reflectScrolledClipView(clipView)
         guard clipView === contentView else { return }
-        if !isApplyingViewport {
+        if !isApplyingViewport, zoomAnimationTask == nil {
             captureViewport()
         }
         canvas.updateVisibleRect(clipView.documentVisibleRect)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if zoomAnimationTask != nil {
+            cancelZoomAnimation(publishingCurrentScale: true)
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        if zoomAnimationTask != nil {
+            cancelZoomAnimation(publishingCurrentScale: true)
+        }
+        let terminal = event.phase.contains(.ended)
+            || event.phase.contains(.cancelled)
+        if event.phase.contains(.began) || (!terminal && !isNativeMagnifying) {
+            nativeMagnificationHasEnded = false
+        }
+        if terminal && nativeMagnificationHasEnded {
+            return
+        }
+        isNativeMagnifying = true
+        super.magnify(with: event)
+        if terminal {
+            finishNativeMagnification()
+        } else if isNativeMagnifying {
+            didChangeNativeMagnification(ended: false)
+        }
+    }
+
+    @objc private func liveMagnificationStarted(_ notification: Notification) {
+        nativeMagnificationHasEnded = false
+        isNativeMagnifying = true
+    }
+
+    @objc private func liveMagnificationEnded(_ notification: Notification) {
+        finishNativeMagnification()
+    }
+
+    private func finishNativeMagnification() {
+        guard isNativeMagnifying else { return }
+        isNativeMagnifying = false
+        nativeMagnificationHasEnded = true
+        didChangeNativeMagnification(ended: true)
+    }
+
+    /// Dragging is measured in stable window points; dividing by the current
+    /// magnification maps it into the flipped document's scroll coordinates.
+    /// NSClipView constrains the result to the actual photo bounds.
+    func beginPhotoPan(at windowPoint: CGPoint) -> Bool {
+        guard canvas.source != nil,
+              !isNativeMagnifying,
+              canvas.frame.width > contentView.bounds.width + 1
+                || canvas.frame.height > contentView.bounds.height + 1
+        else { return false }
+        cancelZoomAnimation(publishingCurrentScale: true)
+        panStart = (windowPoint, contentView.bounds.origin)
+        return true
+    }
+
+    func movePhotoPan(to windowPoint: CGPoint) {
+        guard let panStart else { return }
+        let scale = max(magnification, ActualSizeGeometry.minimumZoom)
+        let target = CGPoint(
+            x: panStart.contentOrigin.x
+                - (windowPoint.x - panStart.windowPoint.x) / scale,
+            y: panStart.contentOrigin.y
+                + (windowPoint.y - panStart.windowPoint.y) / scale
+        )
+        contentView.scroll(to: CGPoint(
+            x: min(max(target.x, 0), max(canvas.frame.width - contentView.bounds.width, 0)),
+            y: min(max(target.y, 0), max(canvas.frame.height - contentView.bounds.height, 0))
+        ))
+        reflectScrolledClipView(contentView)
+    }
+
+    func endPhotoPan() {
+        guard panStart != nil else { return }
+        panStart = nil
+        captureViewport()
+    }
+
+    /// The S key's explicit return from custom zoom to centered 100% is the
+    /// only animated programmatic zoom. A short fixed frame count keeps the
+    /// viewport position and zoom moving together; continuous slider and
+    /// trackpad updates remain immediate.
+    private func animateCenteredReset(to target: NormalizedImagePosition) {
+        cancelZoomAnimation()
+        let startScale = magnification
+        let startPosition = ActualSizeGeometry.normalizedPosition(
+            contentOffset: contentView.bounds.origin,
+            documentSize: canvas.imageSize,
+            viewportSize: contentView.bounds.size,
+            preserving: target
+        )
+        animatedViewportPosition = startPosition
+        zoomAnimationTask = Task { @MainActor [weak self] in
+            for frame in 1...10 {
+                do {
+                    try await Task.sleep(nanoseconds: 18_000_000)
+                } catch { return }
+                guard let self, !Task.isCancelled else { return }
+                let progress = CGFloat(frame) / 10
+                let remaining = 1 - progress
+                let eased = 1 - remaining * remaining * remaining
+                let position = NormalizedImagePosition(
+                    x: startPosition.x + (target.x - startPosition.x) * eased,
+                    y: startPosition.y + (target.y - startPosition.y) * eased
+                )
+                self.animatedViewportPosition = position
+                self.isApplyingViewport = true
+                self.setMagnification(
+                    startScale + (1 - startScale) * eased,
+                    centeredAt: CGPoint(
+                        x: self.contentView.bounds.midX,
+                        y: self.contentView.bounds.midY
+                    )
+                )
+                self.updateDocumentGeometry()
+                self.scrollToViewportPosition(position)
+                self.isApplyingViewport = false
+                self.canvas.setUsesSourceTiles(self.magnification >= 1)
+                self.canvas.updateVisibleRect(self.contentView.documentVisibleRect)
+            }
+            guard let self else { return }
+            self.zoomAnimationTask = nil
+            self.animatedViewportPosition = nil
+            self.viewport?.update(position: target)
+            self.updateAccessibilityZoomLabel()
+        }
+    }
+
+    private func cancelZoomAnimation(publishingCurrentScale: Bool = false) {
+        guard let zoomAnimationTask else { return }
+        zoomAnimationTask.cancel()
+        self.zoomAnimationTask = nil
+        animatedViewportPosition = nil
+        if publishingCurrentScale {
+            captureViewport()
+            onZoomScaleChanged(magnification, true)
+        }
+    }
+
+    /// Shared with focused tests: native magnification has already changed
+    /// the scroll view's transform and pointer anchor before this runs.
+    func didChangeNativeMagnification(ended: Bool) {
+        updateAccessibilityZoomLabel()
+        canvas.setUsesSourceTiles(magnification >= 1)
+        updateDocumentGeometry()
+        canvas.updateVisibleRect(contentView.documentVisibleRect)
+        captureViewport()
+        onZoomScaleChanged(magnification, ended)
+    }
+
+    private func updateAccessibilityZoomLabel() {
+        let percent = Int((magnification * 100).rounded())
+        setAccessibilityLabel("\(percent)% view of \(displayedItemName)")
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
-        let retained = viewport?.position ?? .center
+        let retained = animatedViewportPosition ?? viewport?.position ?? .center
         let wasApplyingViewport = isApplyingViewport
         isApplyingViewport = true
         super.setFrameSize(newSize)
         updateDocumentGeometry()
         scrollToViewportPosition(retained)
-        viewport?.update(position: retained)
+        if zoomAnimationTask == nil { viewport?.update(position: retained) }
         isApplyingViewport = wasApplyingViewport
     }
 
     override func layout() {
-        let retained = viewport?.position ?? .center
+        let retained = animatedViewportPosition ?? viewport?.position ?? .center
         isApplyingViewport = true
         super.layout()
         updateDocumentGeometry()
-        if let viewport {
+        if let viewport, zoomAnimationTask == nil {
             viewport.update(position: retained)
         }
         scrollToViewportPosition(retained)
@@ -183,12 +434,12 @@ final class ActualSizeScrollView: NSScrollView {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        let retained = viewport?.position ?? .center
+        let retained = animatedViewportPosition ?? viewport?.position ?? .center
         isApplyingViewport = true
         updateBackingScale()
         updateDocumentGeometry()
         scrollToViewportPosition(retained)
-        viewport?.update(position: retained)
+        if zoomAnimationTask == nil { viewport?.update(position: retained) }
         isApplyingViewport = false
         canvas.updateVisibleRect(contentView.documentVisibleRect)
     }
@@ -198,9 +449,14 @@ final class ActualSizeScrollView: NSScrollView {
         isApplyingViewport = true
         updateBackingScale()
         canvas.setSource(source, backingScale: backingScale)
+        canvas.setUsesSourceTiles(magnification >= 1)
         updateDocumentGeometry()
-        scrollToViewportPosition(retained)
-        viewport?.update(position: retained)
+        if pendingPlacement != nil {
+            applyViewportPosition()
+        } else {
+            scrollToViewportPosition(retained)
+            viewport?.update(position: retained)
+        }
         isApplyingViewport = false
         canvas.updateVisibleRect(contentView.documentVisibleRect)
     }
@@ -213,7 +469,10 @@ final class ActualSizeScrollView: NSScrollView {
     }
 
     private func updateDocumentGeometry() {
-        let viewportSize = contentSize
+        // The clip view's bounds are measured in document points. `contentSize`
+        // stays in screen points while NSScrollView is magnified, which would
+        // miscenter photos and restore the wrong normalized position below 100%.
+        let viewportSize = contentView.bounds.size
         let imageSize = canvas.source.map {
             ActualSizeGeometry.documentSize(
                 sourcePixels: $0.pixelSize,
@@ -231,7 +490,23 @@ final class ActualSizeScrollView: NSScrollView {
     }
 
     private func applyViewportPosition() {
-        scrollToViewportPosition(viewport?.position ?? .center)
+        guard canvas.source != nil else { return }
+        if let placement = pendingPlacement {
+            let offset = ActualSizeGeometry.anchoredOffset(
+                imagePosition: placement.position,
+                viewportAnchor: placement.anchor,
+                documentSize: canvas.imageSize,
+                viewportSize: contentView.bounds.size
+            )
+            isApplyingViewport = true
+            contentView.scroll(to: offset)
+            super.reflectScrolledClipView(contentView)
+            isApplyingViewport = false
+            pendingPlacement = nil
+            captureViewport()
+        } else {
+            scrollToViewportPosition(viewport?.position ?? .center)
+        }
     }
 
     private func scrollToViewportPosition(
@@ -241,7 +516,7 @@ final class ActualSizeScrollView: NSScrollView {
         let offset = ActualSizeGeometry.contentOffset(
             for: position,
             documentSize: canvas.imageSize,
-            viewportSize: contentSize
+            viewportSize: contentView.bounds.size
         )
         let wasApplyingViewport = isApplyingViewport
         isApplyingViewport = true
@@ -255,7 +530,7 @@ final class ActualSizeScrollView: NSScrollView {
         let position = ActualSizeGeometry.normalizedPosition(
             contentOffset: contentView.bounds.origin,
             documentSize: canvas.imageSize,
-            viewportSize: contentSize,
+            viewportSize: contentView.bounds.size,
             preserving: viewport.position
         )
         viewport.update(position: position)
@@ -275,6 +550,10 @@ private final class ActualSizeCanvasView: NSView {
     private(set) var imageSize: CGSize = .zero
     var onTileActivityChanged: (Bool) -> Void = { _ in }
     var onDoubleClick: () -> Void = {}
+    var onPanStart: (CGPoint) -> Bool = { _ in false }
+    var onPanMove: (CGPoint) -> Void = { _ in }
+    var onPanEnd: () -> Void = {}
+    private var isPhotoPanning = false
 
     private var itemKey: String?
     private var preview: NSImage?
@@ -286,9 +565,11 @@ private final class ActualSizeCanvasView: NSView {
     private var generation: UInt64 = 0
     private var reportsTileActivity = false
     private var showsClippingWarnings = false
+    private var usesSourceTiles = true
 
     func beginItem(key: String) {
         guard itemKey != key else { return }
+        cancelPhotoPan()
         stopReportingActivity()
         itemKey = key
         source = nil
@@ -304,6 +585,26 @@ private final class ActualSizeCanvasView: NSView {
     func setPreview(_ preview: NSImage?) {
         guard self.preview !== preview else { return }
         self.preview = preview
+        needsDisplay = true
+    }
+
+    func setUsesSourceTiles(_ value: Bool) {
+        guard usesSourceTiles != value else { return }
+        usesSourceTiles = value
+        if !value {
+            stopReportingActivity()
+            generation &+= 1
+            pending = []
+            wanted = []
+            tiles = [:]
+            if let source {
+                HighResolutionImagePipeline.shared.retainTileRequests(
+                    sourceKey: source.key,
+                    coordinates: [],
+                    showsClippingWarnings: showsClippingWarnings
+                )
+            }
+        }
         needsDisplay = true
     }
 
@@ -362,7 +663,8 @@ private final class ActualSizeCanvasView: NSView {
     }
 
     func updateVisibleRect(_ visibleRect: CGRect) {
-        guard let source, imageFrame.width > 0, imageFrame.height > 0
+        guard usesSourceTiles,
+              let source, imageFrame.width > 0, imageFrame.height > 0
         else { return }
         let intersection = visibleRect.intersection(imageFrame)
         guard !intersection.isNull, !intersection.isEmpty else { return }
@@ -412,6 +714,7 @@ private final class ActualSizeCanvasView: NSView {
     }
 
     func prepareForRemoval() {
+        cancelPhotoPan()
         stopReportingActivity()
         generation &+= 1
         pending = []
@@ -426,7 +729,35 @@ private final class ActualSizeCanvasView: NSView {
             onDoubleClick()
             return
         }
+        if event.clickCount == 1, onPanStart(event.locationInWindow) {
+            isPhotoPanning = true
+            NSCursor.closedHand.push()
+            return
+        }
         super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isPhotoPanning else {
+            super.mouseDragged(with: event)
+            return
+        }
+        onPanMove(event.locationInWindow)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isPhotoPanning {
+            cancelPhotoPan()
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
+    private func cancelPhotoPan() {
+        guard isPhotoPanning else { return }
+        isPhotoPanning = false
+        onPanEnd()
+        NSCursor.pop()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -446,6 +777,7 @@ private final class ActualSizeCanvasView: NSView {
                 hints: nil
             )
         }
+        guard usesSourceTiles else { return }
         NSGraphicsContext.current?.imageInterpolation = .none
         for tile in tiles.values {
             let rect = CGRect(

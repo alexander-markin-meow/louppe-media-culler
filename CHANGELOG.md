@@ -5,6 +5,34 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
+## 1.9.0 (11) — 2026-09-25
+
+- Added a working Help window, searchable shortcuts, and dismissible review tips.
+- Combined filter information, save feedback, and review completion into one
+  compact bottom panel without repeating the toolbar's actions.
+- Kept the bottom panel height consistent across photos, video, and audio,
+  centered photo zoom, and removed clipped QuickTime artwork from audio controls.
+- Added a continuous photo zoom slider and pinch-to-zoom while retaining the
+  S (100%) and A (Phone size) shortcuts.
+- Fixed pinch completion so the enlarged photo remains pannable and the
+  slider keeps responding. Added click-and-drag panning and a smooth return
+  from custom zoom to centered 100% with S.
+- Replaced separate RAW + JPEG palette commands with one searchable toggle
+  that explains the current mode and any temporary availability restriction.
+- Made explicit selections the default export scope, added keeper and star
+  quick picks, clarified independent review metadata and same-drive Move,
+  and simplified editing-app options.
+- Added quick decision filters, visible active filters, direct filter reset,
+  a RAW + JPEG pairing choice, and preview retry and Finder actions.
+- Clarified Trash No + Undecided with separate counts, refreshed first-run
+  instructions, and added separately named local review packaging.
+
+- Reorganized the Command Palette into predictable sections, improved search
+  ranking and aliases, displayed all applicable keyboard shortcuts, and added
+  missing folder, search, selection, and zoom actions.
+- Kept the native macOS toolbar appearance in local release builds by recording
+  the current SDK version in the packaged app.
+
 ## 1.8.0 (10) — 2026-09-18
 
 - Added ⌘F to open the Filter menu with its Search field ready for typing.

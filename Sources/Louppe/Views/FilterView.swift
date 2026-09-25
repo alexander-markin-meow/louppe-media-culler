@@ -5,16 +5,16 @@ import SwiftUI
 struct FilterView: View {
     @ObservedObject var store: SessionStore
 
-    @State private var decisionExpanded = true
-    @State private var starsExpanded = true
-    @State private var colorExpanded = true
-    @State private var dateExpanded = true
-    @State private var mediaExpanded = true
+    @State private var decisionExpanded = false
+    @State private var starsExpanded = false
+    @State private var colorExpanded = false
+    @State private var dateExpanded = false
+    @State private var mediaExpanded = false
     @State private var durationExpanded = false
-    @State private var videoDetailsExpanded = true
+    @State private var videoDetailsExpanded = false
     @State private var cameraSettingsExpanded = false
     @State private var subfoldersExpanded = false
-    @State private var fileTypesExpanded = true
+    @State private var fileTypesExpanded = false
     @State private var camerasExpanded = false
     @State private var lensesExpanded = false
 
@@ -45,6 +45,10 @@ struct FilterView: View {
             Text("Filter")
                 .font(.headline)
             searchField
+            quickDecisionFilter
+            if store.rawJPEGPairCount > 0 {
+                rawJPEGPairingToggle
+            }
             Divider()
 
             ScrollView {
@@ -128,8 +132,51 @@ struct FilterView: View {
 
     // MARK: - Review metadata
 
+    /// These four shortcuts change only the Decision facet. A narrower date,
+    /// search, or other choice stays in place until the full filter is reset.
+    private var quickDecisionFilter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Decision")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 5) {
+                quickDecisionButton("All", included: nil)
+                quickDecisionButton("Undecided", included: .undecided)
+                quickDecisionButton("Yes", included: .yes)
+                quickDecisionButton("No", included: .no)
+            }
+            Text("All shows every decision; other filters still apply.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func quickDecisionButton(
+        _ title: String,
+        included: PhotoItemRatingState?
+    ) -> some View {
+        let states: Set<PhotoItemRatingState> = [.yes, .no, .undecided, .mixed]
+        let exclusions: Set<PhotoItemRatingState>
+        if included == .undecided {
+            // Mixed RAW/JPEG decisions still need review and belong in the
+            // same quick bucket as undecided photos.
+            exclusions = [.yes, .no]
+        } else {
+            exclusions = included.map { states.subtracting([$0]) } ?? []
+        }
+        return Button(title) {
+            var filter = store.filter
+            filter.excludedDecisionStates = exclusions
+            store.filter = filter
+        }
+        .buttonStyle(.bordered)
+        .tint(store.filter.excludedDecisionStates == exclusions
+            ? Color.louppeAccent : Color.primary)
+        .controlSize(.small)
+        .accessibilityLabel(included == nil ? "All decisions" : "\(title) decisions")
+    }
+
     private var decisionSection: some View {
-        FilterDisclosureSection(title: "Decision", isExpanded: $decisionExpanded) {
+        FilterDisclosureSection(title: "Decision details", isExpanded: $decisionExpanded) {
             VStack(alignment: .leading, spacing: 7) {
                 metadataToggle(
                     "Yes",
@@ -534,32 +581,6 @@ struct FilterView: View {
     private var fileTypesSection: some View {
         FilterDisclosureSection(title: "File types", isExpanded: $fileTypesExpanded) {
             VStack(alignment: .leading, spacing: 7) {
-                Toggle(isOn: rawJPEGPairingBinding) {
-                    HStack {
-                        Text(RawJPEGPairingMode.togetherControlTitle)
-                        Spacer()
-                        if store.isChangingRawJPEGPairingMode {
-                            ProgressView()
-                                .controlSize(.small)
-                                .accessibilityLabel("Preparing JPEG metadata")
-                        }
-                    }
-                }
-                .disabled(
-                    store.isChangingRawJPEGPairingMode
-                        || store.isFileOperationRunning
-                        || store.isXMPPublicationRunning
-                )
-                .accessibilityLabel(
-                    "Treat matching RAW and JPEG as one photo"
-                )
-                .accessibilityHint(
-                    "When enabled, ratings, selection, Export, Move, and Clean Up apply to both files."
-                )
-                .help(
-                    "When enabled, ratings, selection, Export, Move, and Clean Up apply to both files."
-                )
-                Divider()
                 ForEach(store.availableTypes, id: \.self) { type in
                     Toggle(isOn: exclusionBinding(type, \.excludedTypes)) {
                         labeledCount(type, store.typeCounts[type, default: 0])
@@ -567,6 +588,51 @@ struct FilterView: View {
                 }
             }
         }
+    }
+
+    private var rawJPEGPairingToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: rawJPEGPairingBinding) {
+                HStack {
+                    Text(RawJPEGPairingMode.togetherControlTitle)
+                    Spacer()
+                    if store.isChangingRawJPEGPairingMode {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Preparing JPEG metadata")
+                    }
+                }
+            }
+            .disabled(
+                store.isChangingRawJPEGPairingMode
+                    || store.isFileOperationRunning
+                    || store.isXMPPublicationRunning
+            )
+            .accessibilityLabel("Treat matching RAW and JPEG as one photo")
+            .accessibilityHint(rawJPEGPairingStatus)
+            .help(
+                "When enabled, ratings and ordinary item actions apply to both files. The separate paired-file Trash actions are exceptions."
+            )
+
+            Text(rawJPEGPairingStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var rawJPEGPairingStatus: String {
+        if store.isChangingRawJPEGPairingMode {
+            return "Updating RAW + JPEG review…"
+        }
+        if store.isFileOperationRunning {
+            return "Available after the current file operation finishes."
+        }
+        if store.isXMPPublicationRunning {
+            return "Available after XMP sidecar work finishes."
+        }
+        let count = store.rawJPEGPairCount
+        return "\(count) matching \(count == 1 ? "pair" : "pairs") currently reviewed "
+            + (store.rawJPEGPairingMode == .together ? "together." : "separately.")
     }
 
     private var rawJPEGPairingBinding: Binding<Bool> {

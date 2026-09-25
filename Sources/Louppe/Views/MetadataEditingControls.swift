@@ -62,6 +62,10 @@ struct MetadataEditingControls: View {
                 }
             }
 
+            Text("Stars don't change the Yes/No decision.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             HStack {
                 Text("Color label")
                     .font(.caption)

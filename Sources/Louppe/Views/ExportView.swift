@@ -14,8 +14,8 @@ private struct XMPConflictResolverPresentation: Identifiable {
 struct ExportView: View {
     @ObservedObject var store: SessionStore
     @StateObject private var exporter = ExportManager()
-    // The sheet's content is recreated per presentation, so every open starts
-    // from the safe default: Copy, keepers only.
+    // The sheet's content is recreated per presentation. An explicit selection
+    // starts with all its items; otherwise Copy starts with keepers.
     @State private var mode: ExportMode = .copy
     /// Routing is intentionally a Copy-only subflow. Keeping it out of the
     /// toolbar and separate from Move makes the non-destructive default clear.
@@ -35,6 +35,7 @@ struct ExportView: View {
     @State private var universalDecisionKeywords = false
     @State private var allowExternalLabelReplacement = false
     @State private var showXMPDetails = false
+    @State private var showEditingAppOptions = false
     @State private var xmpInclusionChoice = ExportXMPInclusionChoice()
     @State private var existingXMPCount = 0
     @State private var excludedACRCompanionCount = 0
@@ -107,6 +108,12 @@ struct ExportView: View {
             routingIncludesXMP = false
             existingXMPCount = 0
             excludedACRCompanionCount = 0
+            applyConfiguration(
+                .initial(
+                    hasExplicitSelection: !store.selectedIndices.isEmpty,
+                    keepersOnly: store.exportKeepersRequested
+                )
+            )
             refreshSelectionSnapshot()
             refreshRoutingEvaluation()
         }
@@ -117,6 +124,7 @@ struct ExportView: View {
         }
         .onChange(of: mode) {
             showXMPDetails = false
+            showEditingAppOptions = false
             if mode != .copy { isRoutingCopies = false }
             store.resetXMPPublication()
             refreshSelectionSnapshot()
@@ -131,6 +139,10 @@ struct ExportView: View {
             refreshRoutingEvaluation()
         }
         .onChange(of: store.items.count) {
+            refreshSelectionSnapshot()
+            refreshRoutingEvaluation()
+        }
+        .onChange(of: store.selectedIndices) {
             refreshSelectionSnapshot()
             refreshRoutingEvaluation()
         }
@@ -193,7 +205,13 @@ struct ExportView: View {
                 Text("Media to include")
                     .font(.subheadline.weight(.semibold))
 
+                quickPickRow
+
                 exportScopeRow
+
+                Text("Yes/No/Undecided and stars are separate. An item must match both choices below, plus any color choice.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 HStack(spacing: 12) {
                     ratingTile(.yes, count: scopeRatingCount(.yes), label: "Yes", color: .green)
@@ -262,42 +280,23 @@ struct ExportView: View {
                     .accessibilityLabel("Color labels")
                     .accessibilityValue(colorSelectionSummary)
                 }
+
+                exportPreview
             }
 
             if mode == .metadataXMP {
                 Divider()
                 VStack(alignment: .leading, spacing: 10) {
-                    exportMenuRow("Application") {
-                        Picker("Application", selection: $xmpProfile) {
-                            ForEach(XMPApplicationProfile.allCases, id: \.self) {
-                                Text($0.displayName).tag($0)
-                            }
-                        }
-                    }
-                    if xmpProfile == .universal {
-                        Toggle(
-                            "Make decisions visible as keywords",
-                            isOn: $universalDecisionKeywords
-                        )
-                    }
-                    Toggle(
-                        "Allow replacing or removing external color labels",
-                        isOn: $allowExternalLabelReplacement
-                    )
-                    if allowExternalLabelReplacement {
-                        Text("Confirmed: an external xmp:Label may be replaced or removed when it conflicts with the selected Louppe color.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                    Text("Write current Louppe metadata beside the original photos. Original media is never modified.")
+                    Text("Write Louppe decisions, stars, and colors to XMP sidecars for editing apps. Original photos stay unchanged.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    editingAppOptions
                 }
             } else {
                 Divider()
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle(
-                        "Include XMP sidecars",
+                        "Include XMP sidecars for editing apps",
                         isOn: includeXMPBinding
                     )
 
@@ -312,39 +311,13 @@ struct ExportView: View {
                     }
 
                     if xmpInclusionChoice.isIncluded {
-                        exportMenuRow("Application") {
-                            Picker("Application", selection: $xmpProfile) {
-                                ForEach(XMPApplicationProfile.allCases, id: \.self) {
-                                    Text($0.displayName).tag($0)
-                                }
-                            }
-                        }
-                        if xmpProfile == .universal {
-                            Toggle(
-                                "Make decisions visible as keywords",
-                                isOn: $universalDecisionKeywords
-                            )
-                        }
-                        Toggle(
-                            "Allow replacing or removing external color labels",
-                            isOn: $allowExternalLabelReplacement
-                        )
-                        if allowExternalLabelReplacement {
-                            Text("Confirmed: an external xmp:Label may be replaced or removed when it conflicts with the selected Louppe color.")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
+                        editingAppOptions
                     }
                 }
             }
 
-            Text(exportDescription)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-
             if mode == .move {
-                Text("Moved items leave the source folder and this session. This can't be undone in Louppe — the files stay safe at the destination.")
+                Text("Move works only to another folder on the same drive. For another drive or card, choose Copy. Moved items leave this session and can't be undone in Louppe.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.leading)
@@ -425,6 +398,145 @@ struct ExportView: View {
             starStates: selectedStars,
             colorStates: selectedColors
         )
+    }
+
+    private var currentConfiguration: ExportSelectionConfiguration {
+        ExportSelectionConfiguration(
+            scope: scope,
+            predicate: selectionPredicate
+        )
+    }
+
+    private var activeQuickPick: ExportQuickPick? {
+        if !store.selectedIndices.isEmpty,
+           currentConfiguration == .preset(.allSelected) {
+            return .allSelected
+        }
+        if currentConfiguration == .preset(
+            .keepers,
+            keeperScope: store.exportKeepersRequested ? .all : .filtered
+        ) {
+            return .keepers
+        }
+        if currentConfiguration == .preset(.fourFiveStars) {
+            return .fourFiveStars
+        }
+        return nil
+    }
+
+    private var quickPickRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Quick picks")
+                    .font(.caption.weight(.semibold))
+                if activeQuickPick == nil {
+                    Text("Custom")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 8) {
+                quickPickButton("Keepers (Yes)", pick: .keepers)
+                    .help(store.exportKeepersRequested
+                        ? "Yes decisions, with any stars or colors, from the whole folder"
+                        : "Yes decisions, with any stars or colors, from the current filter")
+                quickPickButton("4–5 Stars", pick: .fourFiveStars)
+                    .help("4 or 5 stars with any decision or color, from the current filter")
+                quickPickButton("All Selected", pick: .allSelected)
+                    .help("Every explicitly selected item, regardless of decision, stars, or color")
+                    .disabled(store.selectedIndices.isEmpty)
+            }
+        }
+    }
+
+    private func quickPickButton(
+        _ title: String,
+        pick: ExportQuickPick
+    ) -> some View {
+        let isActive = activeQuickPick == pick
+        return Button {
+            applyQuickPick(pick)
+        } label: {
+            HStack(spacing: 4) {
+                if isActive { Image(systemName: "checkmark") }
+                Text(title)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private func applyQuickPick(_ pick: ExportQuickPick) {
+        if pick == .allSelected && store.selectedIndices.isEmpty { return }
+        applyConfiguration(.preset(
+            pick,
+            keeperScope: store.exportKeepersRequested ? .all : .filtered
+        ))
+    }
+
+    private func applyConfiguration(_ configuration: ExportSelectionConfiguration) {
+        scope = configuration.scope
+        selectedRatings = configuration.predicate.decisions
+        selectedStars = configuration.predicate.starStates
+        selectedColors = configuration.predicate.colorStates
+    }
+
+    private var exportPreview: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(exportDescription)
+                .font(.callout.weight(.semibold))
+            Text(exclusionDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var exclusionDescription: String {
+        let excludedByChoices = max(0, scopeIndices.count - selectionSnapshot.itemCount)
+        let outsideScope = max(0, store.items.count - scopeIndices.count)
+        var parts: [String] = []
+        if excludedByChoices > 0 {
+            parts.append("\(excludedByChoices) excluded by decision, stars, or color")
+        }
+        if outsideScope > 0 {
+            parts.append("\(outsideScope) outside this scope")
+        }
+        return parts.isEmpty ? "Nothing excluded." : parts.joined(separator: " · ") + "."
+    }
+
+    private var editingAppOptions: some View {
+        DisclosureGroup("Editing app options", isExpanded: $showEditingAppOptions) {
+            VStack(alignment: .leading, spacing: 9) {
+                exportMenuRow("Application") {
+                    Picker("Application", selection: $xmpProfile) {
+                        ForEach(XMPApplicationProfile.allCases, id: \.self) {
+                            Text($0.displayName).tag($0)
+                        }
+                    }
+                }
+                if xmpProfile == .universal {
+                    Toggle(
+                        "Make decisions visible as keywords",
+                        isOn: $universalDecisionKeywords
+                    )
+                }
+                Toggle(
+                    "Allow replacing or removing external color labels",
+                    isOn: $allowExternalLabelReplacement
+                )
+                if allowExternalLabelReplacement {
+                    Text("Confirmed: an external xmp:Label may be replaced or removed when it conflicts with the selected Louppe color.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.caption)
     }
 
     // MARK: - Multi-destination Copy
@@ -879,10 +991,10 @@ struct ExportView: View {
     }
 
     private func refreshSelectionSnapshot() {
-        selectionSnapshot = ExportSelectionSnapshot(
+        selectionSnapshot = currentConfiguration.snapshot(
             items: store.items,
-            candidateIndices: scopeIndices,
-            predicate: selectionPredicate
+            filtered: store.visibleIndices,
+            selected: store.selectedIndices
         )
         scheduleXMPInspection()
     }
@@ -995,14 +1107,14 @@ struct ExportView: View {
             return "Checking the selected photos for existing XMP sidecars…"
         }
         if xmpInclusionChoice.isIncluded {
-            return "Existing sidecars will be included; missing ones will be created."
+            return "XMP carries Louppe decisions, stars, and colors to editing apps. Existing sidecars are included; missing ones are created."
         }
         if existingXMPCount > 0 {
             return mode == .move
                 ? "Existing XMP sidecars will remain in the source folder."
                 : "Existing sidecars will stay at the source and will not be copied."
         }
-        return "No existing XMP sidecars found. Turn on to create them."
+        return "No existing XMP sidecars found. Turn on to create editing-app ratings beside the exported media."
     }
 
     private var exportDescription: String {
@@ -1061,10 +1173,10 @@ struct ExportView: View {
     }
 
     private var scopeIndices: [Int] {
-        scope.candidateIndices(
+        currentConfiguration.candidateIndices(
             all: store.items.indices,
             filtered: store.visibleIndices,
-            selected: store.effectiveSelection
+            selected: store.selectedIndices
         )
     }
 
@@ -1095,6 +1207,7 @@ struct ExportView: View {
                     .tag(CleanUpScope.filtered)
                 exportScopeLabel("Selected", scope: .selected)
                     .tag(CleanUpScope.selected)
+                    .disabled(store.selectedIndices.isEmpty)
             }
             .pickerStyle(.menu)
             .accessibilityLabel("Media to consider")
@@ -1105,7 +1218,7 @@ struct ExportView: View {
         let count = scope.candidateIndices(
             all: store.items.indices,
             filtered: store.visibleIndices,
-            selected: store.effectiveSelection
+            selected: store.selectedIndices
         ).count
         return Text("\(title) (\(count))")
     }

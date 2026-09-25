@@ -56,7 +56,15 @@ struct GalleryVideoPlayerView: View {
                             }
                             .padding(12)
                             Spacer()
-                            transportControls
+                            GalleryMediaTransportView(
+                                item: item,
+                                playback: playback,
+                                isScrubbing: $isScrubbing,
+                                scrubPosition: $scrubPosition,
+                                volume: $volume,
+                                isMuted: $isMuted,
+                                compact: false
+                            )
                                 .padding(.horizontal, 18)
                                 .padding(.bottom, 14)
                         }
@@ -84,95 +92,6 @@ struct GalleryVideoPlayerView: View {
 
     private var showsControls: Bool {
         isHovering || !playback.isPlaying || isScrubbing
-    }
-
-    private var duration: Double {
-        guard let value = item.duration,
-              value.isFinite, value > 0 else { return 0 }
-        return value
-    }
-
-    private var displayedTime: Double {
-        isScrubbing ? scrubPosition * duration : playback.currentTimeSeconds
-    }
-
-    private var timelineValue: Binding<Double> {
-        Binding(
-            get: {
-                isScrubbing
-                    ? scrubPosition
-                    : playback.normalizedPlaybackPosition(for: item.duration)
-            },
-            set: { scrubPosition = min(max($0, 0), 1) }
-        )
-    }
-
-    private var transportControls: some View {
-        HStack(spacing: 12) {
-            controlButton(
-                systemName: "gobackward.15",
-                help: "Skip back 15 seconds"
-            ) {
-                playback.seek(item, by: -15)
-            }
-            controlButton(
-                systemName: playback.isPlaying ? "pause.fill" : "play.fill",
-                help: playback.isPlaying ? "Pause" : "Play"
-            ) {
-                playback.toggle(item)
-            }
-            controlButton(
-                systemName: "goforward.15",
-                help: "Skip forward 15 seconds"
-            ) {
-                playback.seek(item, by: 15)
-            }
-            Text(MediaDurationFormat.display(displayedTime))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 42, alignment: .trailing)
-            Slider(
-                value: timelineValue,
-                in: 0...1,
-                onEditingChanged: { editing in
-                    if editing {
-                        scrubPosition = playback.normalizedPlaybackPosition(
-                            for: item.duration
-                        )
-                    } else {
-                        playback.seek(item, to: scrubPosition * duration)
-                    }
-                    isScrubbing = editing
-                }
-            )
-            .disabled(duration <= 0)
-            .accessibilityLabel("Timeline")
-            Text(MediaDurationFormat.display(item.duration))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 42, alignment: .leading)
-            controlButton(
-                systemName: isMuted || volume == 0
-                    ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                help: isMuted ? "Unmute" : "Mute"
-            ) {
-                playback.player.isMuted.toggle()
-                isMuted = playback.player.isMuted
-            }
-            Slider(value: $volume, in: 0...1)
-                .frame(width: 82)
-                .accessibilityLabel("Volume")
-                .onChange(of: volume) {
-                    playback.player.volume = Float(volume)
-                    if volume > 0, playback.player.isMuted {
-                        playback.player.isMuted = false
-                        isMuted = false
-                    }
-                }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .background(Color.appBackground, in: Capsule())
     }
 
     private func controlButton(
@@ -208,15 +127,182 @@ struct GalleryVideoPlayerView: View {
     }
 }
 
-/// Native audio transport with a deliberately clear listening surface. The
-/// shared AVPlayer keeps its position when the user switches between Gallery
-/// and Grid or from a clip to a standalone recording.
+/// One AVPlayer-backed transport for Gallery video and audio. Audio uses two
+/// rows so the controls remain usable when the Gallery pane is narrow.
+private struct GalleryMediaTransportView: View {
+    let item: PhotoItem
+    @ObservedObject var playback: VideoPlaybackController
+    @Binding var isScrubbing: Bool
+    @Binding var scrubPosition: Double
+    @Binding var volume: Double
+    @Binding var isMuted: Bool
+    let compact: Bool
+
+    var body: some View {
+        Group {
+            if compact {
+                stackedTransport
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    wideTransport
+                        .frame(minWidth: 460)
+                    stackedTransport
+                        .background(
+                            Color.appBackground,
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
+                }
+            }
+        }
+    }
+
+    private var wideTransport: some View {
+        HStack(spacing: 12) {
+            playbackControls
+            timelineControls
+            volumeControls
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+        .background(Color.appBackground, in: Capsule())
+    }
+
+    private var stackedTransport: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                playbackControls
+                Spacer(minLength: 8)
+                volumeControls
+            }
+            timelineControls
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var duration: Double {
+        guard let value = item.duration,
+              value.isFinite, value > 0 else { return 0 }
+        return value
+    }
+
+    private var displayedTime: Double {
+        isScrubbing ? scrubPosition * duration : playback.currentTimeSeconds
+    }
+
+    private var timelineValue: Binding<Double> {
+        Binding(
+            get: {
+                isScrubbing
+                    ? scrubPosition
+                    : playback.normalizedPlaybackPosition(for: item.duration)
+            },
+            set: { value in
+                scrubPosition = min(max(value, 0), 1)
+                if !isScrubbing {
+                    playback.seek(item, to: scrubPosition * duration)
+                }
+            }
+        )
+    }
+
+    private var playbackControls: some View {
+        HStack(spacing: 12) {
+            controlButton(systemName: "gobackward.15", help: "Skip back 15 seconds") {
+                playback.seek(item, by: -15)
+            }
+            controlButton(
+                systemName: playback.isPlaying ? "pause.fill" : "play.fill",
+                help: playback.isPlaying ? "Pause" : "Play"
+            ) {
+                playback.toggle(item)
+            }
+            controlButton(systemName: "goforward.15", help: "Skip forward 15 seconds") {
+                playback.seek(item, by: 15)
+            }
+        }
+    }
+
+    private var timelineControls: some View {
+        HStack(spacing: 12) {
+            Text(MediaDurationFormat.display(displayedTime))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 42, alignment: .trailing)
+            Slider(
+                value: timelineValue,
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if editing {
+                        scrubPosition = playback.normalizedPlaybackPosition(
+                            for: item.duration
+                        )
+                    } else {
+                        playback.seek(item, to: scrubPosition * duration)
+                    }
+                    isScrubbing = editing
+                }
+            )
+            .disabled(duration <= 0)
+            .accessibilityLabel("Timeline")
+            Text(MediaDurationFormat.display(item.duration))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 42, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var volumeControls: some View {
+        HStack(spacing: 12) {
+            controlButton(
+                systemName: isMuted || volume == 0
+                    ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                help: isMuted ? "Unmute" : "Mute"
+            ) {
+                playback.player.isMuted.toggle()
+                isMuted = playback.player.isMuted
+            }
+            Slider(value: $volume, in: 0...1)
+                .frame(width: compact ? 74 : 82)
+                .accessibilityLabel("Volume")
+                .onChange(of: volume) {
+                    playback.player.volume = Float(volume)
+                    if volume > 0, playback.player.isMuted {
+                        playback.player.isMuted = false
+                        isMuted = false
+                    }
+                }
+        }
+    }
+
+    private func controlButton(
+        systemName: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Waveform and controls share AVPlayer with Gallery video and Grid playback.
 struct GalleryAudioPlayerView: View {
     let item: PhotoItem
     @ObservedObject var playback: VideoPlaybackController
     @State private var waveform: AudioLevelAnalysis?
     @State private var waveformRevision: PhotoContentRevision?
     @State private var waveformLoadFailed = false
+    @State private var isScrubbing = false
+    @State private var scrubPosition = 0.0
+    @State private var volume = 1.0
+    @State private var isMuted = false
 
     var body: some View {
         Group {
@@ -272,14 +358,26 @@ struct GalleryAudioPlayerView: View {
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    NativeVideoPlayer(player: playback.player, controls: .audio)
-                        .frame(width: 430, height: 58)
-                        .accessibilityLabel("Audio playback controls")
+                    GalleryMediaTransportView(
+                        item: item,
+                        playback: playback,
+                        isScrubbing: $isScrubbing,
+                        scrubPosition: $scrubPosition,
+                        volume: $volume,
+                        isMuted: $isMuted,
+                        compact: true
+                    )
+                        .frame(maxWidth: 560)
+                        .padding(.horizontal, 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear { playback.prepare(item) }
+        .onAppear {
+            playback.prepare(item)
+            volume = Double(playback.player.volume)
+            isMuted = playback.player.isMuted
+        }
         .onChange(of: item.contentRevision) { playback.prepare(item) }
         .task(id: item.contentRevision) {
             let requestedRevision = item.contentRevision

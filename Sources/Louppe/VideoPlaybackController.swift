@@ -227,12 +227,12 @@ final class VideoPlaybackController: ObservableObject {
         return min(max(currentTimeSeconds / duration, 0), 1)
     }
 
-    /// Moves through the current Gallery video in a small, predictable step.
+    /// Moves through the current Gallery video or audio in a predictable step.
     /// Seeking deliberately neither starts nor pauses playback, so a paused
     /// clip remains paused while it is inspected frame by frame.
     @discardableResult
     func seek(_ item: PhotoItem, by offset: TimeInterval) -> Bool {
-        guard item.isVideo, item.videoIsPlayable else { return false }
+        guard item.isPlayableMedia else { return false }
         prepare(item)
         guard player.currentItem != nil, errorMessage == nil else {
             return false
@@ -260,7 +260,7 @@ final class VideoPlaybackController: ObservableObject {
     /// resume-on-navigation behavior identical to keyboard seeking.
     @discardableResult
     func seek(_ item: PhotoItem, to seconds: TimeInterval) -> Bool {
-        guard item.isVideo, item.videoIsPlayable else { return false }
+        guard item.isPlayableMedia else { return false }
         prepare(item)
         guard player.currentItem != nil, errorMessage == nil else {
             return false

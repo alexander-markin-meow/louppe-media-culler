@@ -76,8 +76,8 @@ struct ActionPaletteView: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(visibleActions.enumerated()), id: \.element.id) {
                         index, action in
-                        if index == 0
-                            || visibleActions[index - 1].category != action.category {
+                        if query.isEmpty && (index == 0
+                            || visibleActions[index - 1].category != action.category) {
                             Text(action.category)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
@@ -118,7 +118,7 @@ struct ActionPaletteView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(action.title)
                         .foregroundStyle(.primary)
-                    Text(action.detail)
+                    Text(action.isEnabled ? action.detail : unavailableReason(for: action))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -150,7 +150,38 @@ struct ActionPaletteView: View {
             }
         }
         .accessibilityLabel(action.title)
-        .accessibilityHint(action.detail)
+        .accessibilityHint(action.isEnabled ? action.detail : unavailableReason(for: action))
+    }
+
+    func unavailableReason(for action: ActionPaletteAction) -> String {
+        if action.id == "toggle-raw-jpeg-pairing",
+           store.isChangingRawJPEGPairingMode {
+            return "Updating RAW + JPEG review"
+        }
+        if store.isFileOperationRunning { return "Wait for the current file operation to finish" }
+        switch action.id {
+        case "toggle-raw-jpeg-pairing":
+            if store.isXMPPublicationRunning {
+                return "Wait for XMP sidecar work to finish"
+            }
+            return "No matching RAW + JPEG pairs in this folder"
+        case "gallery", "grid": return "This view is already selected"
+        case "grid-zoom-in", "grid-zoom-out": return "Switch to Grid first"
+        case "actual-size", "phone-size": return "Select a photo in Gallery first"
+        case "browser": return "Switch to Gallery first"
+        case "seek-video-backward", "seek-video-forward",
+             "seek-video-backward-large", "seek-video-forward-large":
+            return "Select a playable video in Gallery first"
+        case "toggle-current-media", "decrease-playback-rate", "increase-playback-rate",
+             "set-playback-rate-1x", "set-playback-rate-1-5x",
+             "set-playback-rate-2x", "set-playback-rate-2-5x":
+            return "Select a playable video or audio recording first"
+        case "reset-filter": return "No filters are active"
+        case "clear-selection": return "No multi-selection is active"
+        case "return-normal-review": return "No review group is active"
+        case "undo": return "Nothing to undo"
+        default: return "Not available for the current media or selection"
+        }
     }
 
     private var footer: some View {
@@ -176,15 +207,7 @@ struct ActionPaletteView: View {
     }
 
     private var filteredActions: [ActionPaletteAction] {
-        let terms = query
-            .lowercased()
-            .split(whereSeparator: { $0.isWhitespace })
-            .map(String.init)
-        guard !terms.isEmpty else { return actions }
-        return actions.filter { action in
-            let searchable = action.searchText
-            return terms.allSatisfy { searchable.contains($0) }
-        }
+        ActionPaletteSearch.results(for: query, in: actions)
     }
 
     var actions: [ActionPaletteAction] {
@@ -195,8 +218,8 @@ struct ActionPaletteView: View {
                 title: "Export…",
                 detail: "Copy, move, or write Metadata (XMP)",
                 symbol: "square.and.arrow.up",
-                shortcut: "E",
-                keywords: ["copy", "move", "xmp", "metadata"],
+                shortcut: "E / ⌘E",
+                keywords: ["copy", "move", "xmp", "metadata", "sidecar", "export media"],
                 isEnabled: store.canExport,
                 perform: { store.presentExport() }
             ),
@@ -207,8 +230,8 @@ struct ActionPaletteView: View {
                 detail: "Preview names built from date, time, camera, lens, and sequence",
                 symbol: "textformat",
                 keywords: [
-                    "rename", "filename", "batch", "bulk", "metadata",
-                    "date", "time", "camera", "lens", "sequence",
+                    "rename files", "filename", "batch rename", "bulk rename",
+                    "metadata rename", "date", "time", "camera", "lens", "sequence",
                 ],
                 isEnabled: store.canRenameSource,
                 perform: { store.presentMetadataFileRenaming() }
@@ -219,7 +242,7 @@ struct ActionPaletteView: View {
                 title: "Organize Source Folder…",
                 detail: "Preview a metadata-based folder layout",
                 symbol: "folder.badge.gearshape",
-                keywords: ["move", "folders", "date", "camera", "source"],
+                keywords: ["organize folder", "move into folders", "source hierarchy", "date folder", "camera folder"],
                 isEnabled: store.canOrganizeSource,
                 perform: { store.presentSourceOrganization() }
             ),
@@ -230,8 +253,8 @@ struct ActionPaletteView: View {
                 detail: "Open the organizer with Full date as the only folder level",
                 symbol: "calendar.badge.clock",
                 keywords: [
-                    "organize", "source", "folder", "date", "taken",
-                    "capture", "chronological",
+                    "organize by date", "date taken", "capture date",
+                    "chronological folders",
                 ],
                 isEnabled: store.canOrganizeSource,
                 perform: {
@@ -247,7 +270,7 @@ struct ActionPaletteView: View {
                 detail: "Save this session, then choose another media folder",
                 symbol: "folder",
                 shortcut: "⌘O",
-                keywords: ["recent", "session", "open"],
+                keywords: ["change folder", "open folder", "choose folder"],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.promptForSourceFolder() }
             ),
@@ -258,9 +281,19 @@ struct ActionPaletteView: View {
                 detail: "Find new or changed media in this folder",
                 symbol: "arrow.triangle.2.circlepath",
                 shortcut: "⌘R",
-                keywords: ["refresh", "scan"],
+                keywords: ["refresh folder", "scan folder", "find new media"],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.rescan() }
+            ),
+            ActionPaletteAction(
+                id: "close-session",
+                category: "Files",
+                title: "Close Session",
+                detail: "Save this session and return to the folder chooser",
+                symbol: "folder.badge.minus",
+                keywords: ["close folder", "leave folder", "save session"],
+                isEnabled: !store.isFileOperationRunning,
+                perform: { store.closeSession() }
             ),
         ]
         + recentFolderActions()
@@ -271,9 +304,20 @@ struct ActionPaletteView: View {
                 title: "Filter Media…",
                 detail: "Filter by metadata, date, type, camera, lens, or video details",
                 symbol: "line.3.horizontal.decrease.circle",
-                keywords: ["search", "date", "camera", "lens", "color", "stars", "video", "codec", "resolution", "frame rate"],
+                keywords: ["filter media", "find by date", "filter camera", "filter lens", "filter color", "filter stars", "filter video", "filter codec", "filter resolution", "filter frame rate"],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.isFilterPresented = true }
+            ),
+            ActionPaletteAction(
+                id: "filter-search",
+                category: "Find and arrange",
+                title: "Search Media…",
+                detail: "Open Filter with its search field ready for typing",
+                symbol: "magnifyingglass",
+                shortcut: "⌘F",
+                keywords: ["find media", "filter search", "filename", "metadata search"],
+                isEnabled: !store.isFileOperationRunning,
+                perform: { store.presentFilterSearch() }
             ),
             ActionPaletteAction(
                 id: "show-videos-only",
@@ -281,7 +325,7 @@ struct ActionPaletteView: View {
                 title: "Show Videos Only",
                 detail: "Keep the current criteria and limit the folder to videos",
                 symbol: "film",
-                keywords: ["video", "clip", "movie", "filter", "media"],
+                keywords: ["video filter", "filter videos", "movies only", "clips only"],
                 isEnabled: store.availableMediaKinds.contains(.video)
                     && !store.isFileOperationRunning,
                 perform: { store.showVideosOnly() }
@@ -292,7 +336,7 @@ struct ActionPaletteView: View {
                 title: "Reset Filters",
                 detail: "Show the full folder again",
                 symbol: "line.3.horizontal.decrease.circle.fill",
-                keywords: ["clear", "show all", "search"],
+                keywords: ["clear filters", "show all media", "remove filters"],
                 isEnabled: store.filterCanReset && !store.isFileOperationRunning,
                 perform: { store.resetFilter() }
             ),
@@ -302,7 +346,14 @@ struct ActionPaletteView: View {
                 title: "Sort Media…",
                 detail: "Choose date, stars, color, camera, video details, and more",
                 symbol: "arrow.up.arrow.down",
-                keywords: ["group", "order", "metadata", "video", "codec", "resolution", "frame rate"],
+                keywords: [
+                    "order media", "sort by date", "sort by name", "sort by decision",
+                    "sort by stars", "sort by color", "sort by subfolder",
+                    "sort by file type", "sort by media type", "sort by camera",
+                    "sort by lens", "sort by aperture", "sort by shutter speed",
+                    "sort by ISO", "sort by duration", "sort by video",
+                    "ascending", "descending", "group media", "review group settings",
+                ],
                 isEnabled: !store.isFileOperationRunning,
                 perform: { store.isSortPresented = true }
             ),
@@ -312,7 +363,7 @@ struct ActionPaletteView: View {
                 title: "Sort by Video Resolution",
                 detail: "Order videos by their scan-cached pixel dimensions",
                 symbol: "rectangle.on.rectangle",
-                keywords: ["video", "resolution", "dimensions", "sort", "4k", "hd"],
+                keywords: ["sort video resolution", "video dimensions", "4k", "hd"],
                 isEnabled: store.availableVideoResolutions.count > 1
                     && !store.isFileOperationRunning,
                 perform: { store.sort.key = .videoResolution }
@@ -323,7 +374,7 @@ struct ActionPaletteView: View {
                 title: "Sort by Video Frame Rate",
                 detail: "Order videos by their scan-cached frames per second",
                 symbol: "speedometer",
-                keywords: ["video", "frame rate", "fps", "sort", "slow motion"],
+                keywords: ["sort video frame rate", "video fps", "slow motion"],
                 isEnabled: store.videoFrameRateRange != nil
                     && !store.isFileOperationRunning,
                 perform: { store.sort.key = .videoFrameRate }
@@ -334,7 +385,7 @@ struct ActionPaletteView: View {
                 title: "Sort by Video Codec",
                 detail: "Order videos by their scan-cached codec",
                 symbol: "film.stack",
-                keywords: ["video", "codec", "h.264", "hevc", "prores", "sort"],
+                keywords: ["sort video codec", "h.264", "hevc", "prores"],
                 isEnabled: store.availableVideoCodecs.count > 1
                     && !store.isFileOperationRunning,
                 perform: { store.sort.key = .videoCodec }
@@ -345,7 +396,7 @@ struct ActionPaletteView: View {
                 title: "Analyze Duplicate + Burst Groups",
                 detail: "Read this folder locally; it never changes files or ratings",
                 symbol: "rectangle.3.group",
-                keywords: ["duplicates", "similar", "burst", "local", "review"],
+                keywords: ["analyze groups", "find duplicates", "find similar photos", "find bursts", "local analysis"],
                 isEnabled: !store.items.isEmpty
                     && !store.isFileOperationRunning
                     && !store.isXMPPublicationRunning,
@@ -357,7 +408,7 @@ struct ActionPaletteView: View {
                 title: "Review Exact Duplicates",
                 detail: "Show verified byte-identical files as groups",
                 symbol: "doc.on.doc",
-                keywords: ["duplicates", "same", "byte", "groups", "review"],
+                keywords: ["review duplicates", "identical files", "same bytes"],
                 isEnabled: !store.items.isEmpty
                     && !store.isFileOperationRunning
                     && !store.isXMPPublicationRunning,
@@ -369,7 +420,7 @@ struct ActionPaletteView: View {
                 title: "Review Likely Similar Photos",
                 detail: "Group local preview matches; inspect before deciding",
                 symbol: "photo.on.rectangle.angled",
-                keywords: ["duplicates", "similarity", "near", "groups", "review"],
+                keywords: ["review similar", "near duplicates", "similarity groups"],
                 isEnabled: !store.items.isEmpty
                     && !store.isFileOperationRunning
                     && !store.isXMPPublicationRunning,
@@ -381,7 +432,7 @@ struct ActionPaletteView: View {
                 title: "Review Capture Bursts",
                 detail: "Group photos taken close together in time",
                 symbol: "rectangle.stack",
-                keywords: ["burst", "capture", "time", "groups", "review"],
+                keywords: ["review bursts", "capture sequence", "time groups"],
                 isEnabled: !store.items.isEmpty
                     && !store.isFileOperationRunning
                     && !store.isXMPPublicationRunning,
@@ -393,42 +444,43 @@ struct ActionPaletteView: View {
                 title: "Return to Normal Review",
                 detail: "Leave grouped review and restore the normal filtered order",
                 symbol: "arrow.uturn.backward.circle",
-                keywords: ["exit", "groups", "normal", "review", "show all"],
+                keywords: ["normal review", "leave groups", "exit grouped review"],
                 isEnabled: store.isGroupedReviewActive && !store.isFileOperationRunning,
                 perform: { store.exitGroupedReview() }
             ),
             ActionPaletteAction(
-                id: "pair-raw-jpeg",
+                id: "toggle-raw-jpeg-pairing",
                 category: "Find and arrange",
-                title: RawJPEGPairingMode.togetherControlTitle,
-                detail: "Rate and act on matching files as one photo",
-                symbol: "link",
-                keywords: ["pair", "pairing", "raw", "jpeg", "review", "together"],
-                isEnabled: store.rawJPEGPairingMode != .together
+                title: store.rawJPEGPairingMode == .together
+                    ? "Review RAW + JPEG Separately"
+                    : RawJPEGPairingMode.togetherControlTitle,
+                detail: store.rawJPEGPairingMode == .together
+                    ? "Currently together. Show each file separately."
+                    : "Currently separate. Review matching files as one photo.",
+                symbol: store.rawJPEGPairingMode == .together ? "link.badge.plus" : "link",
+                keywords: [
+                    "treat raw jpeg as one", "pair raw jpeg", "raw jpeg together",
+                    "separate raw jpeg", "raw jpeg separately", "split raw jpeg",
+                    "independent files", "pairing", "review together", "review separately",
+                ],
+                isEnabled: store.rawJPEGPairCount > 0
                     && !store.isFileOperationRunning
-                    && !store.isXMPPublicationRunning,
-                perform: { store.setRawJPEGPairingMode(.together) }
-            ),
-            ActionPaletteAction(
-                id: "separate-raw-jpeg",
-                category: "Find and arrange",
-                title: "Review RAW and JPEG Separately",
-                detail: "Show matching files as independent review items",
-                symbol: "link.badge.plus",
-                keywords: ["pair", "pairing", "raw", "jpeg"],
-                isEnabled: store.rawJPEGPairingMode != .separate
-                    && !store.isFileOperationRunning
-                    && !store.isXMPPublicationRunning,
-                perform: { store.setRawJPEGPairingMode(.separate) }
+                    && !store.isXMPPublicationRunning
+                    && !store.isChangingRawJPEGPairingMode,
+                perform: {
+                    store.setRawJPEGPairingMode(
+                        store.rawJPEGPairingMode == .together ? .separate : .together
+                    )
+                }
             ),
             ActionPaletteAction(
                 id: "mark-yes",
                 category: "Review metadata",
                 title: "Mark Yes",
-                detail: "Apply Yes to the current photo or selection",
+                detail: "Apply Yes, then advance to the next undecided item",
                 symbol: "checkmark.circle",
                 shortcut: "F",
-                keywords: ["keep", "accept", "decision"],
+                keywords: ["keep photo", "accept photo", "yes decision"],
                 isEnabled: store.canRate,
                 perform: { store.rate(.yes) }
             ),
@@ -436,10 +488,10 @@ struct ActionPaletteView: View {
                 id: "mark-no",
                 category: "Review metadata",
                 title: "Mark No",
-                detail: "Apply No to the current photo or selection",
+                detail: "Apply No, then advance to the next undecided item",
                 symbol: "xmark.circle",
                 shortcut: "D",
-                keywords: ["reject", "decision"],
+                keywords: ["reject photo", "no decision"],
                 isEnabled: store.canRate,
                 perform: { store.rate(.no) }
             ),
@@ -450,7 +502,7 @@ struct ActionPaletteView: View {
                 detail: "Remove the star rating from the current photo or selection",
                 symbol: "star.slash",
                 shortcut: "0",
-                keywords: ["unrated", "rating", "metadata"],
+                keywords: ["zero stars", "unrated", "remove star rating"],
                 isEnabled: store.canRate,
                 perform: { store.setStarRating(nil) }
             ),
@@ -463,7 +515,7 @@ struct ActionPaletteView: View {
                 title: "Clear Color Label",
                 detail: "Remove the color label from the current photo or selection",
                 symbol: "tag.slash",
-                keywords: ["none", "metadata", "xmp"],
+                keywords: ["remove color label", "no color", "unlabel"],
                 isEnabled: store.canRate,
                 perform: { store.setColorLabel(nil) }
             ),
@@ -476,7 +528,12 @@ struct ActionPaletteView: View {
                 title: "Select Previous Item",
                 detail: "Choose the previous visible item, including when reviewing a video",
                 symbol: "chevron.left",
-                shortcut: "J",
+                shortcut: store.viewMode == .gallery
+                    ? (store.canSeekCurrentVideo ? "J / ↑"
+                        : (store.currentItem?.isPlayableMedia == true
+                            ? "J / ↑ / ←" : "J / ↑ / ← / ⌘←"))
+                    : (store.currentItem?.isPlayableMedia == true
+                        ? "J / ←" : "J / ← / ⌘←"),
                 keywords: ["previous", "back", "left", "navigate", "video", "clip"],
                 isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
                 perform: { store.goPrevious() }
@@ -487,10 +544,39 @@ struct ActionPaletteView: View {
                 title: "Select Next Item",
                 detail: "Choose the next visible item, including when reviewing a video",
                 symbol: "chevron.right",
-                shortcut: "L",
+                shortcut: store.viewMode == .gallery
+                    ? (store.canSeekCurrentVideo ? "L / ↓"
+                        : (store.currentItem?.isPlayableMedia == true
+                            ? "L / ↓ / →" : "L / ↓ / → / ⌘→ / Space"))
+                    : (store.currentItem?.isPlayableMedia == true
+                        ? "L / →" : "L / → / ⌘→ / Space"),
                 keywords: ["next", "forward", "right", "navigate", "video", "clip"],
                 isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
                 perform: { store.goNext() }
+            ),
+            ActionPaletteAction(
+                id: "grid-item-above",
+                category: "Navigate and play",
+                title: "Select Grid Item Above",
+                detail: "Move to the item in the row above",
+                symbol: "chevron.up",
+                shortcut: "↑",
+                keywords: ["grid up", "previous row", "navigate grid"],
+                isEnabled: store.viewMode == .grid
+                    && !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.goVertical(-1) }
+            ),
+            ActionPaletteAction(
+                id: "grid-item-below",
+                category: "Navigate and play",
+                title: "Select Grid Item Below",
+                detail: "Move to the item in the row below",
+                symbol: "chevron.down",
+                shortcut: "↓",
+                keywords: ["grid down", "next row", "navigate grid"],
+                isEnabled: store.viewMode == .grid
+                    && !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.goVertical(1) }
             ),
             ActionPaletteAction(
                 id: "decrease-playback-rate",
@@ -572,7 +658,7 @@ struct ActionPaletteView: View {
                 title: "Play or Pause Current Media",
                 detail: "Play or pause the current video or audio recording",
                 symbol: "playpause",
-                shortcut: "Space or K",
+                shortcut: "Space / K",
                 keywords: ["video", "audio", "clip", "recording", "play", "pause", "transport", "k"],
                 isEnabled: store.canToggleCurrentPlayableMedia,
                 perform: { _ = store.toggleCurrentPlayableMedia() }
@@ -633,6 +719,28 @@ struct ActionPaletteView: View {
                 perform: { store.selectAllVisible() }
             ),
             ActionPaletteAction(
+                id: "select-to-first",
+                category: "Selection and clean up",
+                title: "Select to First Item",
+                detail: "Extend the selection from the current item to the first visible item",
+                symbol: "arrow.up.to.line",
+                shortcut: "⌘⇧←",
+                keywords: ["extend selection", "selection edge", "select previous"],
+                isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.selectToEdge(forward: false) }
+            ),
+            ActionPaletteAction(
+                id: "select-to-last",
+                category: "Selection and clean up",
+                title: "Select to Last Item",
+                detail: "Extend the selection from the current item to the last visible item",
+                symbol: "arrow.down.to.line",
+                shortcut: "⌘⇧→",
+                keywords: ["extend selection", "selection edge", "select next"],
+                isEnabled: !store.visibleIndices.isEmpty && !store.isFileOperationRunning,
+                perform: { store.selectToEdge(forward: true) }
+            ),
+            ActionPaletteAction(
                 id: "clear-selection",
                 category: "Selection and clean up",
                 title: "Clear Selection",
@@ -647,10 +755,10 @@ struct ActionPaletteView: View {
                 id: "trash-selection",
                 category: "Selection and clean up",
                 title: store.selectionCleanUpTitle,
-                detail: "Ask for confirmation before moving selected media to Trash",
+                detail: "Palette confirms; ⌘⌫ skips confirmation",
                 symbol: "trash",
                 shortcut: "⌘⌫",
-                keywords: ["clean up", "delete", "remove"],
+                keywords: ["trash selection", "delete selected", "remove selected", "clean up selection"],
                 isEnabled: store.canCleanUp && store.hasCleanUpTargets(for: .selection),
                 perform: { store.requestCleanUp(.selection) }
             ),
@@ -667,10 +775,10 @@ struct ActionPaletteView: View {
             ActionPaletteAction(
                 id: "keep-only-yes",
                 category: "Selection and clean up",
-                title: "Keep Only “Yes”…",
+                title: "Trash No + Undecided…",
                 detail: "Use the current Clean Up scope and ask for confirmation",
                 symbol: "trash",
-                keywords: ["clean up", "delete", "reject"],
+                keywords: ["clean up", "delete", "reject", "keep only yes"],
                 isEnabled: store.canCleanUp && store.hasCleanUpTargets(for: .keepOnlyYes),
                 perform: { store.requestCleanUp(.keepOnlyYes) }
             ),
@@ -700,8 +808,8 @@ struct ActionPaletteView: View {
                 title: "Undo Louppe Action",
                 detail: "Restore the latest review, metadata, Trash, or organization action",
                 symbol: "arrow.uturn.backward",
-                shortcut: "Z",
-                keywords: ["restore", "revert"],
+                shortcut: "Z / ⌘Z",
+                keywords: ["restore", "revert", "undo action"],
                 isEnabled: store.canUndo,
                 perform: { store.undo() }
             ),
@@ -712,7 +820,7 @@ struct ActionPaletteView: View {
                 detail: "Remove Yes and No decisions while keeping stars and color labels",
                 symbol: "eraser",
                 shortcut: "R",
-                keywords: ["reset", "ratings", "review"],
+                keywords: ["reset yes no", "clear yes no", "remove decisions"],
                 isEnabled: store.ratedCount > 0 && !store.isFileOperationRunning,
                 perform: { store.requestClearAllRatings() }
             ),
@@ -722,7 +830,7 @@ struct ActionPaletteView: View {
                 title: "Switch to Gallery",
                 detail: "Review one photo, video, or audio file at a time",
                 symbol: "photo",
-                shortcut: "G",
+                shortcut: "Tab / G",
                 keywords: ["view", "single"],
                 isEnabled: store.viewMode != .gallery,
                 perform: { store.toggleViewMode() }
@@ -733,10 +841,56 @@ struct ActionPaletteView: View {
                 title: "Switch to Grid",
                 detail: "Review a visual overview of the folder",
                 symbol: "square.grid.3x3",
-                shortcut: "G",
+                shortcut: "Tab / G",
                 keywords: ["view", "thumbnails"],
                 isEnabled: store.viewMode != .grid,
                 perform: { store.toggleViewMode() }
+            ),
+            ActionPaletteAction(
+                id: "grid-zoom-in",
+                category: "View",
+                title: "Larger Grid Thumbnails",
+                detail: "Increase thumbnail size in Grid",
+                symbol: "plus.magnifyingglass",
+                shortcut: "⌘+",
+                keywords: ["zoom grid in", "bigger thumbnails", "increase grid size"],
+                isEnabled: store.viewMode == .grid,
+                perform: { store.zoomGrid(larger: true) }
+            ),
+            ActionPaletteAction(
+                id: "grid-zoom-out",
+                category: "View",
+                title: "Smaller Grid Thumbnails",
+                detail: "Decrease thumbnail size in Grid",
+                symbol: "minus.magnifyingglass",
+                shortcut: "⌘−",
+                keywords: ["zoom grid out", "smaller thumbnails", "decrease grid size"],
+                isEnabled: store.viewMode == .grid,
+                perform: { store.zoomGrid(larger: false) }
+            ),
+            ActionPaletteAction(
+                id: "actual-size",
+                category: "View",
+                title: store.isAtActualSize ? "Return to Fit from 100%" : "View at 100%",
+                detail: "Toggle source-pixel inspection in Gallery",
+                symbol: "1.magnifyingglass",
+                shortcut: "S",
+                keywords: ["actual size", "100 percent", "zoom photo", "source pixels"],
+                isEnabled: store.viewMode == .gallery
+                    && store.currentItem?.mediaKind == .photo,
+                perform: { store.toggleZoom(.actual) }
+            ),
+            ActionPaletteAction(
+                id: "phone-size",
+                category: "View",
+                title: store.zoomMode == .small ? "Return to Fit from Phone Size" : "View Phone-Sized Preview",
+                detail: "Toggle a smaller preview in Gallery",
+                symbol: "iphone",
+                shortcut: "A",
+                keywords: ["phone size", "small preview", "zoom photo", "fit"],
+                isEnabled: store.viewMode == .gallery
+                    && store.currentItem?.mediaKind == .photo,
+                perform: { store.toggleZoom(.small) }
             ),
             ActionPaletteAction(
                 id: "browser",
@@ -887,7 +1041,15 @@ struct ActionPaletteAction: Identifiable {
         perform: @escaping @MainActor () -> Void
     ) {
         self.id = id
-        self.category = category
+        switch category {
+        case "Files": self.category = "Files & folders"
+        case "Find and arrange": self.category = "Find & arrange"
+        case "Review metadata": self.category = "Rate & label"
+        case "Navigate and play": self.category = "Navigate & play"
+        case "Selection and clean up": self.category = "Select & clean up"
+        case "View": self.category = "View & inspect"
+        default: self.category = category
+        }
         self.title = title
         self.detail = detail
         self.symbol = symbol
@@ -899,5 +1061,65 @@ struct ActionPaletteAction: Identifiable {
 
     var searchText: String {
         ([title, detail, category] + keywords).joined(separator: " ").lowercased()
+    }
+}
+
+/// Titles and intentional aliases outrank incidental words in descriptions.
+enum ActionPaletteSearch {
+    static func results(
+        for query: String,
+        in actions: [ActionPaletteAction]
+    ) -> [ActionPaletteAction] {
+        let words = tokens(query)
+        guard !words.isEmpty else { return actions }
+        return actions.enumerated().compactMap { index, action -> (Int, Int, ActionPaletteAction)? in
+            guard let score = score(action, words: words) else { return nil }
+            return (score, index, action)
+        }
+        .sorted { left, right in
+            left.0 == right.0 ? left.1 < right.1 : left.0 > right.0
+        }
+        .map { $0.2 }
+    }
+
+    private static func score(_ action: ActionPaletteAction, words: [String]) -> Int? {
+        let title = tokens(action.title)
+        let aliases = action.keywords.map(tokens)
+        let detail = tokens(action.detail)
+        let category = tokens(action.category)
+        let sources = [title] + aliases + [detail, category]
+        guard words.allSatisfy({ word in
+            sources.contains { source in source.contains { $0.hasPrefix(word) } }
+        }) else { return nil }
+
+        if title == words { return 1_000 }
+        if aliases.contains(words) { return 900 }
+        if containsSequence(title, words) { return 800 }
+        if aliases.contains(where: { containsSequence($0, words) }) { return 700 }
+        if words.allSatisfy({ word in title.contains { $0.hasPrefix(word) } }) { return 600 }
+        if aliases.contains(where: { alias in
+            words.allSatisfy { word in alias.contains { $0.hasPrefix(word) } }
+        }) { return 500 }
+        if words.allSatisfy({ word in
+            ([title] + aliases).contains { $0.contains { $0.hasPrefix(word) } }
+        }) { return 400 }
+        if words.allSatisfy({ word in detail.contains { $0.hasPrefix(word) } }) { return 200 }
+        if words.allSatisfy({ word in category.contains { $0.hasPrefix(word) } }) { return 100 }
+        return 50
+    }
+
+    private static func containsSequence(_ haystack: [String], _ needle: [String]) -> Bool {
+        guard !needle.isEmpty, needle.count <= haystack.count else { return false }
+        return (0...(haystack.count - needle.count)).contains { offset in
+            zip(needle, haystack[offset..<(offset + needle.count)])
+                .allSatisfy { pair in pair.1.hasPrefix(pair.0) }
+        }
+    }
+
+    private static func tokens(_ value: String) -> [String] {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
     }
 }

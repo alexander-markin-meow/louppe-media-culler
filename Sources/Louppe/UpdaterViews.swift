@@ -96,10 +96,12 @@ struct LouppeSettingsView: View {
                     Label("Quality Cues", systemImage: "waveform.path.ecg")
                 }
 
-            UpdaterSettingsView(updater: updater)
-                .tabItem {
-                    Label("Updates", systemImage: "arrow.down.circle")
-                }
+            if !AppBuildInfo.isReviewBuild {
+                UpdaterSettingsView(updater: updater)
+                    .tabItem {
+                        Label("Updates", systemImage: "arrow.down.circle")
+                    }
+            }
         }
         .frame(width: 480, height: 380)
         .tint(Color.louppeAccent)

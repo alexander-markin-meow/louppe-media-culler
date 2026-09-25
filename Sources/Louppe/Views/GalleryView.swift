@@ -29,11 +29,13 @@ struct GalleryView: View {
                         description: Text(store.groupedReviewEmptyDescription)
                     )
                 } else if store.visibleIndices.isEmpty && store.filter.isActive {
-                    ContentUnavailableView(
-                        "No items match the filter",
-                        systemImage: "line.3.horizontal.decrease.circle",
-                        description: Text("Adjust or reset the filter in the toolbar to see media again.")
-                    )
+                    ContentUnavailableView {
+                        Label("No items match the filter", systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text("Try different choices or clear the filters to see media again.")
+                    } actions: {
+                        Button("Clear Filters") { store.resetFilter() }
+                    }
                 } else if let item = store.currentItem {
                     if item.isVideo {
                         GalleryVideoPlayerView(item: item, playback: store.videoPlayback)
@@ -47,11 +49,31 @@ struct GalleryView: View {
                                 store.showClippingWarnings
                                 && store.selectedIndices.count <= 1,
                             actualSizeViewport: store.actualSizeViewport,
+                            zoomScale: store.photoZoomScale,
                             onZoomToActual: { position in
                                 store.zoomToActual(at: position)
                             },
                             onZoomToFit: {
                                 store.zoomToFit()
+                            },
+                            onZoomScaleChanged: { scale, ended in
+                                store.reportPhotoZoomScaleFromGesture(
+                                    scale, ended: ended
+                                )
+                            },
+                            onFittedScaleMeasured: { scale, revision, mode in
+                                store.reportFittedPhotoZoomScale(
+                                    scale, revision: revision, mode: mode
+                                )
+                            },
+                            onZoomFromFit: { scale, position, anchor, revision in
+                                guard store.currentItem?.contentRevision == revision
+                                else { return }
+                                store.setPhotoZoomScale(
+                                    scale,
+                                    at: position,
+                                    viewportAnchor: anchor
+                                )
                             }
                         ) { loading in
                             store.fullImageLoads += loading ? 1 : -1

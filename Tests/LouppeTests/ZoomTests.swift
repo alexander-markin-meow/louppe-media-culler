@@ -23,6 +23,66 @@ final class ZoomTests: XCTestCase {
             ),
             CGSize(width: 3000, height: 2000)
         )
+        XCTAssertEqual(
+            ActualSizeGeometry.displayedPixelScale(zoom: 1, backingScale: 2),
+            0.5
+        )
+        XCTAssertEqual(
+            ActualSizeGeometry.displayedPixelScale(zoom: 1, backingScale: 1),
+            1
+        )
+    }
+
+    func testFitAndPhoneZoomUseSourcePixelsAndBackingScale() {
+        let source = CGSize(width: 6000, height: 4000)
+        let viewport = CGSize(width: 1200, height: 900)
+        XCTAssertEqual(
+            ActualSizeGeometry.fitZoom(
+                sourcePixels: source,
+                backingScale: 2,
+                viewportSize: viewport
+            ),
+            0.4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            ActualSizeGeometry.fitZoom(
+                sourcePixels: source,
+                backingScale: 2,
+                viewportSize: viewport,
+                maximumSize: CGSize(width: 400, height: 600)
+            ),
+            400.0 / 3000.0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(ActualSizeGeometry.clampedZoom(0.01), 0.05)
+        XCTAssertEqual(ActualSizeGeometry.clampedZoom(9), 4)
+    }
+
+    func testPinchAnchorUsesMagnifiedDocumentViewport() {
+        let image = CGSize(width: 3000, height: 2000)
+        let screenViewport = CGSize(width: 700, height: 500)
+        let zoom: CGFloat = 0.5
+        let documentViewport = CGSize(
+            width: screenViewport.width / zoom,
+            height: screenViewport.height / zoom
+        )
+        let offset = ActualSizeGeometry.anchoredOffset(
+            imagePosition: NormalizedImagePosition(x: 0.6, y: 0.6),
+            viewportAnchor: CGPoint(x: 0.25, y: 0.3),
+            documentSize: image,
+            viewportSize: documentViewport
+        )
+        XCTAssertEqual(offset.x, 1450, accuracy: 0.001)
+        XCTAssertEqual(offset.y, 900, accuracy: 0.001)
+        let clamped = ActualSizeGeometry.anchoredOffset(
+            imagePosition: NormalizedImagePosition(x: 1, y: 1),
+            viewportAnchor: CGPoint(x: 0, y: 0),
+            documentSize: image,
+            viewportSize: documentViewport
+        )
+        XCTAssertEqual(clamped.x, 1600)
+        XCTAssertEqual(clamped.y, 1000)
     }
 
     func testNormalizedViewportPositionRoundTripsAcrossImageSizes() {
@@ -163,6 +223,40 @@ final class ZoomTests: XCTestCase {
         XCTAssertNil(reportedPosition)
     }
 
+    func testNativeFittedPinchReportsLivePreviewThenOneFinalHandoff() {
+        _ = NSApplication.shared
+        let view = FittedImageDoubleClickView(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 200)
+        )
+        var reports: [(NormalizedImagePosition, CGFloat, CGFloat, Bool)] = []
+        view.onMagnify = { reports.append(($0, $1, $2, $3)) }
+
+        view.beginPinch()
+        view.updatePinch(
+            delta: 0.25,
+            at: CGPoint(x: 100, y: 50),
+            backingScale: 2
+        )
+        view.updatePinch(
+            delta: 0.2,
+            at: CGPoint(x: 100, y: 50),
+            backingScale: 2
+        )
+        XCTAssertEqual(reports.count, 2)
+        XCTAssertFalse(reports[0].3)
+        XCTAssertFalse(reports[1].3)
+        XCTAssertEqual(reports[0].1, 1.25, accuracy: 0.001)
+        XCTAssertEqual(reports[1].1, 1.5, accuracy: 0.001)
+        XCTAssertEqual(reports[1].0.x, 0.25, accuracy: 0.001)
+        XCTAssertEqual(reports[1].0.y, 0.25, accuracy: 0.001)
+        view.finishPinch(backingScale: 2)
+        XCTAssertEqual(reports.count, 3)
+        XCTAssertTrue(reports[2].3)
+        XCTAssertEqual(reports[2].2, 2)
+        view.finishPinch(backingScale: 2)
+        XCTAssertEqual(reports.count, 3)
+    }
+
     func testNavigationKeepsPositionAndSResetsIt() {
         _ = NSApplication.shared
         let store = readyStore()
@@ -181,6 +275,25 @@ final class ZoomTests: XCTestCase {
         XCTAssertTrue(view.handleKey(keyEvent(code: 1, characters: "s")))
         XCTAssertEqual(store.zoomMode, .fit)
         XCTAssertEqual(store.actualSizeViewport.position, .center)
+    }
+
+    func testSAndAFromCustomZoomReturnThroughTheirNamedStates() {
+        let store = readyStore()
+        store.setPhotoZoomScale(1.5)
+        XCTAssertEqual(store.zoomMode, .actual)
+        XCTAssertFalse(store.isAtActualSize)
+
+        store.toggleZoom(.actual)
+        XCTAssertEqual(store.zoomMode, .actual)
+        XCTAssertTrue(store.isAtActualSize)
+        store.toggleZoom(.actual)
+        XCTAssertEqual(store.zoomMode, .fit)
+
+        store.setPhotoZoomScale(1.5)
+        store.toggleZoom(.small)
+        XCTAssertEqual(store.zoomMode, .small)
+        store.toggleZoom(.small)
+        XCTAssertEqual(store.zoomMode, .fit)
     }
 
     func testDoubleClickTogglesRequestedActualAndFitWhileSStillResets() {
@@ -258,6 +371,47 @@ final class ZoomTests: XCTestCase {
         )
         scrollView.documentView?.mouseDown(with: outside)
         XCTAssertEqual(exitCount, 1)
+        scrollView.prepareForRemoval()
+    }
+
+    func testMagnifiedScrollUsesVisibleDocumentSpaceAndReportsNativeScale() {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 700, height: 500),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        let scrollView = ActualSizeScrollView(frame: window.contentView!.bounds)
+        window.contentView = scrollView
+        var reported: [(CGFloat, Bool)] = []
+        scrollView.configure(
+            item: makeItem("PENDING.JPG"),
+            preview: nil,
+            showsClippingWarnings: false,
+            viewport: ActualSizeViewport(),
+            onLoading: { _ in },
+            zoomScale: 0.1,
+            onZoomScaleChanged: { reported.append(($0, $1)) }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(scrollView.magnification, 0.1, accuracy: 0.001)
+        XCTAssertGreaterThan(
+            scrollView.contentView.bounds.width,
+            scrollView.contentSize.width * 5
+        )
+        XCTAssertGreaterThanOrEqual(
+            scrollView.documentView?.frame.width ?? 0,
+            scrollView.contentView.bounds.width - 1
+        )
+        scrollView.setMagnification(1.5, centeredAt: .zero)
+        scrollView.didChangeNativeMagnification(ended: false)
+        scrollView.didChangeNativeMagnification(ended: true)
+        XCTAssertEqual(reported.count, 2)
+        XCTAssertEqual(reported[0].0, 1.5, accuracy: 0.001)
+        XCTAssertFalse(reported[0].1)
+        XCTAssertTrue(reported[1].1)
         scrollView.prepareForRemoval()
     }
 

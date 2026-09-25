@@ -10,6 +10,9 @@ The owner is a photographer, not a programmer: do the technical work for him,
 explain results in plain language, and always verify the app actually launches
 after changes.
 
+There is no separate support team. The sole contact is Alex Markin at
+`a@alex-markin.com`; use “Contact Alex” rather than “Contact support” in the UI.
+
 ## Build & install
 
 ```sh

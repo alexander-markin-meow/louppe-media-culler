@@ -6,15 +6,15 @@ Louppe is a fast, keyboard-first, open-source media culler for macOS. Review
 photos, video, and audio; sort and organize your media; clean up unwanted
 files; and export what you want to keep.
 
-macOS 14 or newer.
+macOS 14 or newer on an Apple silicon Mac. The current download does not support Intel Macs.
 
 ## Download
 
 Download **[Louppe.zip from the latest release](https://github.com/alexander-markin-meow/louppe-media-culler/releases/latest)**,
 unzip it, and drag `Louppe.app` into Applications.
 
-The first time you open Louppe, macOS may warn that the developer cannot be
-verified. Right-click the app, choose **Open**, then choose **Open** again.
+The public download is signed and notarized by Apple. Open it normally;
+macOS may ask you to confirm its first launch.
 
 ## Quick start
 
@@ -22,6 +22,23 @@ verified. Right-click the app, choose **Open**, then choose **Open** again.
 2. Review media in Gallery or Grid.
 3. Press **F** to mark an item Yes or **D** to mark it No.
 4. Filter, sort, select, clean up, organize, or export your media.
+
+The compact bottom panel shows active filters, review status, and saving.
+Use its zoom slider or pinch on a photo to adjust magnification, then pan with
+two-finger scrolling or click and drag. **S** returns custom zoom to centered
+100%, then toggles Fit; **A** still toggles Phone size. **Help → Louppe Help** contains
+a quick-start guide and searchable shortcuts. Review tips can be dismissed
+and shown again from Help.
+
+Yes/No decisions, stars, and color labels are independent. Marking **No** does
+not trash a file. Decisions save automatically; reopen the same folder to
+continue. When everything has a decision, the bottom panel confirms the review
+is complete. Use the toolbar's Export action and **Keepers (Yes)** to copy them.
+
+With an explicit selection, Export starts with **All selected**. Otherwise,
+it starts with **Keepers (Yes)** from the filtered view. Quick picks also
+include **4–5 stars**, regardless of Yes/No decision. The inclusion summary
+shows how many items match before you choose a destination.
 
 Export copies by default and can also move selected media or write your
 decisions, star ratings, and color labels as XMP sidecars—small metadata files
@@ -37,7 +54,7 @@ ratings, camera details, and other metadata.
 - Choose **Sort → Review groups → Analyze Folder Locally** to review exact
   duplicates, likely similar photos, and capture bursts. The analysis stays on
   your Mac and does not change ratings or files automatically.
-- In **Filter → File types**, matching RAW+JPEG files can be grouped as one
+- In **Filter**, matching RAW+JPEG files can be grouped as one
   review item while keeping separate decisions, stars, and color labels.
 - **Clean Up** supports All Media, Filtered, or Selected items, including
   options to move only the JPEG or only the RAW from an unambiguous pair to the
@@ -65,7 +82,8 @@ Louppe supports common camera RAW, JPEG, TIFF, PNG, HEIC, WebP, AVIF, photo,
 video, and audio formats. Unsupported files still appear in the review so they
 can be rated and exported.
 
-Gallery includes Fit, phone-sized preview, true 100% zoom, video and audio
+Gallery includes a zoom slider and pinch-to-zoom, Fit, phone-sized preview,
+true 100% zoom, video and audio
 playback, metadata, a histogram, clipping information, and optional quality
 cues. VoiceOver is supported, and the main review workflow can be completed
 with the keyboard.

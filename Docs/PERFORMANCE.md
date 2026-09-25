@@ -237,6 +237,31 @@ UI. The AppKit scroll view survives item changes, clamps the position for each
 new aspect ratio, and preserves an unscrollable axis for the next larger
 photo. Pressing S or closing/changing folders resets it to center.
 
+The Gallery zoom slider and trackpad pinch span 5–400% using native
+`NSScrollView` magnification of that same backing-pixel document. Below 100%,
+the canvas uses the bounded full preview; at 100% and above it requests only
+the visible source tiles and their existing one-tile ring. The two-operation
+queue and 128 MiB tile budget are unchanged. Native pinch owns its transform
+until the gesture ends; occasional scale publications update the footer
+without making the rest of the session redraw for every gesture event.
+S returns a custom zoom to centered 100%, then toggles back to Fit. A retains
+the phone-size/Fit toggle.
+
+The fitted preview uses `NSMagnificationGestureRecognizer` to finish or cancel
+a pinch; the native scroll view uses live-magnification notifications and
+`NSEvent.phase`. Neither depends on the obsolete `beginGesture`/`endGesture`
+responder callbacks. Completion is idempotent: a fitted preview hands off once
+to the native scroll view, and native magnification releases its ownership so
+later slider changes apply.
+Click-and-drag panning uses window-space pointer deltas converted through the
+current magnification, clamps to the document edges, and shares the same
+non-published viewport state as two-finger scrolling.
+The explicit S reset from a custom zoom interpolates scale and normalized
+position together over a short, ten-frame transition. It makes no per-frame
+store publications. Reduce Motion skips the transition; scrolling, dragging,
+pinching, or a new slider value cancels it. Gesture interruption captures the
+visible viewport and reports its scale before SwiftUI can lay out again.
+
 Fit and phone-size presentations map a double-click through their actual
 letterboxed image rectangle to a normalized source position, request that
 position from `ActualSizeViewport`, and only then enter 100%. The clicked point

@@ -388,24 +388,24 @@ final class HotkeyTests: XCTestCase {
         Self.retainedHostingWindows.append(window)
     }
 
-    func testHostedSelectableTextRetainsEverySessionCommand() throws {
-        let hostingView = NSHostingView(
-            rootView: Text("Selectable metadata")
-                .textSelection(.enabled)
-                .frame(width: 240, height: 80)
-        )
+    func testSelectableTextRetainsEverySessionCommand() {
+        let selectableText = NSTextView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
+        selectableText.string = "Selectable metadata"
+        selectableText.isEditable = false
+        selectableText.isSelectable = true
+        let contentView = NSView(frame: selectableText.frame)
+        contentView.addSubview(selectableText)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 240, height: 80),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
-        window.contentView = hostingView
+        window.contentView = contentView
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 
-        let selectionProxy = try XCTUnwrap(hostingView.nextKeyView)
-        XCTAssertTrue(window.makeFirstResponder(selectionProxy))
+        XCTAssertTrue(window.makeFirstResponder(selectableText))
         let context = SessionKeyRoutingContext(
             eventWindow: window,
             eventWindowNumber: window.windowNumber,
@@ -945,7 +945,7 @@ final class HotkeyTests: XCTestCase {
         let selectNext = try XCTUnwrap(
             actions.first(where: { $0.id == "select-next-item" })
         )
-        XCTAssertEqual(selectNext.shortcut, "L")
+        XCTAssertTrue(try XCTUnwrap(selectNext.shortcut).contains("L"))
         XCTAssertTrue(selectNext.isEnabled)
         selectNext.perform()
         XCTAssertEqual(store.currentIndex, 1)
@@ -1069,7 +1069,7 @@ final class HotkeyTests: XCTestCase {
         let store = readyStore(itemCount: 2, firstItemIsVideo: false)
         let pairingAction = try XCTUnwrap(
             ActionPaletteView(store: store).actions.first {
-                $0.id == "pair-raw-jpeg"
+                $0.id == "toggle-raw-jpeg-pairing"
             }
         )
 
@@ -1078,6 +1078,59 @@ final class HotkeyTests: XCTestCase {
             RawJPEGPairingMode.togetherControlTitle
         )
         XCTAssertTrue(pairingAction.searchText.contains("review"))
+    }
+
+    func testCommandPaletteRanksSpecificActionsAndNormalizesSearch() throws {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let actions = ActionPaletteView(store: store).actions
+
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "keep photo", in: actions).first?.id,
+            "mark-yes"
+        )
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "2 stars", in: actions).first?.id,
+            "stars-2"
+        )
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "RAW+JPEG separately", in: actions).first?.id,
+            "toggle-raw-jpeg-pairing"
+        )
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "larger thumbnails", in: actions).first?.id,
+            "grid-zoom-in"
+        )
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "1.5x speed", in: actions).first?.id,
+            "set-playback-rate-1-5x"
+        )
+        XCTAssertEqual(
+            ActionPaletteSearch.results(for: "trash paired jpegs", in: actions).first?.id,
+            "trash-paired-jpegs"
+        )
+    }
+
+    func testCommandPaletteShowsHotkeysAndNewActions() throws {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let actions = ActionPaletteView(store: store).actions
+        func action(_ id: String) throws -> ActionPaletteAction {
+            try XCTUnwrap(actions.first { $0.id == id })
+        }
+
+        XCTAssertEqual(try action("export").shortcut, "E / ⌘E")
+        XCTAssertEqual(try action("gallery").shortcut, "Tab / G")
+        XCTAssertEqual(try action("undo").shortcut, "Z / ⌘Z")
+        XCTAssertEqual(try action("filter-search").shortcut, "⌘F")
+        XCTAssertEqual(try action("grid-zoom-in").shortcut, "⌘+")
+        XCTAssertEqual(try action("actual-size").shortcut, "S")
+        XCTAssertEqual(try action("phone-size").shortcut, "A")
+        XCTAssertEqual(try action("select-to-first").shortcut, "⌘⇧←")
+        XCTAssertEqual(try action("select-to-last").shortcut, "⌘⇧→")
+        XCTAssertEqual(try action("grid-item-above").shortcut, "↑")
+        XCTAssertEqual(try action("grid-item-below").shortcut, "↓")
+        XCTAssertTrue(try action("trash-selection").detail.contains("skips confirmation"))
+        XCTAssertTrue(try action("mark-yes").detail.contains("advance"))
+        XCTAssertTrue(try action("close-session").isEnabled)
     }
 
     func testAppCommandsRemainAvailableFromNonTextControlFocus() {

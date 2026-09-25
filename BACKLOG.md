@@ -5,19 +5,13 @@ here because they change with the app and should be visible to everyone working
 in this repository. The Obsidian `louppe` note remains the home for research,
 positioning, publicity planning, and the CAS record.
 
-## Current delivery — 1.8.0
+## Current delivery — 1.9.0
 
-Finish verification and release of the current worktree. It already includes:
-
-- optional Quality Cues with adjustable ISO, shutter-speed, and clipping
-  thresholds;
-- local exact-duplicate, likely-similar, and capture-burst review groups;
-- explicit Copy-only routing to multiple export destinations;
-- source-folder organization, command-palette work, and folder drag-and-drop;
-- legacy-session migration and smaller review-flow fixes.
-
-These are active delivery work, not new backlog items. Do not advertise them
-until the corresponding public GitHub release is live.
+The Command Palette search and organization update is implemented locally.
+HotkeyTests, release packaging, and a disposable-folder launch check passed.
+The performance run reaches its real Trash round trip, which macOS denies to
+the agent. Review the updated palette and complete that filesystem check on a
+Mac with Trash access before publishing.
 
 ## Next — release readiness and trust
 
@@ -25,7 +19,7 @@ until the corresponding public GitHub release is live.
 - [ ] Ask Andrey for a code review; decide separately whether co-authorship is
   appropriate.
 - [ ] Obtain a final shared brand asset from Masha for the app icon and website.
-- [ ] Add Developer ID signing, notarization, and a release-provenance checklist.
+- [x] Add Developer ID signing, notarization, and a release-provenance checklist.
 - [ ] Back up and restore-test the automatic-updater signing key.
 
 ## Product improvements

@@ -25,6 +25,72 @@ struct NormalizedImagePosition: Equatable, Sendable {
 
 /// Pure geometry shared by the AppKit viewport and focused regression tests.
 enum ActualSizeGeometry {
+    static let minimumZoom: CGFloat = 0.05
+    static let maximumZoom: CGFloat = 4
+
+    static func clampedZoom(_ zoom: CGFloat) -> CGFloat {
+        guard zoom.isFinite else { return 1 }
+        return min(max(zoom, minimumZoom), maximumZoom)
+    }
+
+    /// NSScrollView magnifies this 100%-sized document. At zoom 1, each
+    /// source pixel occupies exactly one backing pixel.
+    static func displayedPixelScale(
+        zoom: CGFloat,
+        backingScale: CGFloat
+    ) -> CGFloat {
+        clampedZoom(zoom) / validBackingScale(backingScale)
+    }
+
+    static func fitZoom(
+        sourcePixels: CGSize,
+        backingScale: CGFloat,
+        viewportSize: CGSize,
+        maximumSize: CGSize? = nil
+    ) -> CGFloat {
+        let base = documentSize(sourcePixels: sourcePixels, backingScale: backingScale)
+        return FittedImageGeometry.frame(
+            imageSize: base,
+            containerSize: viewportSize,
+            maximumSize: maximumSize
+        ).width / max(base.width, 1)
+    }
+
+    /// Place an image point under the same viewport fraction after a zoom.
+    /// Used for pointer-anchored transitions from a fitted preview.
+    static func anchoredOffset(
+        imagePosition: NormalizedImagePosition,
+        viewportAnchor: CGPoint,
+        documentSize: CGSize,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: anchoredAxisOffset(
+                normalized: imagePosition.x,
+                anchor: viewportAnchor.x,
+                documentLength: documentSize.width,
+                viewportLength: viewportSize.width
+            ),
+            y: anchoredAxisOffset(
+                normalized: imagePosition.y,
+                anchor: viewportAnchor.y,
+                documentLength: documentSize.height,
+                viewportLength: viewportSize.height
+            )
+        )
+    }
+
+    private static func anchoredAxisOffset(
+        normalized: CGFloat,
+        anchor: CGFloat,
+        documentLength: CGFloat,
+        viewportLength: CGFloat
+    ) -> CGFloat {
+        guard documentLength > viewportLength else { return 0 }
+        let proposed = normalized * documentLength - anchor * viewportLength
+        return min(max(proposed, 0), documentLength - viewportLength)
+    }
+
     static func documentSize(
         sourcePixels: CGSize,
         backingScale: CGFloat
@@ -152,6 +218,7 @@ enum FittedImageGeometry {
 @MainActor
 final class ActualSizeViewport {
     private(set) var position: NormalizedImagePosition = .center
+    private(set) var placementAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
     /// Changes only for an explicit placement request (S or double-click), not
     /// for ordinary scroll capture.
     private(set) var positionRequestGeneration: UInt64 = 0
@@ -160,8 +227,15 @@ final class ActualSizeViewport {
         self.position = position
     }
 
-    func request(position: NormalizedImagePosition) {
+    func request(
+        position: NormalizedImagePosition,
+        viewportAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    ) {
         self.position = position
+        self.placementAnchor = CGPoint(
+            x: min(max(viewportAnchor.x, 0), 1),
+            y: min(max(viewportAnchor.y, 0), 1)
+        )
         positionRequestGeneration &+= 1
     }
 

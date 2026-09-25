@@ -36,6 +36,7 @@ struct LouppeLogo: View {
 /// The start screen: pick a folder (or a recent one) to begin a session.
 struct WelcomeView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.openWindow) private var openWindow
     @State private var isFolderDropTarget = false
     @State private var folderDropError: String?
     @State private var isNewSessionConfirmationPresented = false
@@ -91,6 +92,17 @@ struct WelcomeView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Open a media folder")
             .accessibilityHint("Choose a folder or drag a folder here to start reviewing it")
+
+            VStack(spacing: 3) {
+                Text("Photos (including RAW), videos, and audio")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Quick Start and supported formats") {
+                    openWindow(id: LouppeHelpWindow.id)
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
 
             if let folderDropError {
                 Text(folderDropError)

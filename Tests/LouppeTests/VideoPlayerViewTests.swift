@@ -117,6 +117,43 @@ final class VideoPlayerViewTests: XCTestCase {
         XCTAssertNil(controller.rememberedPosition(for: item))
     }
 
+    func testGalleryAudioSkipAndTimelineSeekUseSharedPlayer() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("louppe-audio-seek-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: folder,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("SEEK.wav")
+        try writeSilentWAV(to: url)
+        let audio = makeAudioItem(
+            at: url,
+            modificationDate: try XCTUnwrap(
+                url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate
+            ),
+            duration: 1
+        )
+        let controller = VideoPlaybackController()
+
+        XCTAssertTrue(controller.seek(audio, by: 0.25))
+        XCTAssertTrue(controller.represents(audio))
+        XCTAssertNotNil(controller.player.currentItem)
+        XCTAssertEqual(controller.currentTimeSeconds, 0.25, accuracy: 0.001)
+        XCTAssertEqual(controller.rememberedPosition(for: audio), 0.25)
+        XCTAssertFalse(controller.isPlaying)
+
+        XCTAssertTrue(controller.seek(audio, to: 0.75))
+        XCTAssertEqual(controller.currentTimeSeconds, 0.75, accuracy: 0.001)
+        XCTAssertEqual(controller.rememberedPosition(for: audio), 0.75)
+        XCTAssertFalse(controller.isPlaying)
+
+        XCTAssertTrue(controller.seek(audio, to: 10))
+        XCTAssertEqual(controller.currentTimeSeconds, 1, accuracy: 0.001)
+        XCTAssertNil(controller.rememberedPosition(for: audio))
+    }
+
     func testResumePositionIsStableAcrossItemNavigationAndClearsPerFolder() {
         let first = makeVideoItem(
             at: URL(fileURLWithPath: "/tmp/RESUME-A.MOV"),
@@ -414,7 +451,8 @@ final class VideoPlayerViewTests: XCTestCase {
 
     private func makeAudioItem(
         at url: URL,
-        modificationDate: Date
+        modificationDate: Date,
+        duration: TimeInterval? = nil
     ) -> PhotoItem {
         PhotoItem(
             id: url.lastPathComponent,
@@ -424,6 +462,7 @@ final class VideoPlayerViewTests: XCTestCase {
             cameraModel: nil,
             lensModel: nil,
             mediaKind: .audio,
+            duration: duration,
             audioIsPlayable: true,
             primaryModificationDate: modificationDate,
             fileSize: 5

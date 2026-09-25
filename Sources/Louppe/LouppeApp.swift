@@ -7,6 +7,7 @@ import Sparkle
 @main
 struct LouppeApp: App {
     @NSApplicationDelegateAdaptor(LouppeApplicationDelegate.self) private var appDelegate
+    @Environment(\.openWindow) private var openWindow
     #if APP_STORE
     @StateObject private var store = SessionStore(
         automaticallyRecoversInterruptedOperations: false
@@ -26,7 +27,7 @@ struct LouppeApp: App {
         _ = XMPFieldMapping.runtimeIsAvailable
         #if !APP_STORE
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: !AppBuildInfo.isReviewBuild,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -34,7 +35,7 @@ struct LouppeApp: App {
     }
 
     var body: some Scene {
-        Window("Louppe", id: "main") {
+        Window(AppBuildInfo.displayName, id: "main") {
             RootView(store: store)
                 .onAppear {
                     appDelegate.store = store
@@ -66,10 +67,12 @@ struct LouppeApp: App {
             }
             #if !APP_STORE
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(
-                    updater: updaterController.updater,
-                    isFileOperationRunning: store.isFileOperationRunning
-                )
+                if !AppBuildInfo.isReviewBuild {
+                    CheckForUpdatesView(
+                        updater: updaterController.updater,
+                        isFileOperationRunning: store.isFileOperationRunning
+                    )
+                }
             }
             #endif
             CommandGroup(replacing: .newItem) {
@@ -83,7 +86,17 @@ struct LouppeApp: App {
                 )
             }
             FocusedLouppeSessionCommands(store: store)
+            CommandGroup(replacing: .help) {
+                Button("Louppe Help") {
+                    openWindow(id: LouppeHelpWindow.id)
+                }
+            }
         }
+
+        Window("\(AppBuildInfo.displayName) Help", id: LouppeHelpWindow.id) {
+            LouppeHelpView()
+        }
+        .defaultSize(width: 630, height: 620)
 
         Settings {
             #if !APP_STORE
@@ -151,6 +164,13 @@ private struct FocusedLouppeSessionCommands: Commands {
             return nil
         }
         return focusedStore
+    }
+
+    private var canChangeGalleryImageSize: Bool {
+        guard let actionableStore,
+              actionableStore.viewMode == .gallery,
+              let item = actionableStore.currentItem else { return false }
+        return item.mediaKind == .photo && item.isSupported
     }
 
     var body: some Commands {
@@ -227,15 +247,36 @@ private struct FocusedLouppeSessionCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
-            Button("Zoom In") {
+            Button("Larger Thumbnails") {
                 actionableStore?.zoomGrid(larger: true)
             }
             .disabled(actionableStore?.viewMode != .grid)
 
-            Button("Zoom Out") {
+            Button("Smaller Thumbnails") {
                 actionableStore?.zoomGrid(larger: false)
             }
             .disabled(actionableStore?.viewMode != .grid)
+
+            Divider()
+
+            Button("Fit Photo in Gallery") {
+                actionableStore?.zoomToFit()
+            }
+            .disabled(!canChangeGalleryImageSize)
+
+            Button("View Photo at 100%") {
+                if actionableStore?.isAtActualSize != true {
+                    actionableStore?.toggleZoom(.actual)
+                }
+            }
+            .disabled(!canChangeGalleryImageSize)
+
+            Button("View Photo at Phone Size") {
+                if actionableStore?.zoomMode != .small {
+                    actionableStore?.toggleZoom(.small)
+                }
+            }
+            .disabled(!canChangeGalleryImageSize)
 
             Divider()
 

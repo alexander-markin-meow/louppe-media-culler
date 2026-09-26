@@ -2,6 +2,11 @@
 
 Scope: the macOS app repository only. The website was not changed.
 
+Later the same day, Alex requested publication. Signing, notarization,
+Gatekeeper, and an actual 1.8-to-1.9 update were completed successfully;
+see [the 1.9 release record](RELEASE_1.9.0.md). The unpublished/deferred status
+below records the earlier completion review, before that release request.
+
 ## Reviewed work
 
 Reviewed the current diff, recent app chats, Git history and remote status,

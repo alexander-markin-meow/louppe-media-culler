@@ -9,223 +9,78 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <description>Secure automatic updates for Louppe.</description>
         <language>en</language>
         <item>
-            <title>1.8.0</title>
-            <pubDate>Fri, 18 Sep 2026 11:30:58 +0200</pubDate>
-            <link>https://github.com/alexander-markin-meow/louppe-media-culler/releases/tag/v1.8.0</link>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>1.8.0</sparkle:shortVersionString>
+            <title>1.9.0</title>
+            <pubDate>Sun, 27 Sep 2026 00:43:59 +0200</pubDate>
+            <link>https://github.com/alexander-markin-meow/louppe-media-culler/releases/tag/v1.9.0</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[
-- Added ⌘F to open the Filter menu with its Search field ready for typing.
+Read [A Proper Hello](https://louppe.eu/blog/a-proper-hello/) for an introduction
+to Louppe and its approach to reviewing media.
 
-- Matched the RAW + JPEG pairing wording in Filter and the command palette,
-  while retaining the previous wording as a search term.
+- Made the start-page logo open [louppe.eu](https://louppe.eu/).
 
-- Simplified the source-organization confirmation to show only where files
-  will move, what stays unchanged, and how to safely move from an ExFAT card.
+- Fixed the standalone video check's missing exact-path dependency so the
+  complete GitHub quality workflow can run after the Copy safety changes.
+- Pinned CI checkout, disabled saved checkout credentials, added redacted
+  credential checks and weekly action updates, and ignored local signing secrets.
 
-- Added Developer ID signing, hardened-runtime, Apple notarization, stapling,
-  Gatekeeper, and release-provenance checks for trusted direct downloads.
+- Shortened the bottom-panel save status to “Saved” or “Saving…” so it stays
+  compact while ratings are written.
 
-- Removed the explanatory paragraph from the welcome screen so the folder
-  action is the clear starting point.
+- Made the start screen a compact window and let folders be dropped anywhere
+  in it to open them.
 
-- Updated the welcome screen and folder-related messages to use **media folder**
-  terminology, reflecting support for photos, videos, and audio.
+- Removed the explanatory text below the Info panel's star rating.
 
-- Renamed the public project and GitHub repository to **Louppe Media Culler**
-  for clearer discovery while keeping the installed app, executable, bundle
-  identifier, preferences, sessions, and XMP namespace named **Louppe**.
+- Added read-only serif text previews for TXT, Markdown, XML, and common text
+  formats, with basic Markdown formatting and clickable web/email links.
 
-- Reused cards and folders no longer become impossible to open when their new
-  files reuse names from an identity-bound saved session. Louppe still refuses
-  to apply the old ratings automatically, but now offers **Open as New Session**
-  with an explicit confirmation that replaces only the stale decisions and
-  leaves every photo and video untouched.
+- Updated Sparkle to 2.10.0 and Expat to 2.8.5 with current security fixes.
+- Made unusually complex XMP sidecars fail gracefully while keeping originals
+  and unrelated metadata intact; affected media can still export without XMP.
+- Bound Copy writes to the chosen folder so replacing its path cannot redirect
+  exported photos; a changed destination can be selected again and retried.
 
-- Large multi-selections reuse their Info summary across redraws. Decision,
-  star, and color controls avoid repeated selection sorting and stop checking
-  once a mixed value is found. Inline filename editing always targets the
-  displayed photo family, cancels when that content changes, and waits until
-  typing pauses before preparing its snapshot. Return during a filename check
-  now completes the rename when that check succeeds instead of being ignored.
-  Rename and Organize now report partial Undo failures accurately and use
-  singular file counts for single-file results.
+- Updated the About description to say “for creators.”
+- Added a working Help window, searchable shortcuts, and dismissible review tips.
+- Combined filter information, save feedback, and review completion into one
+  compact bottom panel without repeating the toolbar's actions.
+- Kept the bottom panel height consistent across photos, video, and audio,
+  centered photo zoom, and removed clipped QuickTime artwork from audio controls.
+- Added a continuous photo zoom slider and pinch-to-zoom while retaining the
+  S (100%) and A (Phone size) shortcuts.
+- Prevented the zoom slider from briefly jumping to its minimum and flickering
+  when A or S switches back to Phone size or Fit.
+- Fixed a stuck loading spinner caused by late layout updates restarting
+  high-resolution loading after leaving the zoomed photo view.
+- Fixed pinch completion so the enlarged photo remains pannable and the
+  slider keeps responding. Added click-and-drag panning and a smooth return
+  from custom zoom to centered 100% with S.
+- Replaced separate RAW + JPEG palette commands with one searchable toggle
+  that explains the current mode and any temporary availability restriction.
+- Made explicit selections the default export scope, added keeper and star
+  quick picks, clarified independent review metadata and same-drive Move,
+  and simplified editing-app options.
+- Added quick decision filters, visible active filters, direct filter reset,
+  a RAW + JPEG pairing choice, and preview retry and Finder actions.
+- Clarified Trash No + Undecided with separate counts, refreshed first-run
+  instructions, and added separately named local review packaging.
 
-- Folder scans now report unreadable subfolders instead of opening incomplete
-  sessions, and honor Cancel during final file-identity validation. Similar-photo
-  grouping avoids repeated comparisons within already-matched families and
-  reuses membership across filter, sort, and rating changes. Group headers count
-  only visible members, and rerunning analysis refreshes the active review.
-
-- Standardized Filter and Sort popovers and Export/XMP dialogs with consistent
-  spacing, purple primary actions, and scrollable setup and review content.
-  Export keeps its header and actions visible as options grow, and single-file
-  Rename now scrolls long previews and conflicts instead of crowding its buttons.
-
-- Single-file renaming now works inline from the filename in the Info panel,
-  following Finder's direct-edit pattern. The separate File-menu and single-file
-  Command Palette entry are removed; batch metadata renaming remains available from
-  the multi-selection Info panel and Command Palette.
-
-- Added safe source-file renaming. The Info panel now renames one filename stem
-  while preserving its extension, and File → Rename Files offers a minimal
-  All/Filtered/Selected batch builder for date, time, camera, lens, original
-  name, and deterministic sequence parts. Both actions are searchable through
-  **⌘K**, show exact previews, keep RAW+JPEG and recognized XMP names together,
-  refuse collisions, misleading new pair stems, ambiguous sidecars, and `.acr`
-  companions, and restore every previous name with one **⌘Z**. Rename and undo
-  use dedicated crash-recovery journals and preserve ratings and current-item
-  continuity through the required same-folder rescan.
-
-- Polished Organize Source Folder with a stable header and action bar, one
-  scrollable setup area, clearer folder-level guidance, and wrapping or
-  middle-truncated previews so long paths and explanations stay inside the
-  sheet. The move-confirmation step now scrolls independently as well.
-
-- Added archival RAW+JPEG cleanup. From the shared Clean Up menu or the **⌘K**
-  Command Palette, photographers can move only the JPEG or only the RAW member
-  of unambiguous pairs to the macOS Trash within the current All Media,
-  Filtered, or Selected scope. Standalone files and XMP sidecars stay untouched,
-  the retained member remains in the session, and one **⌘Z** restores the batch.
-
-- Added All Media, Filtered, and Selected scopes to Export. The chosen scope
-  now bounds regular Copy, Move, Metadata (XMP), and routed Copy operations,
-  while decision, star, and color choices narrow that scope further. Clean Up
-  now also calls its complete-folder choice All Media.
-
-- Improved video review with in-session resume positions, precise half-second
-  Gallery seeks on **←/→**, and five-second seeks on **⇧←/⇧→**. **J/L** always
-  select the adjacent item, including after the native player has focus.
-  **⌘←/⌘→** choose a slower or faster media speed, and the Info indicator now
-  follows native-player speed changes instead of remaining at 1×. Video and
-  audio can play at 1×, 1.5×, 2×, or 2.5×; **K** joins Space as a play/pause
-  key for video and audio. Gallery video now stays at its original brightness
-  when controls appear, with the same gray surround used for photos instead of
-  black letterboxing. The Command Palette includes every matching navigation,
-  transport, and speed action.
-
-- Added independent live playback loudness meters to the Info panel for videos
-  and audio recordings. Each channel gets green, orange, and red dBFS zones,
-  while standalone audio uses its whole-file waveform and moving playhead in
-  the main Gallery area. Video folders can now also filter and sort by
-  resolution, frame rate, and codec.
-
-- Added a separate Mac App Store product: it omits the standalone updater,
-  uses least-privilege sandboxed access only to folders the photographer
-  chooses, remembers those folders with balanced security-scoped bookmarks,
-  and includes a no-tracking privacy manifest. The Store release check rejects
-  a missing entitlement, malformed privacy declaration, or accidental Sparkle
-  framework/link/feed. A new signed-package helper and submission checklist
-  cover the remaining Apple certificate and App Store Connect steps.
-
-- Added native audio review and playback. Common audio recordings and every
-  macOS-advertised audio type now scan as an independent **Audio** media type,
-  with duration, codec details, waveform tiles, Gallery and Grid playback,
-  media filters/sorting, and the same safe rating and export workflow as photos
-  and videos.
-
-- Export Copy and Move progress now measures the amount of media transferred,
-  rather than treating every file equally. The in-progress screen shows the
-  data moved and total size, so a handful of large videos no longer make the
-  progress bar misleading.
-
-- Copy cancellation is now a deliberate two-step action. Louppe records and
-  displays whether the photographer confirmed **Stop Copying**; any
-  unexplained cancellation is logged and reported as an app issue rather than
-  being mistaken for a card failure.
-
-- Fixed Clean Up's stale-scan warning: if a photo file changed after scanning,
-  Louppe reports only the affected review items, moves nothing, and offers a
-  save-first folder rescan before the photographer deliberately confirms Clean
-  Up again.
-
-- Fixed the Clean Up confirmation so Return activates **Move to Trash**, while
-  Escape still cancels.
-
-- Added **Duplicate + Burst Groups**: an optional, local review layout for
-  verified exact duplicates, conservatively labelled likely-similar photos, and
-  nearby capture times. It respects the current filter and never changes a
-  rating, export, original, or Clean Up target automatically.
-
-- Added **Route copies to multiple folders** in Export. This Copy-only
-  workflow previews explicit decision, stars, color, file-type, or media-type
-  routes; unmatched items remain in the source folder. Overlapping/empty
-  routes, duplicate or unsafe folders, split XMP families, and insufficient
-  combined space on a shared destination drive are blocked before Copy starts.
-
-- Added optional **Quality cues** for high ISO, slow shutter, and substantial
-  clipping. One quiet shooting-metadata row opens exact cue values and sources;
-  supported RAW files replace the immediate rendered histogram and clipping
-  estimate after a delayed, bounded Core Image RAW decode. The X overlay stays
-  explicitly preview-based. Adjust the three thresholds in **Louppe → Settings
-  → Quality Cues**; cues never affect ratings, filters, sidecars, exports, or
-  files.
-
-- Added a drag-and-drop target on the start screen: drop a photo or video
-  source folder there to open it for review, alongside **Choose Photo
-  Folder…**. Individual files are politely rejected so the source always
-  remains a folder.
-
-- Replaced the opaque different-folder session warning for older sessions
-  with a neutral explanation and an explicit **Open Anyway** button. Louppe
-  binds that choice to the exact session file shown, rescans, verifies saved
-  filenames, and then quietly migrates a recognized session to the current
-  folder path; unrelated or changed data remains blocked.
-
-- Added a searchable **Command Palette** (⌘K). It provides a quick, keyboard-
-  driven route to export, source-folder organization, Clean Up, XMP metadata,
-  filters and sorting, RAW+JPEG pairing, stars, color labels, and view tools.
-  Existing confirmation and preview screens still guard actions that can alter
-  files. **Organize by Date Taken Only…** opens the organizer with Full date as
-  its sole enabled folder level for a faster chronological workflow, while
-  retaining the normal scope, preview, and move confirmation.
-
-- Added **Organize Source Folder…** to the File menu. It previews and moves
-  All, Filtered, or Selected items into nested, draggable-priority folder
-  levels built from the existing folder, decision, date, stars, color, camera,
-  lens, file type, or media type. Date folders follow the Mac's regional and
-  custom short-date formatting at full-date, year-and-month, or year
-  granularity. Existing structure can be flattened, kept at top-level depth,
-  or preserved in full; old and unrelated folders/files are never deleted.
-  Grouped RAW+JPEG and recognized XMP files move atomically while `.acr`
-  companions stay put. Exact preflight blocks filename and sidecar-family
-  conflicts without overwriting or inventing suffixes. The operation uses the
-  durable file journal, survives interruption conservatively, remembers the
-  files' original relative folders across future reorganizations, and supports
-  ⌘Z restoration during the open session. ExFAT camera cards remain supported
-  behind an explicit reduced-crash-protection warning: Louppe first proves a
-  disposable Foundation move refuses an occupied destination and preserves the
-  same physical file identity, then uses that no-overwrite fallback for the
-  journaled move, undo, and recovery. It also tolerates only the directory-sync
-  operation ExFAT does not implement. Other storage and other errors remain on
-  the stricter POSIX boundary.
-
-- Fixed session hotkeys stopping after app activation, an organizer sheet, or
-  a source-folder refresh when SwiftUI focused the whole window-hosting root.
-  Louppe no longer mistakes selectable metadata nested somewhere inside that
-  root for actively focused text. It also tolerates macOS briefly omitting the
-  key-window and event-window objects when the event's nonzero window number
-  still exactly identifies Louppe's live photo window. That fallback applies
-  only while Louppe is active; genuinely focused text, other windows, and
-  modal UI remain excluded.
-
-- Fixed the release-quality gate so routine builds validate their own app and
-  archive without comparing a freshly created ZIP to the immutable signed
-  v1.7.0 download. The publishing preflight still requires the exact archive,
-  version, URL, length, and EdDSA signature to match before an update can ship.
-  No app behavior changed.
-
-- Fixed the standalone native-video Quality check so it compiles the shared
-  source-organization storage-safety helper used by the file-operation journal.
+- Reorganized the Command Palette into predictable sections, improved search
+  ranking and aliases, displayed all applicable keyboard shortcuts, and added
+  missing folder, search, selection, and zoom actions.
+- Kept the native macOS toolbar appearance in local release builds by recording
+  the current SDK version in the packaged app.
 
 ]]></description>
-            <enclosure url="https://github.com/alexander-markin-meow/louppe-media-culler/releases/download/v1.8.0/Louppe.zip" length="5856916" type="application/octet-stream" sparkle:edSignature="w/G7HaOhZP8ue1EtIM0Vl3ZrQDsglmSkLLzpVny6ym5bzCyyp1K4m7sJJ1B8N5aoZ2Nl+cpolypQhqnj2eZkCg=="/>
+            <enclosure url="https://github.com/alexander-markin-meow/louppe-media-culler/releases/download/v1.9.0/Louppe.zip" length="6096278" type="application/octet-stream" sparkle:edSignature="bzXNYJXzvw9o/Nwqv9kmizb9CplJQiwPZKgInybguOS8ob4QEmV705E/5n6MZ8M7zs9IUBALKej/MGiLwUuYBQ=="/>
         </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: lvF1YbJ1sVHNScfEPUIGewlfBBqnNh6kbSXgMfysENP4KZGf7yuzkTlQks9DuzqSI+C47oGA3O5bH2NZ/r2wCw==
-length: 13715
+edSignature: jg4ebzEh4jTB/46fBNNmtpzs/aqjYq6GMqwZtzGP0/8I2aZCxfoyV3wUsAVUpR/HCfXREPdazaKyC9Klj1lvDA==
+length: 4824
 -->

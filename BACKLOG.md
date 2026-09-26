@@ -5,7 +5,7 @@ here because they change with the app and should be visible to everyone working
 in this repository. The Obsidian `louppe` note remains the home for research,
 positioning, publicity planning, and the CAS record.
 
-## Current delivery — 1.9.0
+## Published delivery — 1.9.0
 
 The current 1.9 work includes review/zoom improvements, text previews, XMP
 and Copy safety fixes, the compact start window, and the shorter saving status.
@@ -16,7 +16,9 @@ was repaired after it caused the latest GitHub quality run to fail.
 
 See [the completion review](Docs/WORK_COMPLETION_2026-09-27.md) for current
 verification and the remaining release-only or external acceptance work.
-1.9.0 (11) remains an unpublished development version.
+1.9.0 (11) is published, Developer ID signed, and Apple notarized. The real
+1.8-to-1.9 update test passed using Sparkle 2.9.4 on a disposable copy.
+See [the release record](Docs/RELEASE_1.9.0.md).
 
 ## Next — release readiness and trust
 

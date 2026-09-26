@@ -10,8 +10,7 @@ macOS 14 or newer on an Apple silicon Mac. The current download does not support
 
 ![Louppe Gallery with an apple-tree photograph, RAW+JPEG pairing, camera settings and histogram](Docs/Media/2026-09-26/gallery-info.png)
 
-*Gallery keeps the photo and its information together. Captures show the upcoming
-1.9 interface; the current published download is 1.8.*
+*Gallery keeps the photo and its information together in Louppe 1.9.*
 
 [Watch the captioned 25-second walkthrough](https://louppe.eu/#review-demo).
 

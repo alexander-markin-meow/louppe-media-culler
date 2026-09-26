@@ -143,6 +143,12 @@ void ExpatAdapter::ParseBuffer ( const void * buffer, size_t length, bool last /
 	}
 	
 	status = XML_Parse ( this->parser, (const char *)buffer, static_cast< XMP_StringLen >( length ), last );
+
+    if ( this->louppeLimitExceeded ) {
+        XMP_Error error(kXMPErr_BadXML,
+            "This XMP sidecar is too complex to read. Its metadata was left unchanged; you can still export the media without XMP.");
+        this->NotifyClient ( kXMPErrSev_OperationFatal, error );
+    }
 	
 	#if BanAllEntityUsage
 		if ( this->isAborted ) {
@@ -255,6 +261,24 @@ static void SetQualName ( ExpatAdapter * thiz, XMP_StringPtr fullName, XML_Node 
 
 // =================================================================================================
 
+// Louppe resource limits apply before XMPCore allocates its recursive tree.
+// Stop Expat from the callback and report through the ordinary parse-error
+// boundary afterward; never throw across Expat's C callback frames.
+static bool LouppeParseBudget ( ExpatAdapter * parser, size_t nodes, size_t textBytes )
+{
+    if ( parser->louppeLimitExceeded ) return false;
+    if ( nodes > 250000 - parser->louppeNodeCount ||
+         textBytes > 64 * 1024 * 1024 - parser->louppeTextBytes ||
+         parser->parseStack.size() > 128 ) {
+        parser->louppeLimitExceeded = true;
+        XML_StopParser ( parser->parser, XML_FALSE );
+        return false;
+    }
+    parser->louppeNodeCount += nodes;
+    parser->louppeTextBytes += textBytes;
+    return true;
+}
+
 static void StartNamespaceDeclHandler ( void * userData, XMP_StringPtr prefix, XMP_StringPtr uri )
 {
 	IgnoreParam(userData);
@@ -265,7 +289,13 @@ static void StartNamespaceDeclHandler ( void * userData, XMP_StringPtr prefix, X
 	ExpatAdapter * thiz = (ExpatAdapter*)userData;
 
 	if ( prefix == 0 ) prefix = "_dflt_";	// Have default namespace.
-	if ( uri == 0 ) return;	// Ignore, have xmlns:pre="", no URI to register.
+	if ( uri == 0 ) return;
+    if ( ++thiz->louppeNamespaceCount > 1024 ) {
+        thiz->louppeLimitExceeded = true;
+        XML_StopParser ( thiz->parser, XML_FALSE );
+        return;
+    }
+    if ( ! LouppeParseBudget ( thiz, 0, strlen(prefix) + strlen(uri) ) ) return;
 	
 	#if XMP_DebugBuild & DumpXMLParseEvents
 		if ( thiz->parseLog != 0 ) {
@@ -320,7 +350,16 @@ static void StartElementHandler ( void * userData, XMP_StringPtr name, XMP_Strin
 		XMP_Error error(kXMPErr_ExternalFailure, "Expat attribute info has odd length");
 		thiz->NotifyClient ( kXMPErrSev_OperationFatal, error );
 	}
-	attrCount = attrCount/2;	// They are name/value pairs.
+	attrCount = attrCount/2; // They are name/value pairs.
+    if ( attrCount > 1024 ) {
+        thiz->louppeLimitExceeded = true;
+        XML_StopParser ( thiz->parser, XML_FALSE );
+        return;
+    }
+    if ( ! LouppeParseBudget ( thiz, 1 + attrCount, strlen(name) ) ) return;
+    for ( XMP_StringPtr* a = attrs; *a != 0; ++a ) {
+        if ( ! LouppeParseBudget ( thiz, 0, strlen(*a) ) ) return;
+    }
 	
 	#if XMP_DebugBuild & DumpXMLParseEvents
 		if ( thiz->parseLog != 0 ) {
@@ -377,6 +416,7 @@ static void EndElementHandler ( void * userData, XMP_StringPtr name )
 	#if XMP_DebugBuild
 		--thiz->elemNesting;
 	#endif
+	if ( thiz->louppeLimitExceeded ) return;
 	(void) thiz->parseStack.pop_back();
 	
 	#if XMP_DebugBuild & DumpXMLParseEvents
@@ -395,6 +435,7 @@ static void CharacterDataHandler ( void * userData, XMP_StringPtr cData, int len
 	ExpatAdapter * thiz = (ExpatAdapter*)userData;
 	
 	if ( (cData == 0) || (len == 0) ) { cData = ""; len = 0; }
+    if ( ! LouppeParseBudget ( thiz, 1, static_cast<size_t>(len) ) ) return;
 	
 	#if XMP_DebugBuild & DumpXMLParseEvents
 		if ( thiz->parseLog != 0 ) {
@@ -462,6 +503,7 @@ static void ProcessingInstructionHandler ( void * userData, XMP_StringPtr target
 
 	if ( ! XMP_LitMatch ( target, "xpacket" ) ) return;	// Ignore all PIs except the XMP packet wrapper.
 	if ( data == 0 ) data = "";
+    if ( ! LouppeParseBudget ( thiz, 1, strlen(target) + strlen(data) ) ) return;
 	
 	#if XMP_DebugBuild & DumpXMLParseEvents
 		if ( thiz->parseLog != 0 ) {

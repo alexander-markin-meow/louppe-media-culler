@@ -197,6 +197,7 @@ enum ExportWorker {
 
     struct Plan: Sendable, Equatable {
         let items: [PlannedItem]
+        let destinationBindings: [DurableFileIO.DirectoryBinding]
         /// Sidecar families whose media is spread across more than one family
         /// — a RAW+JPEG pair matched across subfolders. One collision suffix
         /// cannot name a shared packet for two directories, so the media
@@ -204,7 +205,9 @@ enum ExportWorker {
         /// quietly dropping packets the preflight already counted.
         let unplannedSidecarFamilyCount: Int
 
-        init(items: [PlannedItem], unplannedSidecarFamilyCount: Int = 0) {
+        init(items: [PlannedItem], unplannedSidecarFamilyCount: Int = 0,
+             destinationBindings: [DurableFileIO.DirectoryBinding] = []) {
+            self.destinationBindings = destinationBindings
             self.items = items
             self.unplannedSidecarFamilyCount = unplannedSidecarFamilyCount
         }
@@ -276,8 +279,11 @@ enum ExportWorker {
         for items: [PhotoItem],
         in destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
-        mode: ExportMode = .copy
+        mode: ExportMode = .copy,
+        destinationBinding: DurableFileIO.DirectoryBinding? = nil
     ) throws -> Plan {
+        let binding = try destinationBinding ?? DurableFileIO.DirectoryBinding(url: destination)
+        try binding.requireCurrentPath()
         var reservedPaths: Set<String> = []
         var plannedItems: [PlannedItem] = []
         plannedItems.reserveCapacity(items.count)
@@ -439,7 +445,8 @@ enum ExportWorker {
         return Plan(
             items: plannedItems,
             unplannedSidecarFamilyCount:
-                unplannedFamilyIDs.subtracting(plannedFamilyIDs).count
+                unplannedFamilyIDs.subtracting(plannedFamilyIDs).count,
+            destinationBindings: [binding]
         )
     }
 
@@ -448,12 +455,11 @@ enum ExportWorker {
         to destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
         preparedPlan: Plan? = nil,
+        destinationBinding: DurableFileIO.DirectoryBinding? = nil,
         journalDirectory: URL? = nil,
         isCancelled: @escaping @Sendable () -> Bool = { false },
         cancellationReason: @escaping @Sendable () -> CopyCancellationReason? = { nil },
-        fileCopier: @escaping FileCopier = { source, destination in
-            try FileManager().copyItem(at: source, to: destination)
-        },
+        fileCopier: FileCopier? = nil,
         afterStagedFile: (Int) -> Void = { _ in },
         progress: @escaping Progress,
         byteProgress: @escaping ByteProgress = { _, _ in }
@@ -466,7 +472,8 @@ enum ExportWorker {
                     for: items,
                     in: destination,
                     xmpPlan: xmpPlan,
-                    mode: .copy
+                    mode: .copy,
+                    destinationBinding: destinationBinding
                 )
         } catch {
             return CopyResult(
@@ -513,6 +520,40 @@ enum ExportWorker {
                 failureMessage: "One or more source files could not be verified before copying",
                 xmpSummary: xmpSummary
             )
+        }
+        let boundDirectories: [Data: DurableFileIO.BoundDirectory]
+        do {
+            var directories: [Data: DurableFileIO.BoundDirectory] = [:]
+            for file in plan.items.flatMap(\.files) {
+                let parentPath = try XMPExactFileSystemPath(url: file.target).parent
+                let parent = parentPath.url
+                let key = parentPath.bytes
+                if directories[key] != nil { continue }
+                let binding = try plan.destinationBindings.first {
+                    FileOperationJournal.exactPathsEqual($0.url, parent)
+                } ?? DurableFileIO.DirectoryBinding(url: parent)
+                try binding.requireCurrentPath()
+                directories[key] = try DurableFileIO.BoundDirectory(binding)
+            }
+            boundDirectories = directories
+        } catch {
+            return CopyResult(copiedFiles: 0, failedPhotos: items.count,
+                inconsistentPhotos: 0, cancelled: false, cancellationReason: nil,
+                journalFailure: false, requiresRecovery: false,
+                failureMessage: error.localizedDescription, xmpSummary: xmpSummary)
+        }
+        let protectedCopier: FileCopier = { source, temporary in
+            let key = try XMPExactFileSystemPath(url: temporary).parent.bytes
+            guard let directory = boundDirectories[key] else {
+                throw DurableFileIO.DestinationChanged()
+            }
+            try directory.binding.requireCurrentPath()
+            if let fileCopier { // Fault injection for the existing worker tests.
+                try fileCopier(source, temporary)
+                try directory.binding.requireCurrentPath()
+            } else {
+                try directory.copy(from: source, to: temporary)
+            }
         }
         let writer: FileOperationJournal.Writer
         do {
@@ -607,7 +648,16 @@ enum ExportWorker {
                     reporter.advance()
                     break
                 }
+                guard let key = try? XMPExactFileSystemPath(url: file.target).parent.bytes,
+                      let directory = boundDirectories[key] else {
+                    failed = true
+                    failureMessage = DurableFileIO.DestinationChanged().localizedDescription
+                    touchedForItem.append(touched)
+                    reporter.advance()
+                    break
+                }
                 do {
+                    try directory.binding.requireCurrentPath()
                     try writer.mark(.started, fileAt: fileIndex)
                 } catch {
                     journalFailure = true
@@ -621,11 +671,7 @@ enum ExportWorker {
                     do {
                         if let preparedContents = file.preparedContents {
                             try writer.requireUnchangedSource(at: fileIndex)
-                            try DurableFileIO.writeNewFile(
-                                preparedContents,
-                                to: temporary,
-                                fullSync: true
-                            )
+                            try directory.write(preparedContents, to: temporary)
                         } else {
                             try copySourceWithReconnectRetry(
                                 writer: writer,
@@ -633,7 +679,7 @@ enum ExportWorker {
                                 source: file.source,
                                 temporary: temporary,
                                 isCancelled: isCancelled,
-                                fileCopier: fileCopier
+                                fileCopier: protectedCopier
                             )
                         }
                         touched.location = .temporary(temporary)
@@ -679,7 +725,11 @@ enum ExportWorker {
                         if isUnavailableSourceError(error) {
                             sourceUnavailable = true
                         }
-                        if case .none = touched.location,
+                        if (try? directory.binding.requireCurrentPath()) == nil {
+                            // A pathname can no longer identify our created file.
+                            // Preserve the record; never adopt a replacement.
+                            touched.location = .ambiguous
+                        } else if case .none = touched.location,
                            pathEntryExists(temporary) {
                             // `copyItem` may leave a partial regular file when
                             // it throws. Record that exact inode before doing
@@ -750,10 +800,7 @@ enum ExportWorker {
                             at: temporary,
                             includeStatusChange: false
                         )
-                        try atomicExclusiveRename(
-                            from: temporary,
-                            to: file.target
-                        )
+                        try directory.publish(from: temporary, to: file.target)
                         touched.location = .destination
                         try DurableFileIO.syncRenameDirectories(
                             from: temporary,
@@ -911,6 +958,7 @@ enum ExportWorker {
         to destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
         preparedPlan: Plan? = nil,
+        destinationBinding: DurableFileIO.DirectoryBinding? = nil,
         journalDirectory: URL? = nil,
         journalKind: FileOperationJournal.Kind = .exportMove,
         directorySyncPolicy: DurableFileIO.DirectorySyncPolicy = .required,
@@ -970,7 +1018,8 @@ enum ExportWorker {
                     for: items,
                     in: destination,
                     xmpPlan: xmpPlan,
-                    mode: .move
+                    mode: .move,
+                    destinationBinding: destinationBinding
                 )
         } catch {
             return MoveResult(
@@ -1017,6 +1066,7 @@ enum ExportWorker {
         }
         let writer: FileOperationJournal.Writer
         do {
+            for binding in plan.destinationBindings { try binding.requireCurrentPath() }
             writer = try FileOperationJournal.start(
                 kind: journalKind,
                 seeds: plan.items.flatMap { item in

@@ -10,12 +10,12 @@ retained independently under `Prototypes/XMPBridgeProof`.
 | Component | Repository | Pinned revision | License |
 |---|---|---|---|
 | Adobe XMP Toolkit SDK / XMPCore | `https://github.com/adobe/XMP-Toolkit-SDK` | `7093513bd3caaad29da01db0f275d88a39d6bcc2` | BSD 3-Clause |
-| Expat 2.5.0 | `https://github.com/libexpat/libexpat` | `654d2de0da85662fcc7644a7acd7c2dd2cfb21f0` | MIT |
+| Expat 2.8.5 | `https://github.com/libexpat/libexpat` | `4b3f0b06f39fb5529cead381694f8929901bc273` | MIT |
 
 The Adobe revision was the `main` tip reviewed on 2026-08-05. Its last commit
-was dated 2025-11-03. Adobe's checkout declares Expat 2.5.0 as XMPCore's XML
-parser dependency; the Expat revision above is the commit referenced by the
-`R_2_5_0` tag.
+was dated 2025-11-03. Adobe's unchanged checkout declares Expat 2.5.0, but Louppe updates that
+parser independently to the security-patched `R_2_8_5` release. Its checksum
+and Louppe's bounded-tree adapter changes are recorded in the vendor README.
 
 The complete license texts are retained in
 `ThirdPartyLicenses/XMPCore-BSD-3-Clause.txt` and
@@ -65,7 +65,8 @@ sentinel foreign values, applies a typed Louppe rating/color/decision update,
 reparses the result, verifies the four owned properties, and then repeats the
 merge against its own output. The malformed fixture must fail.
 
-Run it with exact local checkouts:
+Run `./Scripts/run_xmp_bridge_proof.sh` to check the production vendored sources.
+Alternatively, run it with exact local checkouts:
 
 ```sh
 ./Scripts/run_xmp_bridge_proof.sh \
@@ -73,7 +74,7 @@ Run it with exact local checkouts:
   /path/to/libexpat
 ```
 
-The script refuses different revisions. It uses the selected current Apple
+When explicit checkouts are supplied, the script refuses different revisions. It uses the selected current Apple
 toolchain directly, preferring the current full-Xcode SDK when it is installed,
 and retains its temporary build folder so the resulting objects and executable
 can be inspected.

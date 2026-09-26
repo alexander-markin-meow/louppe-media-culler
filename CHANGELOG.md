@@ -7,6 +7,17 @@ release bundle.
 
 ## 1.9.0 (11) — 2026-09-26
 
+- Removed the explanatory text below the Info panel's star rating.
+
+- Added read-only serif text previews for TXT, Markdown, XML, and common text
+  formats, with basic Markdown formatting and clickable web/email links.
+
+- Updated Sparkle to 2.10.0 and Expat to 2.8.5 with current security fixes.
+- Made unusually complex XMP sidecars fail gracefully while keeping originals
+  and unrelated metadata intact; affected media can still export without XMP.
+- Bound Copy writes to the chosen folder so replacing its path cannot redirect
+  exported photos; a changed destination can be selected again and retried.
+
 - Updated the About description to say “for creators.”
 - Added a working Help window, searchable shortcuts, and dismissible review tips.
 - Combined filter information, save feedback, and review completion into one

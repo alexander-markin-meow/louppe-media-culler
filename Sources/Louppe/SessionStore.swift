@@ -1471,7 +1471,7 @@ final class SessionStore: ObservableObject {
         videoCodecCounts = videoCodecs
         subfolderCounts = subfolders
         availableTypes = types.keys.sorted()
-        availableMediaKinds = [.photo, .video, .audio].filter {
+        availableMediaKinds = [.photo, .video, .audio, .text].filter {
             mediaKinds[$0] != nil
         }
         availableCameras = cameras.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -1726,7 +1726,7 @@ final class SessionStore: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose the media folder with photos, videos, or audio to review (an SD card's DCIM folder works too)."
+        panel.message = "Choose the media folder with photos, videos, audio, or text files to review (an SD card's DCIM folder works too)."
         panel.prompt = "Open Folder"
         if panel.runModal() == .OK, let url = panel.url {
             openFolder(url)

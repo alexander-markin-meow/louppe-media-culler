@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly expected_xmp_revision="7093513bd3caaad29da01db0f275d88a39d6bcc2"
-readonly expected_expat_revision="654d2de0da85662fcc7644a7acd7c2dd2cfb21f0"
+readonly expected_expat_revision="4b3f0b06f39fb5529cead381694f8929901bc273"
 
 readonly script_directory="${0:A:h}"
 readonly repository_root="${script_directory:h}"
@@ -15,14 +15,19 @@ else
     readonly macos_sdk="$(xcrun --sdk macosx --show-sdk-path)"
 fi
 
-if (( $# != 2 )); then
-    print -u2 "Usage: $0 /path/to/XMP-Toolkit-SDK /path/to/libexpat"
+if (( $# != 0 && $# != 2 )); then
+    print -u2 "Usage: $0 [ /path/to/XMP-Toolkit-SDK /path/to/libexpat ]"
     print -u2 "The checkouts must match the revisions recorded in Docs/XMP_TOOLKIT_INTEGRATION.md."
     exit 64
 fi
 
-readonly xmp_toolkit_directory="${1:A}"
-readonly expat_checkout_directory="${2:A}"
+if (( $# == 0 )); then
+    readonly xmp_toolkit_directory="${repository_root}/Sources/XMPBridge/Vendor/XMPToolkit"
+    readonly expat_checkout_directory="${repository_root}/Sources/XMPBridge/Vendor/Expat"
+else
+    readonly xmp_toolkit_directory="${1:A}"
+    readonly expat_checkout_directory="${2:A}"
+fi
 
 if [[ ! -d "${xmp_toolkit_directory}/XMPCore/source" || ! -d "${xmp_toolkit_directory}/public/include" ]]; then
     print -u2 "The first argument is not an Adobe XMP Toolkit SDK checkout."
@@ -37,6 +42,7 @@ if [[ ! -d "${macos_sdk}" ]]; then
     exit 69
 fi
 
+if (( $# == 2 )); then
 readonly actual_xmp_revision="$(git -C "${xmp_toolkit_directory}" rev-parse HEAD)"
 readonly actual_expat_revision="$(git -C "${expat_checkout_directory}" rev-parse HEAD)"
 
@@ -47,6 +53,7 @@ fi
 if [[ "${actual_expat_revision}" != "${expected_expat_revision}" ]]; then
     print -u2 "Expat revision mismatch: expected ${expected_expat_revision}, got ${actual_expat_revision}."
     exit 65
+fi
 fi
 
 readonly proof_build_directory="$(mktemp -d /private/tmp/louppe-xmp-bridge-proof.XXXXXX)"
@@ -68,6 +75,7 @@ readonly -a common_defines=(
     -DBanAllEntityUsage=1
 )
 readonly -a common_includes=(
+    -I"${repository_root}/Sources/XMPBridge/Vendor/XMPToolkit/XMPCore/resource/mac"
     -I"${proof_build_directory}/include-shim"
     -I"${xmp_toolkit_directory}"
     -I"${xmp_toolkit_directory}/public/include"
@@ -102,6 +110,7 @@ readonly -a expat_sources=(
     "${expat_checkout_directory}/expat/lib/xmlparse.c"
     "${expat_checkout_directory}/expat/lib/xmlrole.c"
     "${expat_checkout_directory}/expat/lib/xmltok.c"
+    "${expat_checkout_directory}/expat/lib/random_arc4random_buf.c"
 )
 
 integer object_index=0

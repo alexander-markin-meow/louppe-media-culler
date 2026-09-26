@@ -738,6 +738,7 @@ struct ExportView: View {
                 Text(MediaKind.photo.label).tag(MediaKind.photo)
                 Text(MediaKind.video.label).tag(MediaKind.video)
                 Text(MediaKind.audio.label).tag(MediaKind.audio)
+                Text(MediaKind.text.label).tag(MediaKind.text)
             }
             .labelsHidden()
         }

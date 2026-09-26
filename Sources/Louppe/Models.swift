@@ -40,12 +40,14 @@ enum MediaKind: String, Hashable, Sendable {
     case photo
     case video
     case audio
+    case text
 
     var label: String {
         switch self {
         case .photo: return "Photos"
         case .video: return "Videos"
         case .audio: return "Audio"
+        case .text: return "Text"
         }
     }
 
@@ -54,6 +56,7 @@ enum MediaKind: String, Hashable, Sendable {
         case .photo: return "photo"
         case .video: return "video"
         case .audio: return "audio"
+        case .text: return "text file"
         }
     }
 
@@ -62,6 +65,7 @@ enum MediaKind: String, Hashable, Sendable {
         case .photo: return 0
         case .video: return 1
         case .audio: return 2
+        case .text: return 3
         }
     }
 }
@@ -818,10 +822,11 @@ struct PhotoItem: Identifiable, Sendable {
 
     var isVideo: Bool { mediaKind == .video }
     var isAudio: Bool { mediaKind == .audio }
+    var isText: Bool { mediaKind == .text }
 
     var isPlayableMedia: Bool {
         switch mediaKind {
-        case .photo: return false
+        case .photo, .text: return false
         case .video: return videoIsPlayable
         case .audio: return audioIsPlayable
         }
@@ -831,13 +836,14 @@ struct PhotoItem: Identifiable, Sendable {
         switch mediaKind {
         case .photo: return isSupported
         case .video: return videoIsPlayable
-        case .audio: return false
+        case .audio, .text: return false
         }
     }
 
     /// Whether we can actually decode and preview this file. Unsupported visual
     /// files still appear in the session, just as a placeholder tile.
     var isSupported: Bool {
+        if isText { return true }
         if isVideo || isAudio { return isPlayableMedia }
         return FolderScanner.supportedExtensions.contains(primaryURL.pathExtension.lowercased())
     }
@@ -922,6 +928,7 @@ struct PhotoSelectionSummary: Equatable {
     let photoCount: Int
     let videoCount: Int
     let audioCount: Int
+    let textCount: Int
     let cameras: [String]
     let lenses: [String]
     let captureDayRange: ClosedRange<Date>?
@@ -935,6 +942,7 @@ struct PhotoSelectionSummary: Equatable {
         photoCount = items.count { $0.mediaKind == .photo }
         videoCount = items.count { $0.mediaKind == .video }
         audioCount = items.count { $0.mediaKind == .audio }
+        textCount = items.count { $0.mediaKind == .text }
         cameras = Self.distinctMetadataLabels(items.map(\.cameraModel))
         lenses = Self.distinctMetadataLabels(items.map(\.lensModel))
 
@@ -1170,7 +1178,7 @@ struct PhotoSort: Equatable, Sendable {
             switch self {
             case .captureDate: return "Newest first"
             case .name, .subfolder, .fileType, .camera, .lens, .videoCodec: return "Z–A"
-            case .mediaKind: return "Audio first"
+            case .mediaKind: return "Text first"
             case .aperture: return "Narrowest first"
             case .shutterSpeed: return "Slowest first"
             case .iso: return "Highest first"

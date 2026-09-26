@@ -152,7 +152,7 @@ final class ImagePipeline: @unchecked Sendable {
     }
 
     func thumbnail(for item: PhotoItem) async -> NSImage? {
-        guard !item.isAudio else { return nil }
+        guard !item.isAudio && !item.isText else { return nil }
         let key = Self.cacheKey(for: item)
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
         return await decodeOnce(
@@ -166,6 +166,7 @@ final class ImagePipeline: @unchecked Sendable {
     }
 
     func fullImage(for item: PhotoItem) async -> NSImage? {
+        guard !item.isAudio && !item.isText else { return nil }
         let key = Self.cacheKey(for: item)
         if let cached = fullCache.object(forKey: key as NSString) { return cached }
         return await fullImage(
@@ -194,7 +195,7 @@ final class ImagePipeline: @unchecked Sendable {
 
     /// Warm the full-size cache for the next few photos so navigation feels instant.
     func prefetchFullImages(items: [PhotoItem]) {
-        for item in items {
+        for item in items where !item.isText {
             let key = Self.cacheKey(for: item)
             if fullCache.object(forKey: key as NSString) != nil { continue }
             Task.detached(priority: .utility) { [weak self] in
@@ -260,7 +261,7 @@ final class ImagePipeline: @unchecked Sendable {
     // MARK: - Decoding
 
     private func loadThumbnailSync(item: PhotoItem, key: String) -> NSImage? {
-        guard !item.isAudio else { return nil }
+        guard !item.isAudio && !item.isText else { return nil }
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
 
         // Try the on-disk thumbnail cache first.

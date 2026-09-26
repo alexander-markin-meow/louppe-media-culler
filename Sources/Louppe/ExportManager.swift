@@ -343,9 +343,9 @@ final class ExportManager: ObservableObject {
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         retainDestinationAccess(destination)
 
-        let validatedDestination: URL
+        let validatedDestination: ExportDestinationValidator.ValidatedDestination
         do {
-            validatedDestination = try ExportDestinationValidator.validate(
+            validatedDestination = try ExportDestinationValidator.validateBound(
                 sourceFolder: sourceFolder,
                 destination: destination,
                 items: selected,
@@ -377,7 +377,8 @@ final class ExportManager: ObservableObject {
                 selected: selected,
                 mode: mode,
                 xmpPlan: nil,
-                to: validatedDestination,
+                to: validatedDestination.url,
+                destinationBinding: validatedDestination.binding,
                 onOperationWillStart: onOperationWillStart,
                 onOperationDidFinish: onOperationDidFinish
             )
@@ -393,7 +394,7 @@ final class ExportManager: ObservableObject {
         visibleDecisionKeywords: Bool,
         allowExternalLabelReplacement: Bool,
         sourceFolder: URL?,
-        to destination: URL,
+        to destination: ExportDestinationValidator.ValidatedDestination,
         onOperationWillStart: @escaping @MainActor (ExportMode) -> Bool,
         onOperationDidFinish: @escaping @MainActor (
             ExportMode,
@@ -431,9 +432,10 @@ final class ExportManager: ObservableObject {
                     xmpPlan,
                     try ExportWorker.makePlan(
                         for: selected,
-                        in: destination,
+                        in: destination.url,
                         xmpPlan: xmpPlan,
-                        mode: mode
+                        mode: mode,
+                        destinationBinding: destination.binding
                     )
                 )
             } catch is CancellationError {
@@ -455,7 +457,7 @@ final class ExportManager: ObservableObject {
                     selected: selected,
                     sourceFolder: sourceFolder,
                     mode: mode,
-                    destination: destination,
+                    destination: destination.url,
                     plan: plan,
                     operationPlan: operationPlan,
                     xmpProfile: xmpProfile,
@@ -467,7 +469,7 @@ final class ExportManager: ObservableObject {
                 )
                 self.state = .awaitingXMPConfirmation(XMPConfirmation(
                     mode: mode,
-                    destination: destination,
+                    destination: destination.url,
                     plan: plan
                 ))
             case .cancelled:
@@ -517,9 +519,9 @@ final class ExportManager: ObservableObject {
             )
             return
         }
-        let destination: URL
+        let destination: ExportDestinationValidator.ValidatedDestination
         do {
-            destination = try ExportDestinationValidator.validate(
+            destination = try ExportDestinationValidator.validateBound(
                 sourceFolder: pendingExport.sourceFolder,
                 destination: pendingExport.destination,
                 items: selected,
@@ -571,6 +573,7 @@ final class ExportManager: ObservableObject {
         xmpPlan: XMPExportPreparedPlan?,
         preparedPlan: ExportWorker.Plan? = nil,
         to destination: URL,
+        destinationBinding: DurableFileIO.DirectoryBinding? = nil,
         onOperationWillStart: @MainActor (_ mode: ExportMode) -> Bool,
         onOperationDidFinish: @escaping @MainActor (
             _ mode: ExportMode,
@@ -621,6 +624,7 @@ final class ExportManager: ObservableObject {
                     to: destination,
                     xmpPlan: xmpPlan,
                     preparedPlan: preparedPlan,
+                    destinationBinding: destinationBinding,
                     isCancelled: { cancelFlag?.isSet ?? false },
                     cancellationReason: { cancelFlag?.reason },
                     progress: { _, _ in },
@@ -632,6 +636,7 @@ final class ExportManager: ObservableObject {
                 to: destination,
                 xmpPlan: xmpPlan,
                 preparedPlan: preparedPlan,
+                destinationBinding: destinationBinding,
                 progress: { _, _ in },
                 byteProgress: byteProgress
             ))

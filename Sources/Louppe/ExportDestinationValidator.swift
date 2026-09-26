@@ -58,13 +58,26 @@ enum ExportDestinationValidator {
         let items: [PhotoItem]
     }
 
+    struct ValidatedDestination: Sendable {
+        let url: URL
+        let binding: DurableFileIO.DirectoryBinding
+    }
+
     @discardableResult
     static func validate(
+        sourceFolder: URL?, destination: URL, items: [PhotoItem], mode: ExportMode
+    ) throws -> URL {
+        try validateBound(sourceFolder: sourceFolder, destination: destination,
+            items: items, mode: mode).url
+    }
+
+    @discardableResult
+    static func validateBound(
         sourceFolder: URL?,
         destination: URL,
         items: [PhotoItem],
         mode: ExportMode
-    ) throws -> URL {
+    ) throws -> ValidatedDestination {
         guard let sourceFolder else {
             throw ValidationError.missingSourceFolder
         }
@@ -87,6 +100,7 @@ enum ExportDestinationValidator {
               ) else {
             throw ValidationError.notDirectory
         }
+        let binding = try DurableFileIO.DirectoryBinding(url: validatedDestination)
         if destinationPath == sourcePath
             || directoriesReferToSameEntry(
                 resolvedSource,
@@ -142,7 +156,8 @@ enum ExportDestinationValidator {
                 available: available
             )
         }
-        return validatedDestination
+        try binding.requireCurrentPath()
+        return ValidatedDestination(url: validatedDestination, binding: binding)
     }
 
     /// Validates every route before a multi-destination journal can be
@@ -152,19 +167,19 @@ enum ExportDestinationValidator {
     static func validateMultiple(
         sourceFolder: URL?,
         requests: [MultiDestinationRequest]
-    ) throws -> [URL] {
-        var validated: [URL] = []
+    ) throws -> [ValidatedDestination] {
+        var validated: [ValidatedDestination] = []
         validated.reserveCapacity(requests.count)
         for request in requests {
-            let destination = try validate(
+            let destination = try validateBound(
                 sourceFolder: sourceFolder,
                 destination: request.destination,
                 items: request.items,
                 mode: .copy
             )
             if validated.contains(where: {
-                FileOperationJournal.exactPathsEqual($0, destination)
-                    || directoriesReferToSameEntry($0, destination)
+                FileOperationJournal.exactPathsEqual($0.url, destination.url)
+                    || directoriesReferToSameEntry($0.url, destination.url)
             }) {
                 throw ValidationError.duplicateMultiDestination
             }
@@ -172,7 +187,7 @@ enum ExportDestinationValidator {
         }
         try validateCombinedCopyCapacity(
             requests: requests,
-            destinations: validated
+            destinations: validated.map(\.url)
         )
         return validated
     }

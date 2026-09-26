@@ -191,6 +191,17 @@ The fan-out is bounded: only realized rows and cells subscribe, their bodies
 are a bounds check plus cache-hit lookups, and multiple publishes in one turn
 coalesce into a single update transaction.
 
+## Text previews
+
+`TextPreviewLoader` serializes document reads and Markdown parsing off-main.
+Only the current Gallery document requests text after a 40 ms navigation dwell;
+Browser/Grid use a document glyph without loading file contents. Reads are
+bounded to 1 MiB, reject non-regular files, and verify scan identity before and
+after I/O. UTF-8 and BOM-marked UTF-16/32 are decoded explicitly. The reader
+checks cancellation and its view is keyed to content revision, so a late load
+cannot replace a newer selection. No text cache or remote content fetch exists.
+Native text layout retains only the current bounded document.
+
 ## Image cache budgets
 
 - Thumbnails: at most 1,200 objects and 256 MiB decoded cost.
@@ -753,9 +764,16 @@ folder and its descendants after resolving symlinks, checks destination write
 permission, and checks available capacity for Copy. Same-volume Move is a
 rename and does not need the full media size free. Validation returns the
 resolved directory that the worker actually receives, so retargeting the
-folder-picker symlink cannot redirect a later export. The remaining hardening
-step is descriptor-relative source/destination I/O, which would also close the
-smaller race where the resolved directory itself is replaced after preflight.
+folder-picker symlink cannot redirect a later export. Preflight also captures the resolved folder's device/inode/birth identity.
+Copy carries that identity through ordinary, XMP and multi-route plans, opens
+the matching directory before journal activation, and creates media/generated
+XMP temporaries with `openat`. Apple's `fcopyfile` preserves media metadata
+through file descriptors; publication uses `renameatx_np` within that same
+held directory. A path replacement cannot redirect these writes. A change
+before starting returns a retryable error without a pending journal; a change
+after files exist preserves recovery evidence, with the existing explicit
+Keep Files As They Are escape. Move retains its existing journaled rename
+implementation and gains the same pre-start directory-identity check.
 The important-usage capacity API's transient zero is treated as ambiguous and
 cross-checked with `statfs`, preventing File Provider-managed destinations from
 being falsely reported as full.

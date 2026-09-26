@@ -621,7 +621,7 @@ struct MetadataPanel: View {
     }
 
     private func selectionTitle(for summary: PhotoSelectionSummary) -> String {
-        let itemLabel = summary.videoCount == 0 && summary.audioCount == 0
+        let itemLabel = summary.photoCount == summary.count
             ? "photos"
             : "media items"
         return "\(summary.count) \(itemLabel) selected · \(summary.fileCount) files"
@@ -654,7 +654,7 @@ struct MetadataPanel: View {
             }
         }
         if summary.unknownDateCount > 0 {
-            let itemLabel = summary.videoCount == 0 && summary.audioCount == 0
+            let itemLabel = summary.photoCount == summary.count
                 ? "photo"
                 : "media item"
             let label = summary.unknownDateCount == 1

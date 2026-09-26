@@ -11,6 +11,141 @@ private func louppeFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 /// JSON, but it does not express the required file-sync -> rename ->
 /// directory-sync ordering for sudden power loss.
 enum DurableFileIO {
+    /// Stable destination selected by the user. Directory timestamps are not
+    /// identity: ordinary file creation changes them during every export.
+    struct DirectoryBinding: Equatable, Sendable {
+        let url: URL
+        let device: dev_t
+        let inode: ino_t
+        let birthSeconds: Int
+        let birthNanoseconds: Int
+
+        init(url: URL) throws {
+            let descriptor = try openDescriptor(url,
+                flags: O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW,
+                operation: "open export folder")
+            defer { Darwin.close(descriptor) }
+            var status = stat()
+            guard fstat(descriptor, &status) == 0 else {
+                throw POSIXError(.EIO)
+            }
+            self.url = url
+            device = status.st_dev
+            inode = status.st_ino
+            birthSeconds = status.st_birthtimespec.tv_sec
+            birthNanoseconds = status.st_birthtimespec.tv_nsec
+        }
+
+        fileprivate func matches(_ status: stat) -> Bool {
+            status.st_mode & S_IFMT == S_IFDIR
+                && status.st_dev == device && status.st_ino == inode
+                && status.st_birthtimespec.tv_sec == birthSeconds
+                && status.st_birthtimespec.tv_nsec == birthNanoseconds
+        }
+
+        func requireCurrentPath() throws {
+            var status = stat()
+            let result = url.withUnsafeFileSystemRepresentation {
+                $0.map { lstat($0, &status) } ?? -1
+            }
+            guard result == 0, matches(status) else {
+                throw DestinationChanged()
+            }
+        }
+    }
+
+    struct DestinationChanged: LocalizedError {
+        var errorDescription: String? {
+            "The destination folder changed or disconnected. Choose the folder again and retry. Your originals are unchanged."
+        }
+    }
+
+    /// Keeps writes attached to the selected directory even if another process
+    /// replaces a path component after our check. No polling or global lock.
+    final class BoundDirectory: @unchecked Sendable {
+        let binding: DirectoryBinding
+        private let descriptor: Int32
+
+        init(_ binding: DirectoryBinding) throws {
+            self.binding = binding
+            descriptor = try openDescriptor(binding.url,
+                flags: O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW,
+                operation: "open export folder")
+            var status = stat()
+            guard fstat(descriptor, &status) == 0, binding.matches(status) else {
+                Darwin.close(descriptor)
+                throw DestinationChanged()
+            }
+        }
+
+        deinit { Darwin.close(descriptor) }
+
+        private func withName<T>(_ url: URL, _ body: (UnsafePointer<CChar>) throws -> T) throws -> T {
+            let path = try XMPExactFileSystemPath(url: url)
+            guard path.parent.bytes == FileOperationJournal.exactPathBytes(for: binding.url) else {
+                throw DestinationChanged()
+            }
+            let name = path.lastComponentBytes
+            guard !name.contains(0), !name.contains(UInt8(ascii: "/")),
+                  name != Data(".".utf8), name != Data("..".utf8) else {
+                throw DestinationChanged()
+            }
+            return try (Array(name) + [0]).withUnsafeBytes {
+                try body($0.baseAddress!.assumingMemoryBound(to: CChar.self))
+            }
+        }
+
+        private func create(_ url: URL) throws -> Int32 {
+            try binding.requireCurrentPath()
+            let fd = try withName(url) {
+                openat(descriptor, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            }
+            guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return fd
+        }
+
+        func copy(from source: URL, to temporary: URL,
+                  afterDestinationOpened: () -> Void = {}) throws {
+            let sourceFD = try openDescriptor(source,
+                flags: O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC,
+                operation: "open source for copy")
+            defer { Darwin.close(sourceFD) }
+            try requireDescriptorType(sourceFD, type: mode_t(S_IFREG),
+                path: source.path, operation: "verify copy source")
+            let targetFD = try create(temporary)
+            defer { Darwin.close(targetFD) }
+            afterDestinationOpened()
+            // Apple's descriptor copy preserves file metadata and resource
+            // forks while never resolving the destination path again.
+            guard fcopyfile(sourceFD, targetFD, nil, copyfile_flags_t(COPYFILE_ALL)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            try syncDescriptor(targetFD, path: temporary.path, fullSync: true)
+            try binding.requireCurrentPath()
+        }
+
+        func write(_ data: Data, to temporary: URL) throws {
+            let fd = try create(temporary)
+            defer { Darwin.close(fd) }
+            try writeAll(data, descriptor: fd, path: temporary.path)
+            try syncDescriptor(fd, path: temporary.path, fullSync: true)
+            try binding.requireCurrentPath()
+        }
+
+        func publish(from temporary: URL, to target: URL) throws {
+            try binding.requireCurrentPath()
+            let result = try withName(temporary) { sourceName in
+                try withName(target) { targetName in
+                    renameatx_np(descriptor, sourceName, descriptor, targetName, UInt32(RENAME_EXCL))
+                }
+            }
+            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            try syncDescriptor(descriptor, path: binding.url.path, fullSync: true)
+            try binding.requireCurrentPath()
+        }
+    }
+
+
     /// Some removable filesystems implement atomic renames but reject fsync
     /// on directory descriptors. Source Organization may opt into the weaker
     /// boundary only after identifying that exact filesystem and warning the

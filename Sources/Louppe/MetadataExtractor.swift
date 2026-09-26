@@ -49,6 +49,13 @@ enum MetadataExtractor {
 #if DEBUG
         MetadataExtractorTestProbe.shared.record(item.contentRevision)
 #endif
+        if item.isText {
+            return [
+                MetadataField(id: "Filename", label: "Filename", value: item.displayName),
+                MetadataField(id: "Format", label: "Format", value: item.fileTypeLabel),
+                MetadataField(id: "Size", label: "Size", value: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file)),
+            ]
+        }
         if item.isVideo { return videoFields(for: item) }
         if item.isAudio { return audioFields(for: item) }
         var fields: [MetadataField] = []

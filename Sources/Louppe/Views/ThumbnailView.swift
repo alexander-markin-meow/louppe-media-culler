@@ -56,7 +56,17 @@ struct ThumbnailView: View {
             : ImagePipeline.shared.cachedThumbnail(for: item)
         ZStack {
             Group {
-                if item.isAudio, item.audioIsPlayable {
+                if item.isText {
+                    VStack(spacing: 8) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 28, weight: .light))
+                        Text(item.fileTypeLabel)
+                            .font(.system(size: 14, design: .serif))
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.appBackground)
+                } else if item.isAudio, item.audioIsPlayable {
                     AudioThumbnail(item: item)
                 } else if !item.isSupported {
                     UnsupportedThumbnail(item: item)

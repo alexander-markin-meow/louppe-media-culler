@@ -14,8 +14,8 @@ let package = Package(
         // source-control checkout (and therefore never needs GitHub credentials).
         .binaryTarget(
             name: "Sparkle",
-            url: "https://github.com/sparkle-project/Sparkle/releases/download/2.9.4/Sparkle-for-Swift-Package-Manager.zip",
-            checksum: "cb6fdbdc8884f15d62a616e79face92b08322410fd2d425edc6596ccbf4ba3b0"
+            url: "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-for-Swift-Package-Manager.zip",
+            checksum: "17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959"
         ),
         .target(
             name: "XMPBridge",
@@ -25,6 +25,7 @@ let package = Package(
                 "Vendor/Expat/expat/lib/xmlparse.c",
                 "Vendor/Expat/expat/lib/xmlrole.c",
                 "Vendor/Expat/expat/lib/xmltok.c",
+                "Vendor/Expat/expat/lib/random_arc4random_buf.c",
                 "Vendor/XMPToolkit/XMPCore/source/WXMPIterator.cpp",
                 "Vendor/XMPToolkit/XMPCore/source/WXMPMeta.cpp",
                 "Vendor/XMPToolkit/XMPCore/source/WXMPUtils.cpp",

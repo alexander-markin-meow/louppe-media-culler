@@ -26,6 +26,12 @@ typedef struct XML_ParserStruct *XML_Parser;
 class ExpatAdapter : public XMLParserAdapter {
 public:
 
+	// Louppe: bound the tree before allocating nodes. Counters belong to one
+	// parser, covering streamed input and every source encoding equally.
+	size_t louppeNodeCount = 0;
+	size_t louppeTextBytes = 0;
+	size_t louppeNamespaceCount = 0;
+	bool louppeLimitExceeded = false;
 	XML_Parser parser;
 	XMP_NamespaceTable * registeredNamespaces;
 	

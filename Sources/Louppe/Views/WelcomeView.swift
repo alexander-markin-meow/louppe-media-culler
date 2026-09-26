@@ -211,7 +211,7 @@ struct WelcomeView: View {
                     atPath: url.path,
                     isDirectory: &isDirectory
                 ), isDirectory.boolValue else {
-                    folderDropError = "Drop a folder containing photos, videos, or audio, not an individual file."
+                    folderDropError = "Drop a folder containing photos, videos, audio, or text files, not an individual file."
                     return
                 }
 

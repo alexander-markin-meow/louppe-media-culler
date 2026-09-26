@@ -63,6 +63,16 @@ enum FolderScanner {
         "mp3", "oga", "ogg", "opus", "wav", "wma",
     ]
 
+    /// Explicit document formats; XMP remains a metadata companion, never a review item.
+    static let textExtensions: Set<String> = [
+        "txt", "text", "md", "markdown", "xml", "json", "csv", "tsv",
+        "log", "yaml", "yml",
+    ]
+
+    static func isTextExtension(_ ext: String) -> Bool {
+        textExtensions.contains(ext.lowercased())
+    }
+
     /// Visual files we recognise but can't preview — RAW formats ImageIO
     /// doesn't decode. They show up in the session as a grey
     /// "file isn't supported" placeholder instead of being silently dropped.
@@ -76,6 +86,7 @@ enum FolderScanner {
         .union(unsupportedVisualExtensions)
         .union(videoExtensions)
         .union(audioExtensions)
+        .union(textExtensions)
 
     static func isVideoExtension(_ ext: String) -> Bool {
         let normalized = ext.lowercased()
@@ -85,7 +96,8 @@ enum FolderScanner {
         // keep their common photo path to two in-memory Set lookups.
         if supportedExtensions.contains(normalized)
             || unsupportedVisualExtensions.contains(normalized)
-            || audioExtensions.contains(normalized) {
+            || audioExtensions.contains(normalized)
+            || textExtensions.contains(normalized) {
             return false
         }
         return UTType(filenameExtension: normalized)?.conforms(to: .movie) == true
@@ -96,7 +108,8 @@ enum FolderScanner {
         if audioExtensions.contains(normalized) { return true }
         if supportedExtensions.contains(normalized)
             || unsupportedVisualExtensions.contains(normalized)
-            || videoExtensions.contains(normalized) {
+            || videoExtensions.contains(normalized)
+            || textExtensions.contains(normalized) {
             return false
         }
         guard let type = UTType(filenameExtension: normalized) else {
@@ -388,7 +401,8 @@ enum FolderScanner {
             var images: [URL] = []
             for url in urls {
                 if isVideoExtension(url.pathExtension)
-                    || isAudioExtension(url.pathExtension) {
+                    || isAudioExtension(url.pathExtension)
+                    || isTextExtension(url.pathExtension) {
                     independentMedia.append(url)
                 } else {
                     images.append(url)
@@ -589,7 +603,8 @@ enum FolderScanner {
     ) -> PhotoFile {
         let isVideo = isVideoExtension(url.pathExtension)
         let isAudio = isAudioExtension(url.pathExtension)
-        let info = isVideo || isAudio
+        let isText = isTextExtension(url.pathExtension)
+        let info = isVideo || isAudio || isText
             ? MetadataExtractor.ScanInfo()
             : MetadataExtractor.scanInfo(for: url)
         let videoInfo = isVideo ? VideoMetadataExtractor.scanInfo(for: url) : nil
@@ -604,7 +619,7 @@ enum FolderScanner {
             aperture: info.aperture,
             shutterSpeed: info.shutterSpeed,
             iso: info.iso,
-            mediaKind: isVideo ? .video : (isAudio ? .audio : .photo),
+            mediaKind: isText ? .text : (isVideo ? .video : (isAudio ? .audio : .photo)),
             duration: videoInfo?.duration ?? audioInfo?.duration,
             videoDimensions: videoInfo?.dimensions,
             videoCodec: videoInfo?.codec,
@@ -683,7 +698,8 @@ enum FolderScanner {
         let metadata = file.metadataSnapshot
         let isVideo = isVideoExtension(file.url.pathExtension)
         let isAudio = isAudioExtension(file.url.pathExtension)
-        let info = isVideo || isAudio
+        let isText = isTextExtension(file.url.pathExtension)
+        let info = isVideo || isAudio || isText
             ? MetadataExtractor.ScanInfo()
             : MetadataExtractor.scanInfo(for: file.url)
         let videoInfo = isVideo
@@ -702,7 +718,7 @@ enum FolderScanner {
             aperture: info.aperture,
             shutterSpeed: info.shutterSpeed,
             iso: info.iso,
-            mediaKind: isVideo ? .video : (isAudio ? .audio : .photo),
+            mediaKind: isText ? .text : (isVideo ? .video : (isAudio ? .audio : .photo)),
             duration: videoInfo?.duration ?? audioInfo?.duration,
             videoDimensions: videoInfo?.dimensions,
             videoCodec: videoInfo?.codec,

@@ -3,7 +3,7 @@
 Website: [louppe.eu](https://louppe.eu)
 
 Louppe is a fast, keyboard-first, open-source media culler for macOS. Review
-photos, video, and audio; sort and organize your media; clean up unwanted
+photos, video, audio, and text; sort and organize your media; clean up unwanted
 files; and export what you want to keep.
 
 macOS 14 or newer on an Apple silicon Mac. The current download does not support Intel Macs.
@@ -90,7 +90,7 @@ backup to protect the session.
 ## Media and inspection
 
 Louppe supports common camera RAW, JPEG, TIFF, PNG, HEIC, WebP, AVIF, photo,
-video, and audio formats. Unsupported files still appear in the review so they
+video, audio, and text formats. Unsupported files still appear in the review so they
 can be rated and exported.
 
 Gallery includes a zoom slider and pinch-to-zoom, Fit, phone-sized preview,
@@ -98,6 +98,12 @@ true 100% zoom, video and audio
 playback, metadata, a histogram, clipping information, and optional quality
 cues. VoiceOver is supported, and the main review workflow can be completed
 with the keyboard.
+
+Text previews are read-only, selectable, and set in a serif font. TXT, TEXT,
+Markdown (MD/MARKDOWN), XML, JSON, CSV, TSV, LOG, YAML, and YML files appear
+alongside other media. Markdown displays headings, lists, bold, italic, and
+clickable web/email links; other formats display their original text. Previews
+support UTF-8 and BOM-marked UTF-16/32, up to 1 MiB per file.
 
 ## Keyboard shortcuts
 

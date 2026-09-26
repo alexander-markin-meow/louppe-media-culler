@@ -317,9 +317,10 @@ enum MultiDestinationExportPlanner {
             }
             let routePlan = try ExportWorker.makePlan(
                 for: selection.items,
-                in: destination,
+                in: destination.url,
                 xmpPlan: preparedXMPByRoute[selection.route.id],
-                mode: .copy
+                mode: .copy,
+                destinationBinding: destination.binding
             )
             combinedItems.append(contentsOf: routePlan.items)
             unplannedSidecarFamilyCount += routePlan.unplannedSidecarFamilyCount
@@ -335,7 +336,7 @@ enum MultiDestinationExportPlanner {
             }
             previews.append(.init(
                 route: selection.route,
-                destination: destination,
+                destination: destination.url,
                 itemCount: selection.items.count,
                 mediaFileCount: selection.items.reduce(0) { $0 + $1.allURLs.count },
                 files: files
@@ -365,7 +366,8 @@ enum MultiDestinationExportPlanner {
                 unmatchedNames: unmatchedNames,
                 workerPlan: ExportWorker.Plan(
                     items: combinedItems,
-                    unplannedSidecarFamilyCount: unplannedSidecarFamilyCount
+                    unplannedSidecarFamilyCount: unplannedSidecarFamilyCount,
+                    destinationBindings: validatedDestinations.map(\.binding)
                 ),
                 xmpPlan: combinedXMP
             ),

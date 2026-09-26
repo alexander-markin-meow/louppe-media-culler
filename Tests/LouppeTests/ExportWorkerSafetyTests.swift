@@ -4,6 +4,99 @@ import XCTest
 @testable import Louppe
 
 final class ExportWorkerSafetyTests: XCTestCase {
+    func testChangedDestinationBeforeCopyLeavesNoRecoveryBlockAndRetryWorks() throws {
+        for useSymlink in [false, true] {
+            let root = try makeTemporaryDirectory(named: "DestinationReplacement")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let sourceFolder = try makeDirectory(named: "Source", in: root)
+            let destination = try makeDirectory(named: "Destination", in: root)
+            let unapproved = try makeDirectory(named: "Unapproved", in: root)
+            let moved = root.appendingPathComponent("OriginalDestination")
+            let journals = root.appendingPathComponent("Journals")
+            let source = sourceFolder.appendingPathComponent("PHOTO.JPG")
+            let bytes = Data("original photo".utf8)
+            try bytes.write(to: source)
+            let item = makeItem(id: "PHOTO.JPG", primaryURL: source)
+            let validated = try ExportDestinationValidator.validateBound(
+                sourceFolder: sourceFolder, destination: destination, items: [item], mode: .copy)
+            let plan = try ExportWorker.makePlan(for: [item], in: validated.url,
+                destinationBinding: validated.binding)
+            try FileManager.default.moveItem(at: destination, to: moved)
+            if useSymlink {
+                try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: unapproved)
+            } else {
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+            }
+            // Also exercise the async gap between picker validation and planning.
+            XCTAssertThrowsError(try ExportWorker.makePlan(for: [item], in: validated.url,
+                destinationBinding: validated.binding))
+            let result = ExportWorker.copy([item], to: validated.url, preparedPlan: plan,
+                journalDirectory: journals, progress: { _, _ in })
+            XCTAssertEqual(result.copiedFiles, 0)
+            XCTAssertFalse(result.requiresRecovery)
+            XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: unapproved.path), [])
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+
+            let retryDestination = try ExportDestinationValidator.validateBound(
+                sourceFolder: sourceFolder, destination: destination, items: [item], mode: .copy)
+            let retry = ExportWorker.copy([item], to: retryDestination.url,
+                destinationBinding: retryDestination.binding, journalDirectory: journals, progress: { _, _ in })
+            XCTAssertEqual(retry.copiedFiles, 1)
+            XCTAssertFalse(retry.requiresRecovery)
+        }
+    }
+
+    func testDescriptorCopyCannotBeRedirectedAfterCreatingTemporary() throws {
+        let root = try makeTemporaryDirectory(named: "DescriptorCopyRace")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = try makeDirectory(named: "Destination", in: root)
+        let unapproved = try makeDirectory(named: "Unapproved", in: root)
+        let moved = root.appendingPathComponent("OriginalDestination")
+        let source = root.appendingPathComponent("PHOTO.JPG")
+        let bytes = Data("original photo".utf8)
+        try bytes.write(to: source)
+        let directory = try DurableFileIO.BoundDirectory(.init(url: destination))
+        XCTAssertThrowsError(try directory.copy(from: source,
+            to: destination.appendingPathComponent("partial"), afterDestinationOpened: {
+                try! FileManager.default.moveItem(at: destination, to: moved)
+                try! FileManager.default.createSymbolicLink(at: destination, withDestinationURL: unapproved)
+            }))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: unapproved.path), [])
+        XCTAssertEqual(try Data(contentsOf: moved.appendingPathComponent("partial")), bytes)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+
+    func testDestinationChangeAfterStagingCanBeAcknowledgedWithoutTouchingPhotos() throws {
+        let root = try makeTemporaryDirectory(named: "ChangedDestinationRecovery")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = try makeDirectory(named: "Destination", in: root)
+        let replacement = try makeDirectory(named: "Replacement", in: root)
+        let moved = root.appendingPathComponent("MovedDestination")
+        let journals = root.appendingPathComponent("Journals")
+        let source = root.appendingPathComponent("PHOTO.JPG")
+        let bytes = Data("original photo".utf8)
+        try bytes.write(to: source)
+        let item = makeItem(id: "PHOTO.JPG", primaryURL: source)
+        let result = ExportWorker.copy([item], to: destination, journalDirectory: journals,
+            afterStagedFile: { _ in
+                try! FileManager.default.moveItem(at: destination, to: moved)
+                try! FileManager.default.createSymbolicLink(at: destination, withDestinationURL: replacement)
+            }, progress: { _, _ in })
+        XCTAssertTrue(result.requiresRecovery)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: replacement.path), [])
+        let retained = try FileManager.default.contentsOfDirectory(at: moved, includingPropertiesForKeys: nil)
+        XCTAssertEqual(retained.count, 1)
+        let report = FileOperationJournal.keepFilesAsTheyAreAndForgetPendingOperations(directory: journals)
+        XCTAssertEqual(report.unresolvedOperations, 0)
+        XCTAssertFalse(FileOperationJournal.hasPendingOperations(directory: journals))
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(retained.first)), bytes)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        let retry = ExportWorker.copy([item], to: replacement, journalDirectory: journals, progress: { _, _ in })
+        XCTAssertEqual(retry.copiedFiles, 1)
+        XCTAssertFalse(retry.requiresRecovery)
+    }
+
     func testCopyReportsProgressByTransferredBytes() throws {
         let root = try makeTemporaryDirectory(named: "CopyByteProgress")
         defer { try? FileManager.default.removeItem(at: root) }

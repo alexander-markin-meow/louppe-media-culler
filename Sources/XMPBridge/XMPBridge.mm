@@ -497,6 +497,10 @@ LouppeXMPStatus parsePacket(
             errorMessage
         );
     }
+    if (inputLength > 64 * 1024 * 1024) {
+        return caughtFailure(LouppeXMPStatusParseFailed,
+            "The XMP sidecar exceeds the 64 MiB limit; it was left unchanged.", errorMessage);
+    }
     requireStrictParsing(packet);
     packet.ParseFromBuffer(
         reinterpret_cast<const char *>(inputBytes),

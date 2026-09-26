@@ -37,7 +37,10 @@ struct GalleryView: View {
                         Button("Clear Filters") { store.resetFilter() }
                     }
                 } else if let item = store.currentItem {
-                    if item.isVideo {
+                    if item.isText {
+                        TextPreviewView(item: item)
+                            .id(item.contentRevision)
+                    } else if item.isVideo {
                         GalleryVideoPlayerView(item: item, playback: store.videoPlayback)
                     } else if item.isAudio {
                         GalleryAudioPlayerView(item: item, playback: store.videoPlayback)

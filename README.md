@@ -8,6 +8,13 @@ files; and export what you want to keep.
 
 macOS 14 or newer on an Apple silicon Mac. The current download does not support Intel Macs.
 
+![Louppe Gallery with an apple-tree photograph, RAW+JPEG pairing, camera settings and histogram](Docs/Media/2026-09-26/gallery-info.png)
+
+*Gallery keeps the photo and its information together. Captures show the upcoming
+1.9 interface; the current published download is 1.8.*
+
+[Watch the captioned 25-second walkthrough](https://louppe.eu/#review-demo).
+
 ## Download
 
 Download **[Louppe.zip from the latest release](https://github.com/alexander-markin-meow/louppe-media-culler/releases/latest)**,
@@ -22,6 +29,10 @@ macOS may ask you to confirm its first launch.
 2. Review media in Gallery or Grid.
 3. Press **F** to mark an item Yes or **D** to mark it No.
 4. Filter, sort, select, clean up, organize, or export your media.
+
+![Louppe Grid comparing street scenes, architecture, reflections and still life, with a photo selected in purple](Docs/Media/2026-09-26/grid-overview.png)
+
+*Grid lets you compare nearby frames and select media for the next step.*
 
 The compact bottom panel shows active filters, review status, and saving.
 Use its zoom slider or pinch on a photo to adjust magnification, then pan with

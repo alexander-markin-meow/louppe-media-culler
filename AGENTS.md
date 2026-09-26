@@ -1,10 +1,11 @@
 # Louppe Media Culler — guidance for AI assistants
 
 Native macOS photo-culling app. Swift/SwiftUI, plain SwiftPM executable —
-**no Xcode project**. Apple Command Line Tools 26.6 are selected and are
-sufficient to build/package the app. The XCTest target requires full Xcode
-26.6 because the Command Line Tools installation does not include XCTest.
-Both toolchains currently expose Swift 6.3.3 and the macOS 26.5 SDK.
+**no Xcode project**. Use the installed full Xcode explicitly for builds,
+tests, and packaging: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+Verified on 2026-09-27 with Xcode 27.0 and the macOS 27.0 SDK. The separately
+selected Command Line Tools lack XCTest and their SwiftUI macro plugin failed;
+do not use an older SDK to work around that installation.
 
 The owner is a photographer, not a programmer: do the technical work for him,
 explain results in plain language, and always verify the app actually launches
@@ -130,11 +131,13 @@ session state and is passed to every view. Slow I/O stays off the main actor.
 ## Build & install
 
 ```sh
-./build_app.sh                          # release build → dist/Louppe.app
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  ./build_app.sh                        # release build → dist/Louppe.app
 cp -R dist/Louppe.app /Applications/    # install (remove old copy first)
 xattr -cr /Applications/Louppe.app      # copy can attach Finder metadata
 codesign --verify --deep --strict /Applications/Louppe.app
-swift build --disable-keychain          # quick debug check; public dependencies need no login
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  swift build --disable-keychain        # quick debug check; no dependency login
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   swift test --disable-keychain         # XCTest is supplied by full Xcode
 ```
@@ -170,7 +173,8 @@ Run the focused logic tests first, then verify by launching with a folder:
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   swift test --disable-keychain --filter HotkeyTests
-./Tests/run_performance_checks.sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  ./Tests/run_performance_checks.sh
 ```
 
 The complete `HotkeyTests` run is mandatory before **every** local app install,
@@ -214,3 +218,7 @@ without seeing the screen. Screen capture is NOT available for verification
   GitHub.
 - `dist/` and `.build/` are gitignored build products; `AppIcon/` holds the
   source glyph and the built `.icns` (both tracked).
+
+## Louppe project location
+
+Shared project layout and materials are documented in `../AGENTS.md` and `../README.md`. Use `/Users/alexander_markin/Documents/code/louppe/` for application work; personal notes and CAS logs stay in Obsidian.

@@ -84,11 +84,6 @@ struct WelcomeView: View {
                     )
             }
             .contentShape(RoundedRectangle(cornerRadius: 12))
-            .onDrop(
-                of: [UTType.fileURL.identifier],
-                isTargeted: $isFolderDropTarget,
-                perform: openDroppedFolder
-            )
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Open a media folder")
             .accessibilityHint("Choose a folder or drag a folder here to start reviewing it")
@@ -160,6 +155,14 @@ struct WelcomeView: View {
                 .padding(.top, 8)
             }
         }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onDrop(
+            of: [UTType.fileURL.identifier],
+            isTargeted: $isFolderDropTarget,
+            perform: openDroppedFolder
+        )
         .alert(
             "Open as a New Session?",
             isPresented: $isNewSessionConfirmationPresented
@@ -173,7 +176,6 @@ struct WelcomeView: View {
                 "This replaces the saved Louppe decisions for this folder and opens the current files unrated. Your photos and videos are not changed."
             )
         }
-        .padding(40)
         .toolbar { LaunchToolbarTitle() }
         .navigationTitle("")
     }

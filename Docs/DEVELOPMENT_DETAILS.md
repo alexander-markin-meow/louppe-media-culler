@@ -263,11 +263,15 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   the initial deferred lookup so fast lazy-grid updates cannot queue main-actor
   work ahead of the scrolling indicator.
 - `RootView` owns the persistent window's phase-aware content layout through
-  `WindowContentLayout`: Welcome/Scanning use `.fullSizeContentView`, while
-  Ready removes it so photos cannot scroll behind the liquid-glass toolbar.
-  This flag does not choose the window radius. Welcome and Scanning include a
-  real unified toolbar (`LaunchToolbarTitle`) so macOS 26 supplies its larger
+  `WindowContentLayout`: Welcome/Scanning use a compact launch size and
+  `.fullSizeContentView`, while Ready restores the session minimum and removes
+  full-size content so photos cannot scroll behind the liquid-glass toolbar.
+  These settings do not choose the window radius. Welcome and Scanning include
+  a real unified toolbar (`LaunchToolbarTitle`) so macOS 26 supplies its larger
   native toolbar-window corners; never fake them with a custom window mask.
+- `WelcomeView` owns one folder drop target across its entire content area;
+  the dashed chooser remains only the visual prompt. Keep dropped-item
+  validation and errors shared for every point in the window.
 - Thumbnails letterbox (`fit`) inside square tiles on purpose — fill-mode
   cropping both hid parts of the photo and let portrait images overflow
   their tiles.

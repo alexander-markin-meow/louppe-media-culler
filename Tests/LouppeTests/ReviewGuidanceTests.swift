@@ -78,6 +78,7 @@ final class ReviewGuidanceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecar.path))
         let initialSaveFinished = await store.waitForPersistenceIdleForTesting()
         XCTAssertTrue(initialSaveFinished)
+        XCTAssertEqual(store.sessionSaveStatus, "Saved")
 
         store.rate(.yes, at: 0)
         XCTAssertNotEqual(store.sessionSaveStatus, "Saved")

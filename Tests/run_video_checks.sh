@@ -9,6 +9,7 @@ swiftc \
     -sdk "$SDK" \
     -module-cache-path .build/video-checks/module-cache \
     -parse-as-library \
+    Sources/Louppe/XMP/XMPExactFileSystemPath.swift \
     Sources/Louppe/DurableFileIO.swift \
     Sources/Louppe/SourceOrganizationStorageSafety.swift \
     Sources/Louppe/FileOperationJournal.swift \

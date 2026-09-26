@@ -31,7 +31,10 @@ struct RootView: View {
         // Tint every standard control (buttons, links, pickers, toggles,
         // progress bars — including sheets and popovers) with the brand purple.
         .tint(Color.louppeAccent)
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(
+            minWidth: windowLayout.minimumContentSize.width,
+            minHeight: windowLayout.minimumContentSize.height
+        )
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if store.recoveryNeedsAttention {
@@ -67,18 +70,18 @@ struct RootView: View {
         } message: {
             Text(recoveryMessage)
         }
-        // The same NSWindow survives all three phases. Welcome/Scanning use
-        // full-size content; only the active session opts out so photos cannot
-        // scroll behind the glass toolbar. This controls layout, not rounding.
-        .background(WindowContentLayout(fullSizeContent: usesFullSizeWindowContent))
+        // The same NSWindow survives all three phases. Welcome/Scanning use a
+        // compact full-size-content layout; the active session expands and
+        // opts out so photos cannot scroll behind the glass toolbar.
+        .background(WindowContentLayout(layout: windowLayout))
     }
 
-    private var usesFullSizeWindowContent: Bool {
+    private var windowLayout: MainWindowLayout {
         switch store.phase {
         case .welcome, .scanning:
-            return true
+            return .launch
         case .ready:
-            return false
+            return .session
         }
     }
 
@@ -207,25 +210,53 @@ private struct PersistenceWarningBanner: View {
     }
 }
 
-/// Keeps the persistent app window's content layout in sync with the current
-/// SwiftUI phase. Window corner geometry remains entirely system-owned.
+private enum MainWindowLayout: Equatable {
+    case launch
+    case session
+
+    var usesFullSizeContent: Bool {
+        self == .launch
+    }
+
+    var minimumContentSize: CGSize {
+        switch self {
+        case .launch:
+            return CGSize(width: 520, height: 520)
+        case .session:
+            return CGSize(width: 900, height: 600)
+        }
+    }
+
+    var preferredContentSize: CGSize {
+        switch self {
+        case .launch:
+            return CGSize(width: 560, height: 560)
+        case .session:
+            return CGSize(width: 1100, height: 700)
+        }
+    }
+}
+
+/// Keeps the persistent app window's size and content layout in sync with the
+/// current SwiftUI phase. Window corner geometry remains entirely system-owned.
 private struct WindowContentLayout: NSViewRepresentable {
-    let fullSizeContent: Bool
+    let layout: MainWindowLayout
 
     func makeNSView(context: Context) -> NSView {
         let view = Configurator()
-        view.fullSizeContent = fullSizeContent
+        view.layout = layout
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let view = nsView as? Configurator else { return }
-        view.fullSizeContent = fullSizeContent
+        view.layout = layout
         view.apply()
     }
 
     private final class Configurator: NSView {
-        var fullSizeContent = true
+        var layout = MainWindowLayout.launch
+        private var appliedLayout: MainWindowLayout?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -234,11 +265,27 @@ private struct WindowContentLayout: NSViewRepresentable {
 
         func apply() {
             guard let window else { return }
-            guard window.styleMask.contains(.fullSizeContentView) != fullSizeContent else { return }
-            if fullSizeContent {
-                window.styleMask.insert(.fullSizeContentView)
-            } else {
-                window.styleMask.remove(.fullSizeContentView)
+            if window.styleMask.contains(.fullSizeContentView) != layout.usesFullSizeContent {
+                if layout.usesFullSizeContent {
+                    window.styleMask.insert(.fullSizeContentView)
+                } else {
+                    window.styleMask.remove(.fullSizeContentView)
+                }
+            }
+
+            window.contentMinSize = layout.minimumContentSize
+            guard appliedLayout != layout else { return }
+            appliedLayout = layout
+
+            switch layout {
+            case .launch:
+                window.setContentSize(layout.preferredContentSize)
+            case .session:
+                let current = window.contentLayoutRect.size
+                if current.width < layout.preferredContentSize.width
+                    || current.height < layout.preferredContentSize.height {
+                    window.setContentSize(layout.preferredContentSize)
+                }
             }
         }
     }

@@ -57,6 +57,7 @@ struct LouppeApp: App {
         // platform appearance (including macOS 26 window geometry) instead of
         // freezing a custom or plain style in the app.
         .windowStyle(.automatic)
+        .defaultSize(width: 560, height: 560)
         .commands {
             // Standard About panel reads its version from the release bundle
             // and adds credits plus a link to the complete release history.

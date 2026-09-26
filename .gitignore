@@ -3,3 +3,16 @@
 dist/
 *.xcuserstate
 .claude/settings.local.json
+
+# Local credentials and exported signing material.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.p8
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+louppe-sparkle-private-key*

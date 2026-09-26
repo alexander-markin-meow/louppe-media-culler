@@ -13,13 +13,28 @@ No exposed credentials were confirmed in the material examined. There are nevert
 
 Other work published documentation and marketing assets during the audit. GitHub snapshots were refreshed and rescanned; the app source under test did not change.
 
-Redacted scan reports, test logs, repository settings and the machine-readable summary are retained locally in [.build/security-audit-2026-09-26](/Users/alexander_markin/Documents/code/louppe-media-culler/.build/security-audit-2026-09-26/summary.json). That directory is ignored by Git. No private key was exported from Keychain and no credential was tested against its provider.
+Redacted scan reports, test logs, repository settings and the machine-readable summary are retained locally in [.build/security-audit-2026-09-26](/Users/alexander_markin/Documents/code/louppe/app/.build/security-audit-2026-09-26/summary.json). That directory is ignored by Git. No private key was exported from Keychain and no credential was tested against its provider.
+
+## Follow-up status — 27 September 2026
+
+This document preserves the original audit findings. The app dependency,
+parser-complexity, and destination-bound Copy fixes are implemented and tracked
+in [the repair report](SECURITY_FIXES_2026-09-26.md). The formerly stale Trash
+wording test now passes. The app quality workflow now pins checkout, avoids
+persisted Git credentials, scans history and tracked edits with redacted
+Gitleaks output, and receives weekly action update PRs. Signing/private-key
+and local environment files are ignored. These changes do not claim that the
+still-published 1.8.0 binary has been updated.
+
+Repository protection remains an optional account setting; website findings
+are outside the app-only completion review. The original evidence below is
+historical, rather than a statement that those repaired app bugs remain open.
 
 ## Findings requiring action
 
 ### 1. High priority: the shipped updater has known security vulnerabilities
 
-[Package.swift:17](/Users/alexander_markin/Documents/code/louppe-media-culler/Package.swift:17) pins Sparkle **2.9.4**. The actual downloaded 1.8.0 app also contains 2.9.4.
+[Package.swift:17](/Users/alexander_markin/Documents/code/louppe/app/Package.swift:17) pins Sparkle **2.9.4**. The actual downloaded 1.8.0 app also contains 2.9.4.
 
 Two upstream advisories cover this version and identify 2.9.6 as the fix:
 
@@ -32,7 +47,7 @@ These are conditional local privilege risks, not evidence that a remote attacker
 
 ### 2. Release priority: crafted XMP nesting crashes the production parser
 
-[XMPBridge.mm:486](/Users/alexander_markin/Documents/code/louppe-media-culler/Sources/XMPBridge/XMPBridge.mm:486) forwards packets into XMPCore. The parser's [element handler](/Users/alexander_markin/Documents/code/louppe-media-culler/Sources/XMPBridge/Vendor/XMPToolkit/XMPCore/source/ExpatAdapter.cpp:313) grows its XML tree without a nesting limit. The 64 MiB packet limit does not constrain nesting or total tree complexity.
+[XMPBridge.mm:486](/Users/alexander_markin/Documents/code/louppe/app/Sources/XMPBridge/XMPBridge.mm:486) forwards packets into XMPCore. The parser's [element handler](/Users/alexander_markin/Documents/code/louppe/app/Sources/XMPBridge/Vendor/XMPToolkit/XMPCore/source/ExpatAdapter.cpp:313) grows its XML tree without a nesting limit. The 64 MiB packet limit does not constrain nesting or total tree complexity.
 
 An isolated harness linked against the **freshly built production bridge objects** exercised `LouppeXMPMerge`. A synthetic 700,048-byte XML packet with 100,000 nested elements terminated with SIGSEGV. Smaller control inputs returned normally. The payload was below the existing byte limit and required no DTD or external entity. No real photo or running Louppe session was used.
 
@@ -42,7 +57,7 @@ An isolated harness linked against the **freshly built production bridge objects
 
 ### 3. Release priority: bundled Expat 2.5.0 predates substantial security fixes
 
-The [vendor manifest](/Users/alexander_markin/Documents/code/louppe-media-culler/Sources/XMPBridge/Vendor/README.md:8) pins Expat 2.5.0. This is compiled into the app rather than supplied by macOS, so OS updates do not update this copy.
+The [vendor manifest](/Users/alexander_markin/Documents/code/louppe/app/Sources/XMPBridge/Vendor/README.md:8) pins Expat 2.5.0. This is compiled into the app rather than supplied by macOS, so OS updates do not update this copy.
 
 [Upstream's current change history](https://github.com/libexpat/libexpat/blob/master/expat/Changes) documents many subsequent security fixes, including malformed UTF-16 handling in 2.8.5, released 22 September 2026. The existing configuration disables DTD support and bans DOCTYPE, which materially reduces exposure. Some advisories require features, APIs or architectures Louppe does not use; this audit does not label every Expat CVE exploitable in Louppe.
 
@@ -50,7 +65,7 @@ The [vendor manifest](/Users/alexander_markin/Documents/code/louppe-media-culler
 
 ### 4. Medium: replacing a validated destination can redirect Copy writes
 
-[ExportDestinationValidator.swift:79](/Users/alexander_markin/Documents/code/louppe-media-culler/Sources/Louppe/ExportDestinationValidator.swift:79) resolves the selected path once. This protects against retargeting the original picker alias. It does not bind later operations to the identity of the resolved directory. Subsequent filesystem operations still use paths, including [DurableFileIO.swift:418](/Users/alexander_markin/Documents/code/louppe-media-culler/Sources/Louppe/DurableFileIO.swift:418).
+[ExportDestinationValidator.swift:79](/Users/alexander_markin/Documents/code/louppe/app/Sources/Louppe/ExportDestinationValidator.swift:79) resolves the selected path once. This protects against retargeting the original picker alias. It does not bind later operations to the identity of the resolved directory. Subsequent filesystem operations still use paths, including [DurableFileIO.swift:418](/Users/alexander_markin/Documents/code/louppe/app/Sources/Louppe/DurableFileIO.swift:418).
 
 A disposable test validated a normal destination, renamed that directory away, and replaced its path with a symlink to another folder before invoking the worker. **Copy wrote the synthetic photo into the unapproved folder and then reported failure** (`copiedFiles=0`, `failedPhotos=1`). The original remained intact. In the equivalent Move test, the original remained and no photo reached the unapproved destination.
 
@@ -60,7 +75,7 @@ A disposable test validated a normal destination, renamed that directory away, a
 
 ### 5. High priority maintenance, local tooling: screenshot-editor dependencies and API boundaries
 
-The separate editor in the Louppe notes uses Next.js **15.5.14**, sharp **0.34.5**, and a nested PostCSS **8.4.31**. A local comparison of 184 installed package instances against 7,470 public reviewed npm advisories produced **30 affected-version matches across these three package names**. These are not 30 demonstrated exploits: several advisories overlap or require features and platforms the editor does not use. The [complete match results](/Users/alexander_markin/Documents/code/louppe-media-culler/.build/security-audit-2026-09-26/editor-advisory-match-results.json) are retained locally.
+The separate screenshot editor in the Louppe media library uses Next.js **15.5.14**, sharp **0.34.5**, and a nested PostCSS **8.4.31**. A local comparison of 184 installed package instances against 7,470 public reviewed npm advisories produced **30 affected-version matches across these three package names**. These are not 30 demonstrated exploits: several advisories overlap or require features and platforms the editor does not use. The [complete match results](/Users/alexander_markin/Documents/code/louppe/app/.build/security-audit-2026-09-26/editor-advisory-match-results.json) are retained locally.
 
 The most consequential matches concern Next.js image optimization and sharp's image-decoding dependencies: [Next.js AVIF advisory](https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4), [sharp/libheif advisory](https://github.com/lovell/sharp/security/advisories/GHSA-rgj7-g3m4-5g8c). The sharp advisory describes possible code execution on glibc-based Linux under particular conditions; this audit did not establish code execution on this Mac. A separate Windows-only Next.js advisory is inapplicable here. RSC denial-of-service and nested PostCSS source-map issues also match installed versions; their specific exploit paths were not dynamically established. The patched top-level PostCSS does not remove its older nested copy.
 
@@ -77,7 +92,7 @@ Both GitHub repositories already have secret scanning and push protection enable
 The gaps are:
 
 - Dependabot alerts/security updates were disabled and no code-scanning analysis existed. Vendored C and a Swift binary dependency need an explicit inventory/advisory check; generic dependency tooling may not recognize them automatically.
-- [The quality workflow](/Users/alexander_markin/Documents/code/louppe-media-culler/.github/workflows/quality.yml:24) references a movable `actions/checkout@v6` tag and leaves credential persistence at its default. Pin the reviewed action commit and set `persist-credentials: false`; this job only needs to read source.
+- [The quality workflow](/Users/alexander_markin/Documents/code/louppe/app/.github/workflows/quality.yml:24) references a movable `actions/checkout@v6` tag and leaves credential persistence at its default. Pin the reviewed action commit and set `persist-credentials: false`; this job only needs to read source.
 - The app and website `.gitignore` files do not protect typical `.env` files, exported private keys or signing archives. Add focused patterns plus a redacted credential scan in CI. Ignore rules supplement scanning; they do not remove historical leaks.
 - Neither `main` branch had protection/rulesets. Blocking branch deletion and force-pushes is a useful option that can preserve direct pushes to `main`; mandatory PRs are unnecessary for this workflow.
 
@@ -118,7 +133,7 @@ The reviewed design includes identity-bound file operations, no-overwrite rename
 | Independent hostile XML probe | Reproduced crash; finding 2 |
 | Independent destination replacement probe | Reproduced redirected Copy write; finding 4 |
 
-The single XCTest failure is [CleanUpWorkerSafetyTests.swift:475](/Users/alexander_markin/Documents/code/louppe-media-culler/Tests/LouppeTests/CleanUpWorkerSafetyTests.swift:475): it expects the former “Keep Only Yes again” wording, while the UI now uses “Trash No + Undecided.” The corresponding GitHub run fails at the same assertion. Repair the stale expectation so a red baseline does not hide future regressions. It is not evidence that Trash moved an unsafe file.
+The single XCTest failure is [CleanUpWorkerSafetyTests.swift:475](/Users/alexander_markin/Documents/code/louppe/app/Tests/LouppeTests/CleanUpWorkerSafetyTests.swift:475): it expects the former “Keep Only Yes again” wording, while the UI now uses “Trash No + Undecided.” The corresponding GitHub run fails at the same assertion. Repair the stale expectation so a red baseline does not hide future regressions. It is not evidence that Trash moved an unsafe file.
 
 ## Practical next steps
 

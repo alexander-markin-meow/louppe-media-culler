@@ -5,7 +5,18 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.9.0 (11) — 2026-09-26
+## 1.9.0 (11) — 2026-09-27
+
+- Fixed the standalone video check's missing exact-path dependency so the
+  complete GitHub quality workflow can run after the Copy safety changes.
+- Pinned CI checkout, disabled saved checkout credentials, added redacted
+  credential checks and weekly action updates, and ignored local signing secrets.
+
+- Shortened the bottom-panel save status to “Saved” or “Saving…” so it stays
+  compact while ratings are written.
+
+- Made the start screen a compact window and let folders be dropped anywhere
+  in it to open them.
 
 - Removed the explanatory text below the Info panel's star rating.
 

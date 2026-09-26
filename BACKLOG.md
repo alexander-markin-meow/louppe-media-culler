@@ -7,11 +7,16 @@ positioning, publicity planning, and the CAS record.
 
 ## Current delivery — 1.9.0
 
-The Command Palette search and organization update is implemented locally.
-HotkeyTests, release packaging, and a disposable-folder launch check passed.
-The performance run reaches its real Trash round trip, which macOS denies to
-the agent. Review the updated palette and complete that filesystem check on a
-Mac with Trash access before publishing.
+The current 1.9 work includes review/zoom improvements, text previews, XMP
+and Copy safety fixes, the compact start window, and the shorter saving status.
+The consolidated app passes all 415 XCTest cases (including all 34 HotkeyTests),
+74 performance/filesystem checks with real disposable Trash/restore, native
+video checks, and 10 scrollbar checks. The standalone video-check source list
+was repaired after it caused the latest GitHub quality run to fail.
+
+See [the completion review](Docs/WORK_COMPLETION_2026-09-27.md) for current
+verification and the remaining release-only or external acceptance work.
+1.9.0 (11) remains an unpublished development version.
 
 ## Next — release readiness and trust
 
@@ -37,13 +42,13 @@ Mac with Trash access before publishing.
 
 ## Technical hardening
 
-- [ ] Make file operations descriptor-relative to close remaining path-swap
-  races.
+- [ ] Extend descriptor-relative file operations beyond the now-bound Copy
+  media/generated-XMP writes; review remaining Move/Rename/Organize paths.
 - [ ] Move costly session-snapshot construction off the main actor; evaluate a
   rating write-ahead log.
 - [ ] Replace semaphore-based video/media probing with structured async work.
-- [ ] Add filesystem fault injection, broader UI/accessibility coverage, and
-  release-mode performance baselines.
+- [ ] Extend existing filesystem fault injection and UI/accessibility tests;
+  add release-mode performance baselines.
 - [ ] Complete the VoiceOver and keyboard-navigation audit.
 
 The detailed evidence and acceptance criteria for these items remain in

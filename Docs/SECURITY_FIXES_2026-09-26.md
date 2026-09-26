@@ -1,8 +1,9 @@
 # Security fixes — 26 September 2026
 
 The updated local app is installed at `/Applications/Louppe.app`. It launched,
-scanned a disposable PNG and wrote a valid `.louppe_session.json`. Changes remain
-uncommitted on `main`; no GitHub release, update feed or website was published.
+scanned a disposable PNG and wrote a valid `.louppe_session.json`. At the end of the 26 September repair, changes remained uncommitted on `main`;
+they were subsequently included in `d789443`. No GitHub release, update feed or
+website was published by that repair.
 Version remains 1.9.0 (11), the existing unpublished release cycle.
 
 ## Changes
@@ -43,7 +44,7 @@ unsafe-parser override or added recurring confirmation dialog.
 
 ## Local screenshot editor
 
-The separate editor under the Louppe notes now resolves Next.js 15.5.26,
+The separate editor, now under the Louppe project's media library, resolves Next.js 15.5.26,
 sharp 0.35.4, PostCSS 8.5.28 and React/React DOM 19.3.0. Compatible dependency
 updates are recorded in `package-lock.json`; overrides eliminate the vulnerable
 nested copies. The obsolete Bun lock was backed up outside the editor and
@@ -81,5 +82,6 @@ build, not a newly notarized public release. A future public release still needs
 Developer ID signing/notarization and a real previous-release update-path test.
 
 Logs and the machine-readable summary are retained in the ignored
-`.build/security-fixes-2026-09-26/` directory. Unrelated audit recommendations
-(GitHub automation, repository protection and website headers) remain separate.
+`.build/security-fixes-2026-09-26/` directory. The app's CI credential scanning, pinned checkout, credential-free checkout,
+and action dependency monitoring were completed in the 27 September review.
+Repository protection and website headers remain separate recommendations.

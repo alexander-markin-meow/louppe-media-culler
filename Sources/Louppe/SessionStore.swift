@@ -3049,7 +3049,7 @@ final class SessionStore: ObservableObject {
             return currentSessionIsDurable ? "Saved · see notice" : "Not saved"
         }
         if activePersistenceSaveCount > 0 { return "Saving…" }
-        if sessionChangeGeneration == 0 { return "No unsaved changes" }
+        if sessionChangeGeneration == 0 { return "Saved" }
         return currentSessionIsDurable ? "Saved" : "Saving…"
     }
 

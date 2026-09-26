@@ -43,7 +43,13 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            LouppeLogo(size: 64)
+            Link(destination: URL(string: "https://louppe.eu/")!) {
+                LouppeLogo(size: 64)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Visit the Louppe website")
+            .help("Open louppe.eu")
             Text("Louppe")
                 .font(.largeTitle.bold())
                 .foregroundStyle(Color.louppeAccent)

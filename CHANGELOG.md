@@ -7,6 +7,11 @@ release bundle.
 
 ## 1.9.0 (11) — 2026-09-27
 
+Read [A Proper Hello](https://louppe.eu/blog/a-proper-hello/) for an introduction
+to Louppe and its approach to reviewing media.
+
+- Made the start-page logo open [louppe.eu](https://louppe.eu/).
+
 - Fixed the standalone video check's missing exact-path dependency so the
   complete GitHub quality workflow can run after the Copy safety changes.
 - Pinned CI checkout, disabled saved checkout credentials, added redacted

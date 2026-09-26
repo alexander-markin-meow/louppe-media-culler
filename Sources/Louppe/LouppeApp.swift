@@ -121,7 +121,7 @@ struct LouppeApp: App {
         let credits = NSMutableAttributedString()
 
         credits.append(NSAttributedString(
-            string: "Fast photo, video, and audio culling for photographers.\n\n", attributes: base))
+            string: "Fast photo, video, and audio culling for creators.\n\n", attributes: base))
 
         link[.link] = URL(string: "https://louppe.eu")!
         credits.append(NSAttributedString(string: "louppe.eu", attributes: link))

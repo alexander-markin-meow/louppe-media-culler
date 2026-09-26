@@ -247,6 +247,11 @@ without making the rest of the session redraw for every gesture event.
 S returns a custom zoom to centered 100%, then toggles back to Fit. A retains
 the phone-size/Fit toggle.
 
+Removing the actual-size viewport retires its source before reporting tile
+loading idle. Late AppKit layout/scroll callbacks must not restart requests on
+the departing view, or its destruction can strand the toolbar's loading count.
+Explicit configuration can start a fresh load, including for the same photo.
+
 The fitted preview uses `NSMagnificationGestureRecognizer` to finish or cancel
 a pinch; the native scroll view uses live-magnification notifications and
 `NSEvent.phase`. Neither depends on the obsolete `beginGesture`/`endGesture`

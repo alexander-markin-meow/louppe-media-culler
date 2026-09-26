@@ -236,6 +236,7 @@ final class ActualSizeScrollView: NSScrollView {
         sourceTask?.cancel()
         sourceTask = nil
         sourceGeneration &+= 1
+        currentContentRevision = nil
         canvas.prepareForRemoval()
         HighResolutionImagePipeline.shared.cancelTileRequests(
             exceptSourceKey: nil
@@ -715,11 +716,16 @@ private final class ActualSizeCanvasView: NSView {
 
     func prepareForRemoval() {
         cancelPhotoPan()
-        stopReportingActivity()
+        // AppKit may still deliver layout/scroll callbacks as this view leaves
+        // its window. Retire the source before reporting idle, so those late
+        // callbacks cannot request new tiles whose owner is about to disappear.
+        source = nil
+        itemKey = nil
         generation &+= 1
         pending = []
         wanted = []
         tiles = [:]
+        stopReportingActivity()
     }
 
     override func mouseDown(with event: NSEvent) {

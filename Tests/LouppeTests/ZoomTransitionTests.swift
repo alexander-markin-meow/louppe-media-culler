@@ -1,9 +1,62 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Louppe
 
 @MainActor
 final class ZoomTransitionTests: XCTestCase {
+    func testRemovedViewportDoesNotRestartLoadingDuringLateLayout() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        fixture.configure(scale: 1)
+        try await fixture.waitForSource()
+        try await fixture.waitForTiles()
+        fixture.scroll.prepareForRemoval()
+        let reportsAfterRemoval = fixture.loadingReports
+
+        // AppKit can still reflect/layout the clip view while SwiftUI removes
+        // the representable after S/A switches back to a fitted preview.
+        fixture.scroll.reflectScrolledClipView(fixture.scroll.contentView)
+        fixture.scroll.layoutSubtreeIfNeeded()
+        fixture.scroll.viewDidChangeBackingProperties()
+        XCTAssertEqual(fixture.loadingReports, reportsAfterRemoval,
+                       "A removed viewport must not leave a new loading count behind")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(fixture.loadingReports, reportsAfterRemoval)
+
+        fixture.loadingReports = []
+        fixture.configure(scale: 1)
+        try await fixture.waitForTiles()
+        XCTAssertEqual(fixture.loadingReports, [true, false],
+                       "Explicitly configuring the same photo must start a fresh, balanced load")
+    }
+
+    func testGalleryLoadingSettlesAfterRepeatedZoomModeChanges() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        let store = SessionStore()
+        store.items = [fixture.item]
+        store.rebuildDerivedDataForTesting()
+        store.phase = .ready
+        store.showBrowser = false
+        let host = NSHostingView(rootView: GalleryView(store: store))
+        fixture.window.contentView = host
+        fixture.window.makeKeyAndOrderFront(nil)
+        defer { fixture.window.contentView = nil }
+
+        for delay in [150, 5] {
+            for mode in [ZoomMode.actual, .small, .actual, .actual, .small, .actual] {
+                store.toggleZoom(mode)
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(delay))
+            }
+        }
+        store.setPhotoZoomScale(1)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(store.fullImageLoads, 0,
+                       "The toolbar spinner must stop after the displayed photo settles")
+    }
+
     func testCustomZoomReturnsSmoothlyToCenteredActualSizeFromBothDirections() async throws {
         let fixture = try Fixture()
         defer { fixture.close() }
@@ -77,6 +130,7 @@ final class ZoomTransitionTests: XCTestCase {
         let scroll: ActualSizeScrollView
         let viewport = ActualSizeViewport()
         var reportedScale: CGFloat?
+        var loadingReports: [Bool] = []
 
         init() throws {
             _ = NSApplication.shared
@@ -104,7 +158,9 @@ final class ZoomTransitionTests: XCTestCase {
 
         func configure(scale: CGFloat) {
             scroll.configure(item: item, preview: nil, showsClippingWarnings: false,
-                             viewport: viewport, onLoading: { _ in }, zoomScale: scale,
+                             viewport: viewport, onLoading: { [weak self] active in
+                                 self?.loadingReports.append(active)
+                             }, zoomScale: scale,
                              onZoomScaleChanged: { [weak self] scale, _ in
                                  self?.reportedScale = scale
                              })
@@ -118,6 +174,14 @@ final class ZoomTransitionTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(10))
             }
             XCTFail("The source-backed document did not load")
+        }
+
+        func waitForTiles() async throws {
+            for _ in 0..<200 {
+                if loadingReports.contains(true), loadingReports.last == false { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Source tiles did not finish loading")
         }
 
         func close() {

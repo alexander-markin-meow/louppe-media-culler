@@ -5,8 +5,9 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.9.0 (11) — 2026-09-25
+## 1.9.0 (11) — 2026-09-26
 
+- Updated the About description to say “for creators.”
 - Added a working Help window, searchable shortcuts, and dismissible review tips.
 - Combined filter information, save feedback, and review completion into one
   compact bottom panel without repeating the toolbar's actions.
@@ -14,6 +15,10 @@ release bundle.
   centered photo zoom, and removed clipped QuickTime artwork from audio controls.
 - Added a continuous photo zoom slider and pinch-to-zoom while retaining the
   S (100%) and A (Phone size) shortcuts.
+- Prevented the zoom slider from briefly jumping to its minimum and flickering
+  when A or S switches back to Phone size or Fit.
+- Fixed a stuck loading spinner caused by late layout updates restarting
+  high-resolution loading after leaving the zoomed photo view.
 - Fixed pinch completion so the enlarged photo remains pannable and the
   slider keeps responding. Added click-and-drag panning and a smooth return
   from custom zoom to centered 100% with S.

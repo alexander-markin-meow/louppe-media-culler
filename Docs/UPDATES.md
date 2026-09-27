@@ -92,6 +92,9 @@ minimum macOS version, embedded framework, Developer ID signature, hardened
 runtime, notarization ticket, Gatekeeper acceptance, or app signature is
 inconsistent.
 
+Homebrew uses this same ZIP. Publishing a stable release automatically updates
+the package definition; see [HOMEBREW.md](HOMEBREW.md).
+
 ## Local verification
 
 `build_app.sh` preserves Sparkle's versioned framework symlinks, embeds it in

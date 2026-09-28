@@ -965,6 +965,8 @@ enum ExportWorker {
         renameStrategy: DurableFileIO.NoOverwriteRenameStrategy =
             .exclusivePOSIX,
         prepareDestinationDirectories: @escaping () throws -> Void = {},
+        sourceFolderIdentity: SessionPersistence.SourceFolderIdentity? = nil,
+        afterMoveDirectoriesOpened: () -> Void = {},
         progress: @escaping Progress,
         byteProgress: @escaping ByteProgress = { _, _ in }
     ) -> MoveResult {
@@ -1104,6 +1106,13 @@ enum ExportWorker {
         }
         do {
             try prepareDestinationDirectories()
+            for binding in plan.destinationBindings {
+                try binding.requireCurrentPath()
+            }
+            if let sourceFolderIdentity,
+               !sourceFolderIdentity.matches(folder: destination) {
+                throw DurableFileIO.DestinationChanged()
+            }
         } catch {
             let journalFinalized = FileOperationJournal.finalize(
                 writer,
@@ -1133,6 +1142,8 @@ enum ExportWorker {
         var failureMessage: String?
         var globalFileIndex = 0
 
+        var didOpenMoveDirectories = false
+
         itemLoop: for (itemOffset, item) in plan.items.enumerated() {
             let itemFileIndex = globalFileIndex
             globalFileIndex += item.files.count
@@ -1148,6 +1159,11 @@ enum ExportWorker {
                     location: .none,
                     identity: nil
                 )
+                var moveDirectories: (
+                    source: DurableFileIO.BoundDirectory,
+                    temporary: DurableFileIO.BoundDirectory,
+                    target: DurableFileIO.BoundDirectory
+                )?
                 // "Moving" a file into the folder it already lives in would
                 // only rename the original with a collision suffix.
                 if journalKind == .exportMove,
@@ -1181,6 +1197,42 @@ enum ExportWorker {
                     )
                 }
                 if !failed {
+                    do {
+                        // The journal currently puts the temporary beside its
+                        // target. Bind all exact parents independently so no
+                        // plan-format change can redirect either rename.
+                        moveDirectories = try (
+                            DurableFileIO.BoundDirectory(
+                                .init(url: XMPExactFileSystemPath(url: file.source).parent.url)
+                            ),
+                            DurableFileIO.BoundDirectory(
+                                .init(url: XMPExactFileSystemPath(url: temporary).parent.url)
+                            ),
+                            DurableFileIO.BoundDirectory(
+                                .init(url: XMPExactFileSystemPath(url: file.target).parent.url)
+                            )
+                        )
+                        if !didOpenMoveDirectories {
+                            didOpenMoveDirectories = true
+                            afterMoveDirectoriesOpened()
+                        }
+                        for binding in plan.destinationBindings {
+                            try binding.requireCurrentPath()
+                        }
+                        if let sourceFolderIdentity,
+                           !sourceFolderIdentity.matches(folder: destination) {
+                            throw DurableFileIO.DestinationChanged()
+                        }
+                    } catch {
+                        failed = true
+                        failureMessage = failureMessage ?? moveFailureMessage(
+                            for: error,
+                            phase: .staging,
+                            filename: file.source.lastPathComponent
+                        )
+                    }
+                }
+                if !failed {
                     if let preparedContents = file.preparedContents {
                         do {
                             if pathEntryExists(file.source) {
@@ -1188,10 +1240,11 @@ enum ExportWorker {
                             } else if file.expectedSourceDigest != nil {
                                 throw ExportWorkerError.copiedFileChanged
                             }
-                            try DurableFileIO.writeNewFile(
-                                preparedContents,
-                                to: temporary,
-                                fullSync: true
+                            guard let moveDirectories else {
+                                throw DurableFileIO.DestinationChanged()
+                            }
+                            try moveDirectories.temporary.write(
+                                preparedContents, to: temporary
                             )
                             touched.location = .temporary(temporary)
                             touched.identity = try FileOperationJournal
@@ -1201,21 +1254,27 @@ enum ExportWorker {
                                 fileURL: temporary
                             )
                         } catch {
-                            if case .none = touched.location,
-                               pathEntryExists(temporary) {
+                            if case .none = touched.location {
                                 do {
-                                    let partialIdentity = try FileOperationJournal
-                                        .captureIdentity(at: temporary)
-                                    try writer.mark(
-                                        .started,
-                                        fileAt: fileIndex,
-                                        identityAt: temporary,
-                                        expectedIdentity: partialIdentity,
-                                        includeStatusChange: false
-                                    )
-                                    touched.location = .temporary(temporary)
-                                    touched.identity = partialIdentity
-                                    touched.isIncompleteCopy = true
+                                    guard let moveDirectories else {
+                                        throw DurableFileIO.DestinationChanged()
+                                    }
+                                    try moveDirectories.temporary.binding
+                                        .requireCurrentPath()
+                                    if pathEntryExists(temporary) {
+                                        let partialIdentity = try FileOperationJournal
+                                            .captureIdentity(at: temporary)
+                                        try writer.mark(
+                                            .started,
+                                            fileAt: fileIndex,
+                                            identityAt: temporary,
+                                            expectedIdentity: partialIdentity,
+                                            includeStatusChange: false
+                                        )
+                                        touched.location = .temporary(temporary)
+                                        touched.identity = partialIdentity
+                                        touched.isIncompleteCopy = true
+                                    }
                                 } catch {
                                     journalFailure = true
                                     touched.location = .ambiguous
@@ -1232,20 +1291,23 @@ enum ExportWorker {
                     } else {
                         var renamedToTemporary = false
                         do {
+                            guard let moveDirectories else {
+                                throw DurableFileIO.DestinationChanged()
+                            }
                             try writer.requireUnchangedSource(at: fileIndex)
-                            try DurableFileIO.renameWithoutOverwrite(
-                                from: file.source,
-                                to: temporary,
+                            try moveDirectories.source.move(
+                                file.source, to: temporary,
+                                in: moveDirectories.temporary,
                                 strategy: renameStrategy
                             )
                             renamedToTemporary = true
                             touched.location = .temporary(temporary)
-                            try DurableFileIO.syncRenameDirectories(
-                                from: file.source,
-                                to: temporary,
-                                fullSync: true,
+                            try moveDirectories.source.syncRename(
+                                to: moveDirectories.temporary,
                                 policy: directorySyncPolicy
                             )
+                            try moveDirectories.source.binding.requireCurrentPath()
+                            try moveDirectories.temporary.binding.requireCurrentPath()
                             touched.identity = try verifiedIdentity(
                                 matching: writer.plannedIdentity(at: fileIndex),
                                 at: temporary
@@ -1315,19 +1377,22 @@ enum ExportWorker {
                             at: temporary,
                             includeStatusChange: file.role != .preparedXMP
                         )
-                        try DurableFileIO.renameWithoutOverwrite(
-                            from: temporary,
-                            to: file.target,
+                        guard let moveDirectories else {
+                            throw DurableFileIO.DestinationChanged()
+                        }
+                        try moveDirectories.temporary.move(
+                            temporary, to: file.target,
+                            in: moveDirectories.target,
                             strategy: renameStrategy
                         )
                         renamedToDestination = true
                         touched.location = .destination
-                        try DurableFileIO.syncRenameDirectories(
-                            from: temporary,
-                            to: file.target,
-                            fullSync: true,
+                        try moveDirectories.temporary.syncRename(
+                            to: moveDirectories.target,
                             policy: directorySyncPolicy
                         )
+                        try moveDirectories.temporary.binding.requireCurrentPath()
+                        try moveDirectories.target.binding.requireCurrentPath()
                         touched.identity = try verifiedIdentity(
                             matching: identity,
                             at: file.target

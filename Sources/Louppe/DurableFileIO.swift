@@ -143,6 +143,66 @@ enum DurableFileIO {
             try syncDescriptor(descriptor, path: binding.url.path, fullSync: true)
             try binding.requireCurrentPath()
         }
+
+        /// Rename through held parent directories. A path component swapped
+        /// after these descriptors were opened cannot redirect the move.
+        func move(
+            _ source: URL,
+            to target: URL,
+            in targetDirectory: BoundDirectory,
+            strategy: NoOverwriteRenameStrategy
+        ) throws {
+            try binding.requireCurrentPath()
+            try targetDirectory.binding.requireCurrentPath()
+            switch strategy {
+            case .exclusivePOSIX:
+                let result = try withName(source) { sourceName in
+                    try targetDirectory.withName(target) { targetName in
+                        renameatx_np(
+                            descriptor, sourceName,
+                            targetDirectory.descriptor, targetName,
+                            UInt32(RENAME_EXCL)
+                        )
+                    }
+                }
+                guard result == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            case .foundation:
+                // ExFAT lacks RENAME_EXCL. Its probed Foundation fallback is
+                // still path-based, so refuse a known parent replacement.
+                try DurableFileIO.renameWithoutOverwrite(
+                    from: source, to: target, strategy: strategy
+                )
+            }
+            // The caller records the side effect immediately after return.
+            // A post-rename path check here would throw before it could know
+            // that the source entry has already moved.
+        }
+
+        func syncRename(
+            to targetDirectory: BoundDirectory,
+            policy: DirectorySyncPolicy
+        ) throws {
+            // Durability order is destination, then source. Keep syncing the
+            // held folders even if one of their pathnames was replaced.
+            try targetDirectory.sync(policy: policy)
+            if targetDirectory.binding != binding {
+                try sync(policy: policy)
+            }
+        }
+
+        private func sync(policy: DirectorySyncPolicy) throws {
+            do {
+                try DurableFileIO.syncDescriptor(
+                    descriptor, path: binding.url.path, fullSync: true
+                )
+            } catch {
+                guard DurableFileIO.shouldIgnoreUnsupportedDirectorySync(
+                    error, policy: policy
+                ) else { throw error }
+            }
+        }
     }
 
 

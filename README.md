@@ -139,9 +139,11 @@ controls keep their normal shortcuts.
 | **Esc** | Cancel a scan or clear the current selection |
 | **⌘⌫** | Send the selection to the macOS Trash without a dialog |
 
-For development, performance, release, and App Store notes, see
-[AGENTS.md](AGENTS.md), [Docs/PERFORMANCE.md](Docs/PERFORMANCE.md),
-[Docs/UPDATES.md](Docs/UPDATES.md), and [Docs/APP_STORE.md](Docs/APP_STORE.md).
+For planned work, see [BACKLOG.md](BACKLOG.md). For development and release
+guidance, see [AGENTS.md](AGENTS.md),
+[Docs/PERFORMANCE.md](Docs/PERFORMANCE.md),
+[Docs/UPDATES.md](Docs/UPDATES.md), and
+[Docs/APP_STORE.md](Docs/APP_STORE.md).
 
 Louppe is free and open source under the [MIT License](LICENSE).
 

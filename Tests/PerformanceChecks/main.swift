@@ -66,6 +66,7 @@ struct PerformanceChecks {
         try preparedSessionIndexScaleBaselines()
         try metadataFilterSortAndExportScaleBaseline()
         try ratingMutationScaleBaseline()
+        try await sessionSnapshotScaleBaseline()
         try selectionStatePreservesImplicitCurrentAndToggleRules()
         try selectionStateRangesFiltersAndRemapsByID()
         try visibleLocationMapTracksDerivedState()
@@ -76,12 +77,12 @@ struct PerformanceChecks {
         try batchRatingUndoRestoresEveryRating()
         try exportMoveRemovalUpdatesSessionState()
         if ProcessInfo.processInfo.environment["LOUPPE_SKIP_REAL_TRASH"] == "1" {
-            print("Performance checks passed (71/74; 3 real Trash checks explicitly skipped)")
+            print("Performance checks passed (72/75; 3 real Trash checks explicitly skipped)")
         } else {
             try cleanUpPairRoundTripsThroughTrash()
             try cleanUpPairFailureRollsBackFirstFile()
             try cleanUpRollbackPreservesRacingSourceReplacement()
-            print("Performance checks passed (74/74)")
+            print("Performance checks passed (75/75)")
         }
     }
 
@@ -3312,6 +3313,50 @@ struct PerformanceChecks {
         print(
             "Rating one of \(itemCount) items: "
                 + "\(milliseconds(duration)) ms"
+        )
+    }
+
+    /// Verify that the detached builder reads only frozen metadata and measure
+    /// the main-actor capture separately from large entry reconciliation.
+    @MainActor
+    private static func sessionSnapshotScaleBaseline() async throws {
+        let itemCount = 100_000
+        let items = (0..<itemCount).map {
+            makeItem(id: String(format: "SAVE_%06d.JPG", $0))
+        }
+        let retained = [
+            SessionEntry(filename: "SAVE_000000.JPG", pairedFilename: nil,
+                         rating: Rating.no.rawValue, ratedAt: nil),
+            SessionEntry(filename: "MISSING.JPG", pairedFilename: nil,
+                         rating: Rating.yes.rawValue, ratedAt: nil),
+        ]
+        let clock = ContinuousClock()
+        let captureStart = clock.now
+        let capture = SessionSnapshotCapture(
+            sourcePath: "/tmp/SaveScale",
+            items: items,
+            retainedEntries: retained,
+            originPaths: ["SAVE_000000.JPG": Data("Original".utf8)]
+        )
+        let captureDuration = captureStart.duration(to: clock.now)
+
+        items[0].rating = .no
+        let buildStart = clock.now
+        let session = await Task.detached { capture.makeSession() }.value
+        let buildDuration = buildStart.duration(to: clock.now)
+        try expect(session.entries.count == itemCount + 1,
+                   "snapshot should keep only genuinely missing ratings")
+        try expect(session.entries[0].rating == Rating.undecided.rawValue,
+                   "snapshot must freeze ratings before detached construction")
+        try expect(session.entries[0].organizationOriginFolderPathBytes
+                       == Data("Original".utf8),
+                   "snapshot should retain organization origin")
+        try expect(session.entries.last?.filename == "MISSING.JPG",
+                   "snapshot should retain the missing physical file")
+        print(
+            "Save snapshot \(itemCount) files: main capture "
+                + "\(milliseconds(captureDuration)) ms, background build "
+                + "\(milliseconds(buildDuration)) ms"
         )
     }
 

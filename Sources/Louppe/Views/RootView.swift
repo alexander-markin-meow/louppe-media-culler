@@ -28,6 +28,7 @@ struct RootView: View {
                 SessionView(store: store)
             }
         }
+        .accessibilityHidden(store.isRecoveringInterruptedOperations)
         // Tint every standard control (buttons, links, pickers, toggles,
         // progress bars — including sheets and popovers) with the brand purple.
         .tint(Color.louppeAccent)
@@ -54,6 +55,7 @@ struct RootView: View {
                     )
                 }
             }
+            .accessibilityHidden(store.isRecoveringInterruptedOperations)
         }
         .overlay {
             if store.isRecoveringInterruptedOperations {
@@ -134,13 +136,16 @@ struct RootView: View {
 }
 
 private struct InterruptedOperationRecoveryOverlay: View {
+    @AccessibilityFocusState private var isAccessibilityFocused: Bool
+
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.large)
+                .accessibilityLabel("Recovering interrupted files")
             Text("Making interrupted file operations safe…")
                 .font(.headline)
-            Text("Louppe is checking exact file identities before opening a folder.")
+            Text("Checking files before opening the folder.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -149,6 +154,9 @@ private struct InterruptedOperationRecoveryOverlay: View {
         .shadow(radius: 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.18))
+        .accessibilityElement(children: .combine)
+        .accessibilityFocused($isAccessibilityFocused)
+        .onAppear { isAccessibilityFocused = true }
     }
 }
 
@@ -157,6 +165,7 @@ private struct RecoveryWarningBanner: View {
     let canRetry: Bool
     let retry: () -> Void
     let keepFilesAsTheyAre: () -> Void
+    @AccessibilityFocusState private var isWarningFocused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -167,6 +176,8 @@ private struct RecoveryWarningBanner: View {
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Interrupted operation warning. \(message)")
+                .accessibilityFocused($isWarningFocused)
+                .onAppear { isWarningFocused = true }
             Spacer(minLength: 12)
             Button("Keep Files As They Are", action: keepFilesAsTheyAre)
                 .disabled(!canRetry)
@@ -187,6 +198,7 @@ private struct PersistenceWarningBanner: View {
     let message: String
     let showsRetry: Bool
     let retry: () -> Void
+    @AccessibilityFocusState private var isWarningFocused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -197,6 +209,8 @@ private struct PersistenceWarningBanner: View {
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Session save warning. \(message)")
+                .accessibilityFocused($isWarningFocused)
+                .onAppear { isWarningFocused = true }
             Spacer(minLength: 12)
             if showsRetry {
                 Button("Retry Saving", action: retry)

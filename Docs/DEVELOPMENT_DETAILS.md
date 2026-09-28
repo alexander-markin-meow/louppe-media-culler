@@ -3,8 +3,7 @@
 Required subsystem rules linked from [AGENTS.md](../AGENTS.md). Read the
 sections relevant to the behavior being changed. Keep detailed rules here and
 project-wide guardrails in `AGENTS.md`; update the owning section when behavior
-changes. The architecture map and rules below were relocated from `AGENTS.md`
-on 2026-09-26 without changing their requirements.
+changes.
 
 ## Architecture map
 
@@ -98,6 +97,14 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   exact identity before removing it, and never delete an unrecorded partial by
   pathname. A complete pre-staged temporary may be published only after the
   exact planned source is revalidated and every byte compares equal.
+  Forward Move, Rename, Organize, and their in-session undo bind source,
+  temporary, and target parents to opened directory descriptors per active
+  file on the exclusive-POSIX path. The generated XMP sidecar in Move uses the
+  same bound writes and publication. A changed parent must stop the operation
+  without redirecting files; retain an ambiguous journal for attention when
+  the change happens after a rename. ExFAT's existing Foundation fallback and
+  launch recovery remain path-based with identity checks. Reproduce a concrete
+  remaining risk before broadening those paths.
 - **Clean Up has a three-phase boundary**: snapshot on `SessionStore`, file I/O
   in `CleanUpWorker`, apply on `SessionStore`. Do not put `trashItem`/`moveItem`
   loops back on the main actor. While `isCleaningUp`, keep item-index mutations

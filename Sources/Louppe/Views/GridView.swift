@@ -8,6 +8,7 @@ import SwiftUI
 /// ⌘+/⌘− resize the tiles; W toggles photo info.
 struct GridView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The native scrollbar thumb is inset within its reserved gutter. A
     /// slightly smaller trailing content inset makes the visible photo-to-thumb
@@ -156,7 +157,7 @@ struct GridView: View {
             // then issue a second pass so very distant targets are resolved.
             await Task.yield()
             guard !Task.isCancelled else { return }
-            if animated {
+            if animated && !reduceMotion {
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(id, anchor: .center)
                 }

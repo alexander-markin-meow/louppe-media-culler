@@ -56,6 +56,79 @@ enum XMPConflictResolutionChoice: String, Equatable, Hashable, Sendable {
     case useJPEG
 }
 
+/// Freeze mutable file metadata at the save boundary. The heavier entry and
+/// retained-file reconciliation can then run without occupying the UI actor.
+struct SessionSnapshotCapture: Sendable {
+    struct File: Sendable {
+        let metadata: PhotoFileMetadataSnapshot
+        let identity: FileOperationJournal.FileIdentity?
+    }
+
+    let sourcePath: String
+    let files: [File]
+    let retainedEntries: [SessionEntry]
+    let originPaths: [String: Data]
+
+    @MainActor init(
+        sourcePath: String,
+        items: [PhotoItem],
+        retainedEntries: [SessionEntry],
+        originPaths: [String: Data]
+    ) {
+        var files = [File]()
+        files.reserveCapacity(items.count)
+        for item in items {
+            files.append(File(
+                metadata: item.primaryFile.metadataSnapshot,
+                identity: item.primaryFile.scannedIdentity
+            ))
+            if let paired = item.pairedFile {
+                files.append(File(
+                    metadata: paired.metadataSnapshot,
+                    identity: paired.scannedIdentity
+                ))
+            }
+        }
+        self.sourcePath = sourcePath
+        self.files = files
+        self.retainedEntries = retainedEntries
+        self.originPaths = originPaths
+    }
+
+    func makeSession() -> SessionFile {
+        var entries = [SessionEntry]()
+        entries.reserveCapacity(files.count + retainedEntries.count)
+        var currentIDs = Set<String>()
+        currentIDs.reserveCapacity(files.count)
+        for file in files {
+            let metadata = file.metadata
+            currentIDs.insert(metadata.fileID)
+            entries.append(SessionEntry(
+                filename: metadata.fileID,
+                pairedFilename: nil,
+                rating: metadata.rating.rawValue,
+                ratedAt: metadata.ratedAt,
+                stars: metadata.starRating,
+                starsChangedAt: metadata.starsChangedAt,
+                colorLabel: metadata.colorLabel,
+                colorChangedAt: metadata.colorChangedAt,
+                fileIdentity: file.identity,
+                organizationOriginFolderPathBytes: originPaths[metadata.fileID]
+            ))
+        }
+        for entry in retainedEntries where !currentIDs.contains(entry.filename) {
+            entries.append(entry)
+        }
+        return SessionFile(
+            version: SessionConstants.currentSchemaVersion,
+            sourcePath: sourcePath,
+            scannedAt: Date(),
+            entries: entries,
+            fileIDEncoding: .percentEncodedFileSystemPath
+        )
+    }
+}
+
 struct XMPConflictResolutionRequest: Equatable, Sendable {
     let conflict: XMPSameStemConflictDescriptor
     let choice: XMPConflictResolutionChoice
@@ -482,8 +555,7 @@ final class SessionStore: ObservableObject {
     private var saveDeadline: DispatchWorkItem?
     private var saveTrailingGeneration: UInt64 = 0
     private var saveCycleGeneration: UInt64 = 0
-    private var pendingPersistenceTask: Task<SessionPersistence.SaveResult, Never>?
-    private var pendingPersistenceRequest: SaveRequest?
+    private var pendingPersistenceTask: Task<SaveOutcome, Never>?
     private var retrySaveRequest: SaveRequest?
     /// A backup-only success stays manually retryable so its folder sidecar
     /// can be repaired later, but it must never turn Close or Quit into a
@@ -4709,15 +4781,14 @@ final class SessionStore: ObservableObject {
         // a false failure after an identical snapshot was already secured.
         var awaitedResult: SessionPersistence.SaveResult?
         if activePersistenceSaveCount > 0,
-           let task = pendingPersistenceTask,
-           let request = pendingPersistenceRequest {
+           let task = pendingPersistenceTask {
             // This transition owns the final coalescing decision from here. The
             // completion observer must not enqueue a third write while this
             // method is suspended awaiting the current one.
             saveRequestedWhilePersistenceBusy = false
-            let result = await task.value
-            applyPersistenceResult(result, request: request)
-            awaitedResult = result
+            let outcome = await task.value
+            applyPersistenceResult(outcome.result, request: outcome.request)
+            awaitedResult = outcome.result
         }
 
         if persistenceRejectedInvalidSnapshot {
@@ -4731,9 +4802,9 @@ final class SessionStore: ObservableObject {
         }
 
         if let request = makeSaveRequest() {
-            let result = await enqueuePersistenceSave(request).value
-            applyPersistenceResult(result, request: request)
-            return result
+            let outcome = await enqueuePersistenceSave(request).value
+            applyPersistenceResult(outcome.result, request: outcome.request)
+            return outcome.result
         }
 
         if let awaitedResult {
@@ -4746,9 +4817,9 @@ final class SessionStore: ObservableObject {
         if let request = retrySaveRequest,
            !retrySaveIsOptionalSidecarRepair {
             let retry = refreshedSaveRequest(from: request)
-            let result = await enqueuePersistenceSave(retry).value
-            applyPersistenceResult(result, request: retry)
-            return result
+            let outcome = await enqueuePersistenceSave(retry).value
+            applyPersistenceResult(outcome.result, request: outcome.request)
+            return outcome.result
         }
         return nil
     }
@@ -4779,16 +4850,37 @@ final class SessionStore: ObservableObject {
 
     private struct SaveRequest: Sendable {
         let folder: URL
-        let session: SessionFile
+        let payload: SavePayload
         let sequence: UInt64
         let access: SessionPersistence.AccessContext
         let changeGeneration: UInt64
+
+        func materialized() -> SaveRequest {
+            guard case .capture(let capture) = payload else { return self }
+            return SaveRequest(
+                folder: folder,
+                payload: .session(capture.makeSession()),
+                sequence: sequence,
+                access: access,
+                changeGeneration: changeGeneration
+            )
+        }
+    }
+
+    private enum SavePayload: Sendable {
+        case capture(SessionSnapshotCapture)
+        case session(SessionFile)
+    }
+
+    private struct SaveOutcome: Sendable {
+        let request: SaveRequest
+        let result: SessionPersistence.SaveResult
     }
 
     @discardableResult
     private func enqueuePersistenceSave(
         _ request: SaveRequest
-    ) -> Task<SessionPersistence.SaveResult, Never> {
+    ) -> Task<SaveOutcome, Never> {
         // Any explicitly enqueued snapshot is at least as fresh as the
         // coalesced request from the live store. It therefore satisfies that
         // marker; leaving it set could start an unawaited redundant write
@@ -4796,20 +4888,24 @@ final class SessionStore: ObservableObject {
         saveRequestedWhilePersistenceBusy = false
         activePersistenceSaveCount += 1
         let task = Task.detached { [persistence] in
-            await persistence.save(
-                request.session,
+            let prepared = request.materialized()
+            guard case .session(let session) = prepared.payload else {
+                preconditionFailure("materialized save request has no session")
+            }
+            let result = await persistence.save(
+                session,
                 for: request.folder,
                 sequence: request.sequence,
                 access: request.access
             )
+            return SaveOutcome(request: prepared, result: result)
         }
         pendingPersistenceTask = task
-        pendingPersistenceRequest = request
         Task { @MainActor [weak self] in
-            let result = await task.value
+            let outcome = await task.value
             self?.persistenceSaveDidComplete(
-                result,
-                request: request
+                outcome.result,
+                request: outcome.request
             )
         }
         return task
@@ -4820,6 +4916,9 @@ final class SessionStore: ObservableObject {
         request: SaveRequest
     ) {
         activePersistenceSaveCount = max(0, activePersistenceSaveCount - 1)
+        if activePersistenceSaveCount == 0 {
+            pendingPersistenceTask = nil
+        }
         applyPersistenceResult(result, request: request)
         guard activePersistenceSaveCount == 0,
               saveRequestedWhilePersistenceBusy else { return }
@@ -4978,58 +5077,39 @@ final class SessionStore: ObservableObject {
     }
 
     private func refreshedSaveRequest(from request: SaveRequest) -> SaveRequest {
-        var session = request.session
+        guard case .session(var session) = request.payload else {
+            preconditionFailure("retry request has no completed session")
+        }
         session.scannedAt = Date()
         saveSequence &+= 1
         return SaveRequest(
             folder: request.folder,
-            session: session,
+            payload: .session(session),
             sequence: saveSequence,
             access: request.access,
             changeGeneration: request.changeGeneration
         )
     }
 
-    /// Capture value-semantic session data on the main actor, then let the
-    /// persistence actor perform the expensive encoding and file I/O.
+    /// Freeze only the shared mutable metadata at the generation boundary.
+    /// Entry construction, missing-file reconciliation, encoding, and I/O run
+    /// outside the main actor while this exact captured generation is retained
+    /// for failures and retry.
     private func makeSaveRequest() -> SaveRequest? {
         guard let folder = sourceFolder,
               let access = persistenceAccess,
               !isLegacySessionMigrationConfirmationPresented,
               case .ready = phase else { return nil }
-        let currentEntries = items.flatMap { item in
-            item.individualFiles.map { file in
-                let metadata = file.metadataSnapshot
-                return SessionEntry(
-                    filename: file.id,
-                    pairedFilename: nil,
-                    rating: metadata.rating.rawValue,
-                    ratedAt: metadata.ratedAt,
-                    stars: metadata.starRating,
-                    starsChangedAt: metadata.starsChangedAt,
-                    colorLabel: metadata.colorLabel,
-                    colorChangedAt: metadata.colorChangedAt,
-                    fileIdentity: file.scannedIdentity,
-                    organizationOriginFolderPathBytes:
-                        organizationOriginFolderPathBytesByFileID[file.id]
-                )
-            }
-        }
-        let currentFileIDs = Set(currentEntries.map(\.filename))
-        let retainedEntries = retainedMissingSessionEntries.filter {
-            !currentFileIDs.contains($0.filename)
-        }
-        let session = SessionFile(
-            version: SessionConstants.currentSchemaVersion,
+        let capture = SessionSnapshotCapture(
             sourcePath: folder.path,
-            scannedAt: Date(),
-            entries: currentEntries + retainedEntries,
-            fileIDEncoding: .percentEncodedFileSystemPath
+            items: items,
+            retainedEntries: retainedMissingSessionEntries,
+            originPaths: organizationOriginFolderPathBytesByFileID
         )
         saveSequence &+= 1
         return SaveRequest(
             folder: folder,
-            session: session,
+            payload: .capture(capture),
             sequence: saveSequence,
             access: access,
             changeGeneration: sessionChangeGeneration

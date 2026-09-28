@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct OrganizeSourceView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var scope: SourceOrganizationScope = .all
     @State private var configuration: SourceOrganizationConfiguration
@@ -238,7 +239,8 @@ struct OrganizeSourceView: View {
             delegate: OrganizationLevelDropDelegate(
                 destination: level.kind,
                 dragged: $draggedKind,
-                levels: $configuration.levels
+                levels: $configuration.levels,
+                reduceMotion: reduceMotion
             )
         )
         .opacity(level.isEnabled ? 1 : 0.62)
@@ -445,6 +447,8 @@ struct OrganizeSourceView: View {
                 value: Double(progress.done),
                 total: Double(max(progress.total, 1))
             )
+            .accessibilityLabel(progress.title)
+            .accessibilityValue("\(progress.done) of \(progress.total) files")
             .frame(width: 360)
             Text(progress.title)
                 .font(.headline)
@@ -620,6 +624,7 @@ private struct OrganizationLevelDropDelegate: DropDelegate {
     let destination: SourceOrganizationLevelKind
     @Binding var dragged: SourceOrganizationLevelKind?
     @Binding var levels: [SourceOrganizationLevel]
+    let reduceMotion: Bool
 
     func dropEntered(info: DropInfo) {
         guard let dragged,
@@ -628,7 +633,7 @@ private struct OrganizationLevelDropDelegate: DropDelegate {
               let to = levels.firstIndex(where: { $0.kind == destination }),
               levels[from].isEnabled,
               levels[to].isEnabled else { return }
-        withAnimation {
+        withAnimation(reduceMotion ? nil : .default) {
             levels.move(
                 fromOffsets: IndexSet(integer: from),
                 toOffset: to > from ? to + 1 : to

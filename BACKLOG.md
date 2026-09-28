@@ -5,29 +5,23 @@ here because they change with the app and should be visible to everyone working
 in this repository. The Obsidian `louppe` note remains the home for research,
 positioning, publicity planning, and the CAS record.
 
-## Published delivery — 1.9.0
+The latest published app is 1.9.0 (11). Its delivery and verification are in
+[the release record](Docs/RELEASE_1.9.0.md).
 
-The current 1.9 work includes review/zoom improvements, text previews, XMP
-and Copy safety fixes, the compact start window, and the shorter saving status.
-The consolidated app passes all 415 XCTest cases (including all 34 HotkeyTests),
-74 performance/filesystem checks with real disposable Trash/restore, native
-video checks, and 10 scrollbar checks. The standalone video-check source list
-was repaired after it caused the latest GitHub quality run to fail.
+## Waiting on Alex or collaborators
 
-See [the completion review](Docs/WORK_COMPLETION_2026-09-27.md) for current
-verification and the remaining release-only or external acceptance work.
-1.9.0 (11) is published, Developer ID signed, and Apple notarized. The real
-1.8-to-1.9 update test passed using Sparkle 2.9.4 on a disposable copy.
-See [the release record](Docs/RELEASE_1.9.0.md).
-
-## Next — release readiness and trust
-
+- [ ] Listen through the 1.9.1 workflow with VoiceOver, increased contrast,
+  and Reduce Motion on Alex's Mac. Live accessibility-tree and keyboard checks
+  passed; spoken feedback and those display settings still need acceptance.
+- [ ] Back up and restore-test the private automatic-updater signing key.
 - [ ] Test a clean install and real culling workflow with Katerina.
 - [ ] Ask Andrey for a code review; decide separately whether co-authorship is
   appropriate.
 - [ ] Obtain a final shared brand asset from Masha for the app icon and website.
-- [x] Add Developer ID signing, notarization, and a release-provenance checklist.
-- [ ] Back up and restore-test the automatic-updater signing key.
+- [ ] Check XMP handoff in real Bridge, Lightroom Classic, and darktable;
+   rerun the separate RAW/JPEG conflict and reload workflow in Capture One.
+   Automated packet and resolver tests have passed, but these app workflows
+   have not been accepted end to end.
 
 ## Product improvements
 
@@ -36,27 +30,22 @@ See [the release record](Docs/RELEASE_1.9.0.md).
 - [ ] Add focused review preferences: advancement after rating, default sort,
   and default view. Evaluate configurable shortcuts only if they preserve the
   established keyboard-safety rules.
-- [ ] Improve long folder-name presentation while retaining access to the full
-  path.
 - [ ] Show connected external drives and SD cards with useful availability and
   capacity information.
 - [ ] Extend media-format support where macOS capabilities allow it.
 
 ## Technical hardening
 
-- [ ] Extend descriptor-relative file operations beyond the now-bound Copy
-  media/generated-XMP writes; review remaining Move/Rename/Organize paths.
-- [ ] Move costly session-snapshot construction off the main actor; evaluate a
-  rating write-ahead log.
+- [ ] Investigate the remaining path-based ExFAT Move fallback and launch
+  recovery with a reproducible failure case before changing their compatibility
+  or journal behavior. Standard macOS-volume Move, Rename, Organize, and undo
+  now bind opened parent directories.
 - [ ] Replace semaphore-based video/media probing with structured async work.
 - [ ] Extend existing filesystem fault injection and UI/accessibility tests;
   add release-mode performance baselines.
-- [ ] Complete the VoiceOver and keyboard-navigation audit.
 
-The detailed evidence and acceptance criteria for these items remain in
-`Docs/CODEBASE_AUDIT.md` and `Docs/CODEBASE_AUDIT_2026-07-31.md`. Reassess an
-item against the current worktree before scheduling it: those audits predate
-the in-progress 1.8.0 work.
+This backlog is the current source of truth for future work. Check each
+proposal against the current code and reproduce the issue before starting.
 
 ## Later / research
 

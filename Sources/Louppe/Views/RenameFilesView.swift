@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RenameFilesView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var scope: SourceOrganizationScope = .selected
     @State private var metadataConfiguration = FileRenamingConfiguration.initial
@@ -375,6 +376,8 @@ struct RenameFilesView: View {
                 value: Double(progress.done),
                 total: Double(max(progress.total, 1))
             )
+            .accessibilityLabel(progress.title)
+            .accessibilityValue("\(progress.done) of \(progress.total) files")
             .frame(width: 360)
             Text(progress.action == .restoring
                 ? "Restoring previous filenames…"
@@ -522,7 +525,7 @@ struct RenameFilesView: View {
               let to = metadataConfiguration.parts.firstIndex(where: {
                 $0.kind == enabled[destination].kind
               }) else { return }
-        withAnimation {
+        withAnimation(reduceMotion ? nil : .default) {
             metadataConfiguration.parts.swapAt(from, to)
         }
     }

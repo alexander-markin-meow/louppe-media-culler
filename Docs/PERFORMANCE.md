@@ -1,14 +1,13 @@
 # Performance architecture
 
-This document records the performance-sensitive boundaries added after the
-2026-07-14 code review. Read it before changing scanning, filtering, image
-decoding, sidecar persistence, or Clean Up.
+Read this before changing scanning, filtering, image decoding, sidecar
+persistence, or Clean Up. It records the active ownership and resource limits.
 
 ## Main-actor rule
 
-`SessionStore` owns UI state and is `@MainActor`. It may create small value
-snapshots and apply completed results, but potentially slow encoding and file
-operations belong elsewhere:
+`SessionStore` owns UI state and is `@MainActor`. It freezes mutable file
+metadata for saving and applies completed results; entry construction,
+encoding, and file operations belong elsewhere:
 
 - `SessionPersistence` is an actor. It serializes JSON encoding, typed
   sidecar/backup outcomes, schema validation, newest-valid reads, and durable
@@ -44,7 +43,12 @@ operations belong elsewhere:
   termination barrier rejects mutations after the final snapshot boundary.
   Rating saves use a 500 ms trailing delay plus a five-second maximum dirty
   age. While one actor write is slow, repeated maximum-age checkpoints
-  coalesce into one replaceable request for the newest live snapshot.
+  coalesce into one replaceable request for the newest live snapshot. A save
+  freezes per-file rating metadata and identity on the main actor, then a
+  detached task builds entries and reconciles retained missing files before
+  the persistence actor encodes and writes them. The 100,000-file check on
+  2026-09-28 measured 105 ms for capture and 123 ms for background construction;
+  keep measuring the capture cost before considering a rating write-ahead log.
 - `CleanUpWorker` receives immutable snapshots and uses a fresh `FileManager`
   inside its detached task. Trash and restore roll back RAW+JPEG pairs after a
   partial failure and explicitly warn if rollback itself fails. `SessionStore`
@@ -897,22 +901,9 @@ selection is truly empty. Focused logic and app-level XCTest cases protect
 these rules so future controller extraction cannot silently rate hidden media
 or remap a selection by stale numeric position.
 
-## Verification checklist
+## Verification
 
-Run after performance-sensitive changes:
-
-1. `./Tests/run_performance_checks.sh` (uses disposable files for a real
-   Trash/restore pair round trip and rollback check). In a restricted sandbox,
-   `LOUPPE_SKIP_REAL_TRASH=1` runs the other 71 checks; this is not a substitute
-   for the full 74-check verification before installing a build.
-2. `swift build`
-3. `./build_app.sh`
-4. Replace `/Applications/Louppe.app` with `dist/Louppe.app`.
-5. Launch with `open /Applications/Louppe.app --args -openFolder /path/to/photos`.
-6. Confirm `.louppe_session.json` appears and parses.
-7. On a disposable folder, test rating persistence, Clean Up, progress, and ⌘Z
-   round-trip for both a single image and a RAW+JPEG-style pair.
-8. For a large disposable folder, scroll during Clean Up and undo; the window
-   must remain responsive and file order must be restored.
-
-Never test Clean Up on irreplaceable originals.
+Use the build, test, and real-launch checks in [AGENTS.md](../AGENTS.md). For
+performance-sensitive changes, also run `./Tests/run_performance_checks.sh`
+and check the affected behavior on disposable media. Its real Trash/restore
+checks require macOS Trash access. Never test Clean Up on irreplaceable originals.

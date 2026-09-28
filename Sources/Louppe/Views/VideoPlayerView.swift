@@ -13,6 +13,7 @@ struct GalleryVideoPlayerView: View {
     @State private var scrubPosition = 0.0
     @State private var volume = 1.0
     @State private var isMuted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -73,7 +74,7 @@ struct GalleryVideoPlayerView: View {
                 }
                 .contentShape(Rectangle())
                 .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.14)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
                         isHovering = hovering
                     }
                 }

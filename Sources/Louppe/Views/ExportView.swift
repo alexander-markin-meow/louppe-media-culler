@@ -14,6 +14,8 @@ private struct XMPConflictResolverPresentation: Identifiable {
 struct ExportView: View {
     @ObservedObject var store: SessionStore
     @StateObject private var exporter = ExportManager()
+    @AccessibilityFocusState private var isStopCopyingFocused: Bool
+    @AccessibilityFocusState private var isExportResultFocused: Bool
     // The sheet's content is recreated per presentation. An explicit selection
     // starts with all its items; otherwise Copy starts with keepers.
     @State private var mode: ExportMode = .copy
@@ -889,9 +891,10 @@ struct ExportView: View {
     private var multiDestinationPreparationView: some View {
         VStack(spacing: 12) {
             ProgressView()
+                .accessibilityLabel("Checking routing copy plan")
             Text("Checking routing copy plan…")
                 .font(.headline)
-            Text("Louppe is validating every destination, reserving collision-safe names, and preparing one recovery record before any file can change.")
+            Text("Checking destinations and safe file names before copying.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1359,9 +1362,10 @@ struct ExportView: View {
         case .cancelling:
             VStack(spacing: 12) {
                 ProgressView()
+                    .accessibilityLabel("Stopping metadata work")
                 Text("Stopping at a safe boundary…")
                     .font(.headline)
-                Text("An atomic sidecar replacement already in progress will finish safely first.")
+                Text("The current sidecar finishes safely first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1395,6 +1399,8 @@ struct ExportView: View {
                 value: Double(done),
                 total: Double(max(total, 1))
             )
+            .accessibilityLabel(title)
+            .accessibilityValue("\(done) of \(total) sidecar families")
             Text("\(done) of \(total) sidecar families")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1615,6 +1621,8 @@ struct ExportView: View {
                 value: Double(max(0, completedBytes)),
                 total: Double(max(totalBytes, 1))
             )
+            .accessibilityLabel(mode == .copy ? "Copying media" : "Moving media")
+            .accessibilityValue("\(completed) of \(total) \(verb)")
             Text("\(completed) of \(total) \(verb)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1623,6 +1631,8 @@ struct ExportView: View {
                     exporter.requestCopyStopConfirmation()
                 }
                 .disabled(exporter.isCancellingCopy)
+                .accessibilityFocused($isStopCopyingFocused)
+                .onAppear { isStopCopyingFocused = true }
             }
         }
     }
@@ -1630,9 +1640,10 @@ struct ExportView: View {
     private func xmpExportPreparationView(mode: ExportMode) -> some View {
         VStack(spacing: 12) {
             ProgressView()
+                .accessibilityLabel("Checking XMP sidecars")
             Text("Checking XMP sidecars…")
                 .font(.headline)
-            Text("Checking the selected files and sidecars before \(mode == .copy ? "copying" : "moving") anything.")
+            Text("Checking files and sidecars before \(mode == .copy ? "copying" : "moving").")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1760,12 +1771,17 @@ struct ExportView: View {
             Image(systemName: outcome.isClean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(outcome.isClean ? Color.louppeAccent : Color.secondary)
-            Text(finishedTitle(for: outcome))
-                .font(.title3.bold())
-            Text(finishedMessage(for: outcome))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            VStack(spacing: 14) {
+                Text(finishedTitle(for: outcome))
+                    .font(.title3.bold())
+                Text(finishedMessage(for: outcome))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityFocused($isExportResultFocused)
+            .onAppear { isExportResultFocused = true }
             if let xmp = outcome.xmpSummary {
                 VStack(spacing: 6) {
                     xmpCountRow("Media \(outcome.mode == .copy ? "copied" : "moved")", xmp.mediaFiles)
@@ -1880,6 +1896,8 @@ struct ExportView: View {
                 .foregroundStyle(.secondary)
             Text(message)
                 .multilineTextAlignment(.center)
+                .accessibilityFocused($isExportResultFocused)
+                .onAppear { isExportResultFocused = true }
             Button("OK") {
                 exporter.reset()
             }

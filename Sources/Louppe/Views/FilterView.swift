@@ -4,6 +4,7 @@ import SwiftUI
 /// control below only filters in-memory `PhotoItem` values.
 struct FilterView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.colorSchemeContrast) private var contrast
 
     @State private var decisionExpanded = false
     @State private var starsExpanded = false
@@ -38,6 +39,21 @@ struct FilterView: View {
         case isoFrom, isoTo
         case durationFrom, durationTo
         case videoFrameRateFrom, videoFrameRateTo
+
+        var accessibilityLabel: String {
+            switch self {
+            case .apertureFrom: return "Minimum aperture"
+            case .apertureTo: return "Maximum aperture"
+            case .shutterFrom: return "Minimum shutter speed"
+            case .shutterTo: return "Maximum shutter speed"
+            case .isoFrom: return "Minimum ISO"
+            case .isoTo: return "Maximum ISO"
+            case .durationFrom: return "Minimum media duration"
+            case .durationTo: return "Maximum media duration"
+            case .videoFrameRateFrom: return "Minimum video frame rate"
+            case .videoFrameRateTo: return "Maximum video frame rate"
+            }
+        }
     }
 
     var body: some View {
@@ -173,6 +189,7 @@ struct FilterView: View {
             ? Color.louppeAccent : Color.primary)
         .controlSize(.small)
         .accessibilityLabel(included == nil ? "All decisions" : "\(title) decisions")
+        .accessibilityAddTraits(store.filter.excludedDecisionStates == exclusions ? .isSelected : [])
     }
 
     private var decisionSection: some View {
@@ -285,6 +302,7 @@ struct FilterView: View {
             TextField("Search name, type, camera, lens…", text: $store.filter.searchText)
                 .textFieldStyle(.plain)
                 .focused($isSearchFocused)
+                .accessibilityLabel("Search media")
             if !store.filter.searchText.isEmpty {
                 Button {
                     store.filter.searchText = ""
@@ -298,6 +316,10 @@ struct FilterView: View {
         }
         .padding(6)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(contrast == .increased ? Color.primary : Color.clear, lineWidth: 1)
+        }
     }
 
     // MARK: - Date
@@ -320,12 +342,14 @@ struct FilterView: View {
                             in: dateFromLimits,
                             displayedComponents: .date
                         )
+                        .accessibilityLabel("Date taken from")
                         DatePicker(
                             "To",
                             selection: dateToBinding,
                             in: dateToLimits,
                             displayedComponents: .date
                         )
+                        .accessibilityLabel("Date taken to")
                     } else {
                         Text("This folder contains no dated items.")
                             .font(.caption)
@@ -557,6 +581,8 @@ struct FilterView: View {
             .multilineTextAlignment(.trailing)
             .monospacedDigit()
             .focused($focusedSettingField, equals: field)
+            .accessibilityLabel(field.accessibilityLabel)
+            .accessibilityHint(invalid ? "Invalid range" : "")
             .frame(width: width)
             .overlay {
                 RoundedRectangle(cornerRadius: 5)
@@ -1177,6 +1203,7 @@ struct FilterView: View {
 private struct FilterDisclosureSection<Content: View>: View {
     let title: String
     @Binding var isExpanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let content: Content
 
     init(
@@ -1198,7 +1225,7 @@ private struct FilterDisclosureSection<Content: View>: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .animation(.easeInOut(duration: 0.15), value: isExpanded)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isExpanded)
                         .frame(width: 12)
                     Text(title)
                         .font(.subheadline.weight(.semibold))

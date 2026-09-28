@@ -3,6 +3,37 @@ import XCTest
 @testable import Louppe
 
 final class DurableFileIOTests: XCTestCase {
+    func testBoundMoveKeepsStagedFileInOpenedDirectoryAfterPathSwap() throws {
+        let root = try makeTemporaryDirectory(named: "BoundMovePathSwap")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceFolder = root.appendingPathComponent("Source", isDirectory: true)
+        let destination = root.appendingPathComponent("Destination", isDirectory: true)
+        let unapproved = root.appendingPathComponent("Unapproved", isDirectory: true)
+        for folder in [sourceFolder, destination, unapproved] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        }
+        let source = sourceFolder.appendingPathComponent("PHOTO.JPG")
+        let temporary = destination.appendingPathComponent(".louppe-test.partial")
+        let bytes = Data("original photo".utf8)
+        try bytes.write(to: source)
+        let sourceDirectory = try DurableFileIO.BoundDirectory(.init(url: sourceFolder))
+        let targetDirectory = try DurableFileIO.BoundDirectory(.init(url: destination))
+        try sourceDirectory.move(
+            source, to: temporary, in: targetDirectory,
+            strategy: .exclusivePOSIX
+        )
+        let movedDestination = root.appendingPathComponent("OriginalDestination")
+        try FileManager.default.moveItem(at: destination, to: movedDestination)
+        try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: unapproved)
+        try sourceDirectory.syncRename(to: targetDirectory, policy: .required)
+        XCTAssertThrowsError(try targetDirectory.binding.requireCurrentPath())
+        XCTAssertEqual(
+            try Data(contentsOf: movedDestination.appendingPathComponent(".louppe-test.partial")),
+            bytes
+        )
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: unapproved.path), [])
+    }
+
     func testAtomicWriteReplacesFullyAndLeavesNoTemporaryFile() throws {
         let root = try makeTemporaryDirectory(named: "Replace")
         defer { try? FileManager.default.removeItem(at: root) }

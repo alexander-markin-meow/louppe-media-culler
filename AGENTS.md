@@ -36,8 +36,6 @@ There is no separate support team. The sole contact is Alex Markin at
   official documentation. Keep instructions in one place, update affected docs,
   and report what changed, what was verified, and any verification gap.
 
-Sources and adaptation decisions: [engineering review](Docs/ENGINEERING_RULES_REVIEW.md).
-
 ## Read when relevant
 
 Read the matching sections **before changing the affected behavior**; consult

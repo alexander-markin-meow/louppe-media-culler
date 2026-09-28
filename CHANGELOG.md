@@ -5,6 +5,16 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
+## 1.9.1 (12) — 2026-09-28
+
+- Strengthened Move, Rename, Organize, and undo against folder-path replacement
+  on standard macOS volumes.
+- Moved the heavier session-save preparation off the main thread so large
+  folders stay more responsive while ratings are saved.
+- Improved VoiceOver labels, recovery focus, progress feedback, Reduce Motion,
+  increased contrast, and long folder names without adding visible instructions.
+- Added Homebrew distribution with automatic cask updates for new releases.
+
 ## 1.9.0 (11) — 2026-09-27
 
 Read [A Proper Hello](https://louppe.eu/blog/a-proper-hello/) for an introduction

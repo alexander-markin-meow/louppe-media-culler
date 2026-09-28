@@ -1,9 +1,7 @@
 # XMPCore integration record
 
-This record began as the Phase-0 isolation proof for
-`XMP_INTEROPERABILITY.md`. Phase 5 promotes the reviewed parser into the
-shipping executable as a minimal audited source target. The original proof is
-retained independently under `Prototypes/XMPBridgeProof`.
+This record identifies the pinned parser sources and the shipping bridge. The
+original isolation proof remains under `Prototypes/XMPBridgeProof`.
 
 ## Reviewed dependencies
 

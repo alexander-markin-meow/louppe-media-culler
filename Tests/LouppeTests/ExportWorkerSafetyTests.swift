@@ -4,6 +4,47 @@ import XCTest
 @testable import Louppe
 
 final class ExportWorkerSafetyTests: XCTestCase {
+    func testMoveRefusesParentReplacementAfterOpeningDirectories() throws {
+        for replaceSource in [false, true] {
+            let root = try makeTemporaryDirectory(named: "MoveParentReplacement")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let sourceFolder = try makeDirectory(named: "Source", in: root)
+            let destination = try makeDirectory(named: "Destination", in: root)
+            let unapproved = try makeDirectory(named: "Unapproved", in: root)
+            let originalParent = replaceSource ? sourceFolder : destination
+            let movedParent = root.appendingPathComponent("OriginalParent")
+            let source = sourceFolder.appendingPathComponent("PHOTO.JPG")
+            let bytes = Data("original photo".utf8)
+            try bytes.write(to: source)
+            let item = makeItem(id: "PHOTO.JPG", primaryURL: source)
+            let plan = try ExportWorker.makePlan(
+                for: [item], in: destination, mode: .move
+            )
+            let result = ExportWorker.move(
+                [item], to: destination,
+                preparedPlan: plan,
+                journalDirectory: root.appendingPathComponent("Journals"),
+                afterMoveDirectoriesOpened: {
+                    try! FileManager.default.moveItem(
+                        at: originalParent, to: movedParent
+                    )
+                    try! FileManager.default.createSymbolicLink(
+                        at: originalParent, withDestinationURL: unapproved
+                    )
+                },
+                progress: { _, _ in }
+            )
+            XCTAssertEqual(result.movedFiles, 0)
+            let retainedSource = replaceSource
+                ? movedParent.appendingPathComponent("PHOTO.JPG") : source
+            XCTAssertEqual(try Data(contentsOf: retainedSource), bytes)
+            XCTAssertEqual(
+                try FileManager.default.contentsOfDirectory(atPath: unapproved.path),
+                []
+            )
+        }
+    }
+
     func testChangedDestinationBeforeCopyLeavesNoRecoveryBlockAndRetryWorks() throws {
         for useSymlink in [false, true] {
             let root = try makeTemporaryDirectory(named: "DestinationReplacement")

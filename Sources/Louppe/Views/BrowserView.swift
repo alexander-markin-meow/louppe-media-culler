@@ -9,6 +9,7 @@ struct BrowserView: View {
     static let width = 122 + PersistentVerticalScroller.gutterWidth
 
     @ObservedObject var store: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var followTask: Task<Void, Never>?
     /// A plain click targets a thumbnail that is already on screen, so the
     /// follow-scroll that click's index change triggers must be skipped —
@@ -64,7 +65,7 @@ struct BrowserView: View {
             // it to resolve an item that may start outside the viewport.
             await Task.yield()
             guard !Task.isCancelled else { return }
-            if animated {
+            if animated && !reduceMotion {
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(id, anchor: .center)
                 }

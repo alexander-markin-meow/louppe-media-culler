@@ -20,6 +20,7 @@ import AppKit
 ///   (⇧-click range and ⌘-click add/remove live in the thumbnail views)
 struct SessionView: View {
     @ObservedObject var store: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         mainContent
@@ -395,6 +396,8 @@ struct SessionView: View {
                 Text(progress.title)
                     .font(.headline)
                 ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                    .accessibilityLabel(progress.title)
+                    .accessibilityValue("\(progress.done) of \(progress.total) files")
                     .frame(width: 280)
                 Text("\(progress.done) of \(progress.total) files")
                     .font(.caption)
@@ -431,9 +434,13 @@ struct SessionView: View {
             } label: {
                 Label(store.sourceFolder?.lastPathComponent ?? "Folder", systemImage: "folder")
                     .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 220)
             }
             .disabled(store.isFileOperationRunning)
-            .help("Choose another media folder (⌘O)")
+            .accessibilityLabel("Current folder: \(store.sourceFolder?.path ?? "none")")
+            .help(store.sourceFolder?.path ?? "Choose another media folder (⌘O)")
         }
 
         if #available(macOS 26.0, *) {
@@ -519,7 +526,7 @@ struct SessionView: View {
             // is showing — the column it controls exists only in the Gallery.
             if store.viewMode == .gallery {
                 Button {
-                    withAnimation { store.toggleBrowser() }
+                    withAnimation(reduceMotion ? nil : .default) { store.toggleBrowser() }
                 } label: {
                     Image(systemName: store.showBrowser ? "sidebar.squares.left" : "sidebar.left")
                 }
@@ -528,7 +535,7 @@ struct SessionView: View {
             }
 
             Button {
-                withAnimation { store.showMetadataPanel.toggle() }
+                withAnimation(reduceMotion ? nil : .default) { store.showMetadataPanel.toggle() }
             } label: {
                 Image(systemName: "info.circle")
             }
@@ -651,8 +658,8 @@ struct SessionView: View {
             }
             guard acceptsReviewModifiers else { return false }
             switch event.charactersIgnoringModifiers?.lowercased() {
-            case "q": withAnimation { store.toggleBrowser() }; return true
-            case "w": withAnimation { store.showMetadataPanel.toggle() }; return true
+            case "q": withAnimation(reduceMotion ? nil : .default) { store.toggleBrowser() }; return true
+            case "w": withAnimation(reduceMotion ? nil : .default) { store.showMetadataPanel.toggle() }; return true
             case "x": return store.toggleClippingWarnings()
             case "g": store.toggleViewMode(); return true
             default: return false
@@ -867,8 +874,8 @@ struct SessionView: View {
         case "f": store.rate(.yes); return true
         case "d": store.rate(.no); return true
         case "k": return store.toggleCurrentPlayableMedia()
-        case "q": withAnimation { store.toggleBrowser() }; return true
-        case "w": withAnimation { store.showMetadataPanel.toggle() }; return true
+        case "q": withAnimation(reduceMotion ? nil : .default) { store.toggleBrowser() }; return true
+        case "w": withAnimation(reduceMotion ? nil : .default) { store.showMetadataPanel.toggle() }; return true
         case "x": return store.toggleClippingWarnings()
         case "g": store.toggleViewMode(); return true
         case "e":

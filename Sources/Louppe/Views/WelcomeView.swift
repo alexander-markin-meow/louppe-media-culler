@@ -152,9 +152,12 @@ struct WelcomeView: View {
                         } label: {
                             Label(url.lastPathComponent, systemImage: "clock")
                                 .frame(maxWidth: 320)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                                 .foregroundStyle(Color.louppeAccent)
                         }
                         .buttonStyle(.link)
+                        .accessibilityLabel("Open \(url.path)")
                         .help(url.path)
                     }
                 }
@@ -240,19 +243,19 @@ struct ScanningView: View {
         VStack(spacing: 10) {
             ProgressView()
                 .controlSize(.large)
+                .accessibilityLabel("Scanning media")
+                .accessibilityValue(progressText)
 
             Text("Scanning “\(folderName)”…")
                 .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(folderPath)
+                .accessibilityLabel("Scanning \(folderPath)")
 
             Text(progressText)
                 .foregroundStyle(.secondary)
 
-            Text(folderPath)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .frame(maxWidth: 640)
         }
         .padding(.horizontal, 40)
         .toolbar {

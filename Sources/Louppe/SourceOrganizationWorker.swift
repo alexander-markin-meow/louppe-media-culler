@@ -3,6 +3,7 @@ import Foundation
 
 struct SourceOrganizationUndoRecord: Sendable {
     let sourceFolder: URL
+    let sourceFolderIdentity: SessionPersistence.SourceFolderIdentity
     let storageSafety: SourceOrganizationStorageSafety
     let changeKind: SourceFileChangeKind
     let reversePlan: ExportWorker.Plan
@@ -67,6 +68,7 @@ enum SourceOrganizationWorker {
                 try prepareDestinationDirectories(for: plan)
                 try verifyMoveCompatibility(for: plan)
             },
+            sourceFolderIdentity: plan.sourceFolderIdentity,
             progress: progress
         )
         let movedIDs = Set(result.movedItemIDs)
@@ -99,6 +101,7 @@ enum SourceOrganizationWorker {
            reverseItems.count == completedGroups.count {
             undo = SourceOrganizationUndoRecord(
                 sourceFolder: plan.sourceFolder,
+                sourceFolderIdentity: plan.sourceFolderIdentity,
                 storageSafety: plan.storageSafety,
                 changeKind: plan.changeKind,
                 reversePlan: ExportWorker.Plan(items: reverseItems),
@@ -143,6 +146,7 @@ enum SourceOrganizationWorker {
                 : .restoreOrganization,
             directorySyncPolicy: record.storageSafety.directorySyncPolicy,
             renameStrategy: record.storageSafety.noOverwriteRenameStrategy,
+            sourceFolderIdentity: record.sourceFolderIdentity,
             progress: progress
         )
         return SourceOrganizationResult(

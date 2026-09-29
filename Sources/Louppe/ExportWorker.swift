@@ -271,6 +271,20 @@ enum ExportWorker {
         }
     }
 
+    enum PlanningError: LocalizedError {
+        case conflictingFamilyNames
+        case collisionSearchExhausted
+
+        var errorDescription: String? {
+            switch self {
+            case .conflictingFamilyNames:
+                return "Some files in one media/XMP family have equivalent destination names. Export them separately without XMP, or give them distinct names before exporting."
+            case .collisionSearchExhausted:
+                return "Louppe could not reserve a distinct destination name. Choose another folder and retry."
+            }
+        }
+    }
+
     /// Reserves every destination name before file I/O. If any member of a
     /// photo collides, all members receive the same numeric suffix. The
     /// reservation set also prevents two same-named photos from different
@@ -280,11 +294,20 @@ enum ExportWorker {
         in destination: URL,
         xmpPlan: XMPExportPreparedPlan? = nil,
         mode: ExportMode = .copy,
-        destinationBinding: DurableFileIO.DirectoryBinding? = nil
+        destinationBinding: DurableFileIO.DirectoryBinding? = nil,
+        isCancelled: @Sendable () -> Bool = { false },
+        destinationEntryExists: (URL) -> Bool = pathEntryExists
     ) throws -> Plan {
+        try Task.checkCancellation()
+        if isCancelled() { throw CancellationError() }
         let binding = try destinationBinding ?? DurableFileIO.DirectoryBinding(url: destination)
         try binding.requireCurrentPath()
         var reservedPaths: Set<String> = []
+        // The complete unsuffixed family is the key: a JPEG-only group must
+        // still try zero even if a previous RAW+JPEG group needed a suffix
+        // solely because its RAW collided. Repeated identical families resume
+        // after their last reservation instead of rescanning all prior names.
+        var nextSuffixByFamily: [[String]: Int] = [:]
         var plannedItems: [PlannedItem] = []
         plannedItems.reserveCapacity(items.count)
 
@@ -296,6 +319,8 @@ enum ExportWorker {
         var groupIndex: [String: Int] = [:]
         var unplannedFamilyIDs: Set<String> = []
         for item in items {
+            try Task.checkCancellation()
+            if isCancelled() { throw CancellationError() }
             let familyIDs = Set(item.individualFiles.compactMap { file in
                 (try? XMPExactFileSystemPath(url: file.url))
                     .flatMap { familyByMediaPath[$0]?.id }
@@ -318,12 +343,13 @@ enum ExportWorker {
         }
 
         for group in groupedItems {
+            try Task.checkCancellation()
+            if isCancelled() { throw CancellationError() }
             let sourceFiles = group.items.flatMap(\.individualFiles)
             let family = group.key.hasPrefix("xmp:")
                 ? familiesByID[String(group.key.dropFirst(4))]
                 : nil
-            var suffix = 0
-            while true {
+            func candidateNames(suffix: Int) -> [String] {
                 let mediaNames = sourceFiles.map {
                     suffixedFilename(
                         $0.url.lastPathComponent,
@@ -349,20 +375,45 @@ enum ExportWorker {
                         )
                     }
                 }
+                return targetNames
+            }
+            let originalNames = candidateNames(suffix: 0)
+            let familyKey = originalNames.map(normalizedReservationName).sorted()
+            guard Set(familyKey).count == familyKey.count else {
+                // A shared suffix cannot separate equivalent names *inside*
+                // one family. Refuse before I/O instead of looping forever.
+                throw PlanningError.conflictingFamilyNames
+            }
+            var suffix = nextSuffixByFamily[familyKey, default: 0]
+            while true {
+                try Task.checkCancellation()
+                if isCancelled() { throw CancellationError() }
+                let targetNames = suffix == 0
+                    ? originalNames : candidateNames(suffix: suffix)
+                let normalizedPaths = targetNames.map(normalizedReservationName)
+                guard Set(normalizedPaths).count == normalizedPaths.count else {
+                    throw PlanningError.conflictingFamilyNames
+                }
+                // Avoid path construction and filesystem probes for names we
+                // already reserved in this same immutable batch.
+                if normalizedPaths.contains(where: reservedPaths.contains) {
+                    guard suffix < Int.max else {
+                        throw PlanningError.collisionSearchExhausted
+                    }
+                    suffix += 1
+                    continue
+                }
                 let targets = try targetNames.map {
                     try FileOperationJournal.appendingPathComponentExactly(
                         $0,
                         to: destination
                     )
                 }
-                let normalizedPaths = targetNames.map(normalizedReservationName)
-                let targetsAreDistinct = Set(normalizedPaths).count == normalizedPaths.count
-                let areAvailable = targetsAreDistinct && zip(targets, normalizedPaths).allSatisfy {
-                    !pathEntryExists($0.0) && !reservedPaths.contains($0.1)
-                }
+                let areAvailable = targets.allSatisfy { !destinationEntryExists($0) }
                 if areAvailable {
                     reservedPaths.formUnion(normalizedPaths)
-                    let mediaTargets = Array(targets.prefix(mediaNames.count))
+                    nextSuffixByFamily[familyKey] = suffix < Int.max ? suffix + 1 : suffix
+                    let mediaTargets = Array(targets.prefix(sourceFiles.count))
                     var files = zip(sourceFiles, mediaTargets).map {
                         PlannedFile(
                             source: $0.0.url,
@@ -372,7 +423,7 @@ enum ExportWorker {
                         )
                     }
                     if let family {
-                        var nextTargetIndex = mediaNames.count
+                        var nextTargetIndex = sourceFiles.count
                         if let finalPacket = family.finalPacket,
                            targets.indices.contains(nextTargetIndex) {
                             let canonicalTarget = targets[nextTargetIndex]
@@ -431,6 +482,9 @@ enum ExportWorker {
                     ))
                     break
                 }
+                guard suffix < Int.max else {
+                    throw PlanningError.collisionSearchExhausted
+                }
                 suffix += 1
             }
         }
@@ -473,8 +527,17 @@ enum ExportWorker {
                     in: destination,
                     xmpPlan: xmpPlan,
                     mode: .copy,
-                    destinationBinding: destinationBinding
+                    destinationBinding: destinationBinding,
+                    isCancelled: isCancelled
                 )
+        } catch is CancellationError {
+            return CopyResult(
+                copiedFiles: 0, failedPhotos: 0, inconsistentPhotos: 0,
+                cancelled: true,
+                cancellationReason: cancellationReason() ?? .unrecorded,
+                journalFailure: false, requiresRecovery: false,
+                failureMessage: nil, xmpSummary: xmpSummary
+            )
         } catch {
             return CopyResult(
                 copiedFiles: 0,

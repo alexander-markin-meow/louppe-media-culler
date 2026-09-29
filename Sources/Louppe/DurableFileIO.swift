@@ -144,6 +144,62 @@ enum DurableFileIO {
             try binding.requireCurrentPath()
         }
 
+        /// XMP publication holds the original parent through temporary write,
+        /// final source/packet validation, rename, cleanup, and directory flush.
+        func atomicWrite(_ data: Data, to target: URL, exclusive: Bool,
+                         validateBeforePublish: () throws -> Void) throws {
+            let temporary = binding.url.appendingPathComponent(
+                ".louppe-write-\(UUID().uuidString.lowercased()).tmp"
+            )
+            let fd = try create(temporary)
+            defer { Darwin.close(fd) }
+            var owned = stat()
+            guard fstat(fd, &owned) == 0 else { throw POSIXError(.EIO) }
+            var shouldRemoveTemporary = true
+            defer {
+                if shouldRemoveTemporary {
+                    // Inspect and unlink through the held directory. A replaced
+                    // pathname must never redirect cleanup into another folder.
+                    _ = try? withName(temporary) { name in
+                        var live = stat()
+                        guard fstatat(descriptor, name, &live, AT_SYMLINK_NOFOLLOW) == 0,
+                              live.st_mode & S_IFMT == S_IFREG,
+                              live.st_dev == owned.st_dev, live.st_ino == owned.st_ino else { return }
+                        _ = unlinkat(descriptor, name, 0)
+                    }
+                }
+            }
+            try writeAll(data, descriptor: fd, path: temporary.path)
+            try syncDescriptor(fd, path: temporary.path, fullSync: true)
+            var flushed = stat()
+            guard fstat(fd, &flushed) == 0 else { throw POSIXError(.EIO) }
+            try validateBeforePublish()
+            try binding.requireCurrentPath()
+            let result = try withName(temporary) { sourceName in
+                var named = stat()
+                guard fstatat(descriptor, sourceName, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                      named.st_mode & S_IFMT == S_IFREG,
+                      named.st_dev == flushed.st_dev, named.st_ino == flushed.st_ino,
+                      named.st_size == flushed.st_size,
+                      named.st_birthtimespec.tv_sec == flushed.st_birthtimespec.tv_sec,
+                      named.st_birthtimespec.tv_nsec == flushed.st_birthtimespec.tv_nsec,
+                      named.st_mtimespec.tv_sec == flushed.st_mtimespec.tv_sec,
+                      named.st_mtimespec.tv_nsec == flushed.st_mtimespec.tv_nsec,
+                      named.st_ctimespec.tv_sec == flushed.st_ctimespec.tv_sec,
+                      named.st_ctimespec.tv_nsec == flushed.st_ctimespec.tv_nsec else {
+                    throw DestinationChanged()
+                }
+                return try withName(target) { targetName in
+                    renameatx_np(descriptor, sourceName, descriptor, targetName,
+                                 exclusive ? UInt32(RENAME_EXCL) : 0)
+                }
+            }
+            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            shouldRemoveTemporary = false
+            try syncDescriptor(descriptor, path: binding.url.path, fullSync: true)
+            try binding.requireCurrentPath()
+        }
+
         /// Rename through held parent directories. A path component swapped
         /// after these descriptors were opened cannot redirect the move.
         func move(
@@ -491,7 +547,7 @@ enum DurableFileIO {
     static func syncFile(at url: URL, fullSync: Bool) throws {
         let descriptor = try openDescriptor(
             url,
-            flags: O_RDONLY | O_CLOEXEC | O_NOFOLLOW,
+            flags: O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
             operation: "open file for sync"
         )
         defer { Darwin.close(descriptor) }

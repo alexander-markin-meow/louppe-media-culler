@@ -1,0 +1,371 @@
+{
+  "Sources/Louppe/SessionPersistence.swift": {
+    "sha256": "490383af64f3f7259294d359b17dd46a420bd3a988aaf6e641ad88244cb3ac6e"
+  },
+  "Sources/Louppe/ZoomViewport.swift": {
+    "sha256": "92b04cc1d43085e5af832492232336e68205c7de29ef2ad4d1e65aea27f3df2c"
+  },
+  "Sources/Louppe/CleanUpWorker.swift": {
+    "sha256": "02b022286ab5e6cac183255ed68c192d979e100b74084586081f0f4fc2d6c978"
+  },
+  "Sources/Louppe/LouppeApp.swift": {
+    "sha256": "4f1b808f1a0742aaefedf1cf31a951ea899844b9dc0e008c829c8ba3ea7d4f06"
+  },
+  "Sources/Louppe/FileRenaming.swift": {
+    "sha256": "f2bef1cee1071fe1826f751f8fb2d83a7a49088ef7f8af6704bbb8a4a6cb6ae2"
+  },
+  "Sources/Louppe/ConnectedDrives.swift": {
+    "sha256": "f4edea734d32d8e7c0a7e9d8cecafca2b0dc2333555a088c7fa2d9babcf82ce9"
+  },
+  "Sources/Louppe/ImagePipeline.swift": {
+    "sha256": "675987bbe2cae4ee4a4e7ca3b9196f5497342a9f2544d07d09d009fff54819fe"
+  },
+  "Sources/Louppe/SessionStore.swift": {
+    "sha256": "afb2d275db6adb1d0546cd092a758df0634667e3aaca6b9a66929e5958b9c956"
+  },
+  "Sources/Louppe/DurableFileIO.swift": {
+    "sha256": "fdef867585a3c7f7c32eba6a0ad9e7f74cfea99919aae61347b941b57994a9b3"
+  },
+  "Sources/Louppe/SourceOrganizationWorker.swift": {
+    "sha256": "a7a7fc704779aa17d8b0279ae260def04c00460fc60af838747a57118ca13831"
+  },
+  "Sources/Louppe/AudioLevelPipeline.swift": {
+    "sha256": "5c9392de722716ebce665ed68d8731ab194e189c12508c5aa170ee7c33d2f358"
+  },
+  "Sources/Louppe/PreparedSessionIndex.swift": {
+    "sha256": "7dcce62029618f3cbcde71c226876a08af3e4a3026dc8f1f536ba89c4c235d2e"
+  },
+  "Sources/Louppe/ExportManager.swift": {
+    "sha256": "1d5ca2c6929f40bbc29e0969f4ba9a549b3e3aaaa638690e62779dc90204f9d7"
+  },
+  "Sources/Louppe/FileOperationJournal.swift": {
+    "sha256": "b76565002ee9416e9a68f00b3637d96c912072c96da49aed9b22c6b65cd1846c"
+  },
+  "Sources/Louppe/HistogramPipeline.swift": {
+    "sha256": "01cb16358d2e6b1b5b7072dc1e0915d8c8b9f1ac7601161ead3452a0756d850d"
+  },
+  "Sources/Louppe/ExportDestinationValidator.swift": {
+    "sha256": "9d29aac203d3a1a7216da2e9af4e9d7199a0be9155f986aa006164becdc41136"
+  },
+  "Sources/Louppe/TextPreviewLoader.swift": {
+    "sha256": "3e2a3604a55c4e3f92d8acd8b9d0117f202a9f5357f6b6a5d47b2dd1bf9ed0db"
+  },
+  "Sources/Louppe/MetadataExtractor.swift": {
+    "sha256": "4df90be1ce2f63eb11013b54768437839c00b6c5875b131e213aa4f760ec5a9f"
+  },
+  "Sources/Louppe/MultiDestinationExport.swift": {
+    "sha256": "430f69785d43d64fd55b371ce0a15fd824dafdfbe7ad6dd89c07e8994a7f331e"
+  },
+  "Sources/Louppe/SourceOrganization.swift": {
+    "sha256": "a1c7c4448eedffbdacb3d53d59cb40a0f2996ce99b2507e7ffdee555128f219c"
+  },
+  "Sources/Louppe/VideoPlaybackController.swift": {
+    "sha256": "94d0f0149856d8c42bca2ec78b5718b38557ef7839f0b0c5752535e7bfd5faec"
+  },
+  "Sources/Louppe/SourceOrganizationStorageSafety.swift": {
+    "sha256": "e58b591ad61abd8ad92d6e42d5a2b407cb1d0ea2a1d6220a18036002886245e1"
+  },
+  "Sources/Louppe/SelectionState.swift": {
+    "sha256": "6be47b3071640dabaa155d8cf69d82c79eefa3c7e0e758f5d0a06fc623e0e198"
+  },
+  "Sources/Louppe/AppDateFormat.swift": {
+    "sha256": "14f8b5401dacfcea57ed228a75a6d233b5ed9e64f881342ef654d51ea8ca9153"
+  },
+  "Sources/Louppe/Models.swift": {
+    "sha256": "007ee5d0de3174d10e55e3caea45c40b7f1f04ca5813d8137f5d5e264f1e4dbb"
+  },
+  "Sources/Louppe/CameraQualityWarnings.swift": {
+    "sha256": "d13f85e29e0710fa8662e44463e3a4e307d79be3be75b08421e7a7854d42702c"
+  },
+  "Sources/Louppe/HighResolutionImagePipeline.swift": {
+    "sha256": "ca76d3b8ce1edc77aef717f09e12abc20260c883d4e2be7c6cb4d69479665d89"
+  },
+  "Sources/Louppe/UpdaterViews.swift": {
+    "sha256": "6fcf673a932069c8debfb5f0e55567306de4bd82ac3531a010ae6ec20502fe94"
+  },
+  "Sources/Louppe/ReviewPreferences.swift": {
+    "sha256": "83625a974e1df07a55b9e3724efa3d12ece212acde27e61b92473fd3f7492bc7"
+  },
+  "Sources/Louppe/FolderScanner.swift": {
+    "sha256": "94bbac91e5a1ca1397dfe7336cfd391c6d77755b1758b7fdb1c1cc8999318115"
+  },
+  "Sources/Louppe/SecurityScopedAccess.swift": {
+    "sha256": "91a674ce10bd7723c2bf4c206b67b0475e6adec3d14a526dc42c54dee9733e43"
+  },
+  "Sources/Louppe/VideoSupport.swift": {
+    "sha256": "f0c1c66432a6c4d644128e9969647a92347934ae183e08921087748a1f659535"
+  },
+  "Sources/Louppe/AppBuildInfo.swift": {
+    "sha256": "71ec1894e4c10c4c03e8b157150c75676a3b1514c48eb4ae7b85ca6f13c7d04c"
+  },
+  "Sources/Louppe/ExportSelectionConfiguration.swift": {
+    "sha256": "570974c1320d4ab90bd5df73f28a8539e84820e157236928f53b837a56bcb5b3"
+  },
+  "Sources/Louppe/ExportWorker.swift": {
+    "sha256": "a208f801ea0b1f5e5746795e8de956f7279a71afb760e3f70887e769d1286855"
+  },
+  "Sources/Louppe/DuplicateBurstAnalysis.swift": {
+    "sha256": "551aa57d32735087d7def3b5d7c157944a6c762e80409ff2a298c3b896de48c1"
+  },
+  "Sources/Louppe/XMP/XMPExactFileSystemPath.swift": {
+    "sha256": "97cd67ff273fddbe719d5b3f50e7f9bb10549deb283ac8b4c2792626c4f085e5"
+  },
+  "Sources/Louppe/XMP/XMPSidecarResolver.swift": {
+    "sha256": "e65687e28a7a4072f27ce6852a4e7d8636fa4a811e6e04062ca15321e254f6ae"
+  },
+  "Sources/Louppe/XMP/XMPMetadataStore.swift": {
+    "sha256": "f82b70ef23f3bee70952c379ec0fde9be8eb9bdbbd931bcd3538e3454e190165"
+  },
+  "Sources/Louppe/XMP/XMPFieldMapping.swift": {
+    "sha256": "7a33ee3d07a742817c6794ef480cd55a6f5c725b19533881e33b02ed204b257b"
+  },
+  "Sources/Louppe/XMP/XMPApplicationProfile.swift": {
+    "sha256": "10d996e2152cda5105b0a8f12e178a8d33dc9116ae55ed4ef5736ba90357d121"
+  },
+  "Sources/Louppe/XMP/XMPExportPlanner.swift": {
+    "sha256": "22d738953e1b1f48046e90d0c7a838fc7b5482d98d6059d89af8275cac993339"
+  },
+  "Sources/Louppe/XMP/XMPPublication.swift": {
+    "sha256": "56e6df7a19c53578c793b7ff6be140a4cd174ad1e63eb320b3234cf21a4ca4bc"
+  },
+  "Sources/Louppe/Views/FullImageView.swift": {
+    "sha256": "b173f592dbf0b33b8a83b0a07d8b6c2fb14ee7f20ced9064b1244bcc410e359c"
+  },
+  "Sources/Louppe/Views/LouppeHelpView.swift": {
+    "sha256": "783e617c2c1ad6dd9b8f5812999e43a6933a4a20e057db6118451f32f819817c"
+  },
+  "Sources/Louppe/Views/ActualSizeImageView.swift": {
+    "sha256": "cf1e6a15bce52df850cd3d335303f97cfe9abd51648962084fb3c5be227beb7a"
+  },
+  "Sources/Louppe/Views/MediaTileAccessibility.swift": {
+    "sha256": "adf4cca3028efd73f44c5578dcb24a9098519a6e4659f41870913da4fddb520d"
+  },
+  "Sources/Louppe/Views/FilterView.swift": {
+    "sha256": "d549491888cd25a5ac19fa7e7e20372e23d515b70a2d63434ab4a44f1d7e9ca5"
+  },
+  "Sources/Louppe/Views/VideoPlayerView.swift": {
+    "sha256": "31e0c7b4f4cc2f6d30bd099f7cb974650836ee6312408d44dd71f2b757c7a2c7"
+  },
+  "Sources/Louppe/Views/AudioLevelView.swift": {
+    "sha256": "0f93a65bc389783cc3823161c51c79337881e0b680bc2376fb60a575c5267e7a"
+  },
+  "Sources/Louppe/Views/CameraQualityWarningsView.swift": {
+    "sha256": "ca961018cd1b51db4898444c043b7fce7e3166c085b3c210bc15f1e75c477d88"
+  },
+  "Sources/Louppe/Views/ActionPaletteView.swift": {
+    "sha256": "45de44ba7c22efeeec30188a1dc98a43392fde9cbf7ac927222e58467b619fbd"
+  },
+  "Sources/Louppe/Views/SessionEmptyView.swift": {
+    "sha256": "4e11bd287ffc2d072dd9083480e00314f881afd2ce7dcb46c3cb4415c8071560"
+  },
+  "Sources/Louppe/Views/TextPreviewView.swift": {
+    "sha256": "d66e988b07fb83cfa1d67d08a00dab444f403c55c16a77c660c75e19a678c60b"
+  },
+  "Sources/Louppe/Views/SheetForm.swift": {
+    "sha256": "41d96d91b669f18ab4defbcdcedff364086ef08789eb5c7d866b58a92d126867"
+  },
+  "Sources/Louppe/Views/RootView.swift": {
+    "sha256": "d2fd8a569ee3fc5c5937d709ad2c7f8889025d0472b0dd541f4ef885a0f2b8af"
+  },
+  "Sources/Louppe/Views/XMPConflictResolverView.swift": {
+    "sha256": "a2990666d55532ee4b741d6b7e0981d93407026bcf48e5bfd2c3928e8d9508a7"
+  },
+  "Sources/Louppe/Views/HistogramView.swift": {
+    "sha256": "7c8cf732d3aea8242b973d35956bd93b4c9f3fa22125f7e65e660c5fbb4fb7c4"
+  },
+  "Sources/Louppe/Views/OrganizeSourceView.swift": {
+    "sha256": "940d7ae6280e37cec190d3165f48df6cb3c8ccc264a191affd7c79b7a4a0643a"
+  },
+  "Sources/Louppe/Views/WelcomeView.swift": {
+    "sha256": "8296911f906aa25e84ac4f63b76eb9957f46d2f44d621d5b9d56111fbe3a5d09"
+  },
+  "Sources/Louppe/Views/ReviewPreferencesSettingsView.swift": {
+    "sha256": "fed1c0e02580aab72a84fe1e6de7e5f5709c15d9465eb108c3adad426d4c2ffc"
+  },
+  "Sources/Louppe/Views/MetadataPanel.swift": {
+    "sha256": "2b8fc67da75bf25932fd1fb1b1f272a7ce3b123cc17215235f3cc681559400e0"
+  },
+  "Sources/Louppe/Views/BrowserView.swift": {
+    "sha256": "f6570989545e3f1b8ebb733a74c204a20269b2adec72143878e8e55fd63029ba"
+  },
+  "Sources/Louppe/Views/ExportView.swift": {
+    "sha256": "6c581865e073c0e2d3190b528b58ebb4228e0119fd1fa97999d945a4d149a607"
+  },
+  "Sources/Louppe/Views/PersistentVerticalScroller.swift": {
+    "sha256": "6647807f54ac354b83f32cf1e5ca607e2af735f2ccc5d92f390d618331c4c2ed"
+  },
+  "Sources/Louppe/Views/SessionReviewGuidance.swift": {
+    "sha256": "61d4b2c111b6c33c00de3c9b3af1665a141b6126a88583cdad022f61257e71e7"
+  },
+  "Sources/Louppe/Views/SortView.swift": {
+    "sha256": "39034ba3eb66b52d18a990b2ab87cc50212e5418ee76b4f08480ec1ca4079007"
+  },
+  "Sources/Louppe/Views/SessionView.swift": {
+    "sha256": "cde2f82f0e9be6c518a2279bd14c1f7b614b0fc70fc99527861ec87d101ef6d2"
+  },
+  "Sources/Louppe/Views/GalleryView.swift": {
+    "sha256": "f41e2b441a60d88f76ce5336c4a0ff7d5ffc7a00635d466a74b190c9c1858a0c"
+  },
+  "Sources/Louppe/Views/PhotoZoomControl.swift": {
+    "sha256": "221a6890fb5d58c3db35b542209fa0ea5491dc4dbf2dba4574c07077037ad3a3"
+  },
+  "Sources/Louppe/Views/GridView.swift": {
+    "sha256": "296899fc5f3944c66f5f128b31e80403d90dfb6c6d290fc65a5da9f6775084a4"
+  },
+  "Sources/Louppe/Views/RenameFilesView.swift": {
+    "sha256": "def3a4375c6482094be2b8a41f70622b86acf15d7411052355b731d0cf1f94fe"
+  },
+  "Sources/Louppe/Views/MetadataEditingControls.swift": {
+    "sha256": "e471180f7a0712c1f28a97a88a9dcc43ce8ba24e53b063836eae47357f95e6b4"
+  },
+  "Sources/Louppe/Views/ThumbnailView.swift": {
+    "sha256": "b9332cc6b8d51a63187410e9992047f96466e0a4d21beb3b351235afbe0a6765"
+  },
+  "Tests/LouppeTests/CameraQualityWarningTests.swift": {
+    "sha256": "117c9eb2c6390bb1e87dd9e1474f1b42003004f4143c2888534cc77f669c045f"
+  },
+  "Tests/LouppeTests/XMPReviewFixTests.swift": {
+    "sha256": "a17c29eb13c71de32313884bd3b0c33e0debd673b8287206c58271c4d2b3abcb"
+  },
+  "Tests/LouppeTests/ExportDestinationValidatorTests.swift": {
+    "sha256": "bf32af36e93ac3d33de9e90a7fbd0c8df1b9f1fc08182bbad5c8355ddb6cc8c6"
+  },
+  "Tests/LouppeTests/ViewSwitchTests.swift": {
+    "sha256": "d4acb6884697cafc3c8943fb71f7f132d08e09c925fedc781740bbc29aac901a"
+  },
+  "Tests/LouppeTests/SelectionStateTests.swift": {
+    "sha256": "e2a87cc1ac0150d78b6f5f3b3f83df3796dacc0b2f631d79f54dc4042a780403"
+  },
+  "Tests/LouppeTests/ConnectedDrivesTests.swift": {
+    "sha256": "248b7efb1be76029dccaa8cf09f67a3f61aab72d93bad1aa9e83d08dc3f1231b"
+  },
+  "Tests/LouppeTests/ZoomTransitionTests.swift": {
+    "sha256": "1175ff62eaec5a0e86fc342607b9efd8dc9c69a1efdaa16d1aa9396ab73aa573"
+  },
+  "Tests/LouppeTests/ReviewPreferencesTests.swift": {
+    "sha256": "7e95eef9a9d683963ead477f396204b671ebba66504266884174a05f25d3954b"
+  },
+  "Tests/LouppeTests/SourceOrganizationTests.swift": {
+    "sha256": "4cc9db0931b6a26e64047b36cfce499bce55815dd19157f38989988f7b2d7185"
+  },
+  "Tests/LouppeTests/HotkeyTests.swift": {
+    "sha256": "2c33d9264fedc26c9323706ae9f1b78d8bec6667c1d469d12c2d38f194c4fa8f"
+  },
+  "Tests/LouppeTests/FolderHierarchyTests.swift": {
+    "sha256": "9cd642a97cfafdc807ec08881876e52fd081d20c8fba15d21606d1614d127340"
+  },
+  "Tests/LouppeTests/FolderScannerFilenamePolicyTests.swift": {
+    "sha256": "7893e373599a2e510ae203ccd46bc32ef6cc1e5008645cbebe2552a4b32211e3"
+  },
+  "Tests/LouppeTests/RAWJPEGXMPResolutionTests.swift": {
+    "sha256": "0510276e95b4ad49274b20a62706a6f3d1bc5adbdd238ccf2ffc5be548928307"
+  },
+  "Tests/LouppeTests/DuplicateBurstAnalysisTests.swift": {
+    "sha256": "bb86e85ac8a6406bedd79abb9868342aef5d59965b4dea0bb632a348e4c0efbf"
+  },
+  "Tests/LouppeTests/SessionDurabilityTests.swift": {
+    "sha256": "27850398a6f231588e8e50a39099b0ffedb15094c2fb2a96257d385e16c95bd1"
+  },
+  "Tests/LouppeTests/FileOperationJournalTests.swift": {
+    "sha256": "3897df6c4d8b08d892202478c006571260fda9d064e88125f92e48a8b7c1392c"
+  },
+  "Tests/LouppeTests/XMPPhase6Tests.swift": {
+    "sha256": "645f58cbe8090f9da15662712bc4e919c375cd20481694e6e28059bd639d22ee"
+  },
+  "Tests/LouppeTests/XMPSecurityTests.swift": {
+    "sha256": "563be5612688d71c152174c24f4716050d6df58bf70b012fb807fd6d98020ff7"
+  },
+  "Tests/LouppeTests/MediaNumericSafetyTests.swift": {
+    "sha256": "4c21e223499f21552627a4a4ab5bfd1c2cd193f3b3d6662276a64f1e4e203dab"
+  },
+  "Tests/LouppeTests/ImagePipelineCacheTests.swift": {
+    "sha256": "3a7ea0b40856c0f36ddf3fb1438da5b8383dc8dd2cf3e985371390c63a0dc06e"
+  },
+  "Tests/LouppeTests/BrowserSelectionTests.swift": {
+    "sha256": "2f9441f45d1c2681982a0a4419f9125bc587b4975624e8e7c6a17d4ccd7a552c"
+  },
+  "Tests/LouppeTests/RAWJPEGPaletteTests.swift": {
+    "sha256": "2692b3c6f6bfa3ac2af2980737e68c7d4fd2b9f2e597d7f5b1b208eb87d435a9"
+  },
+  "Tests/LouppeTests/XMPFilterSortExportTests.swift": {
+    "sha256": "45b7371a1d3343fcb65a6fbba9f9a85068b4362ce3d3ba1275088b0127af2f1c"
+  },
+  "Tests/LouppeTests/TextPreviewTests.swift": {
+    "sha256": "bfcb8a77c1a63fe94d8cf50570834125935bbd11f25fed4fb7645c42eaa9cb65"
+  },
+  "Tests/LouppeTests/XMPNativeMetadataTests.swift": {
+    "sha256": "0e0563f5d8bf4238f5ee150e3a86b6c636ad279550c0231be08b2145d396d67b"
+  },
+  "Tests/LouppeTests/XMPPhase5Tests.swift": {
+    "sha256": "51a6f98041a02932ef32eb95b1b620e497a60911cfcddc2c03690393c6ebb447"
+  },
+  "Tests/LouppeTests/ReviewGuidanceTests.swift": {
+    "sha256": "e1518062d71eedae3e602f337d3792212d89f7c4c25c0a905df86e94458e3c0b"
+  },
+  "Tests/LouppeTests/AudioSupportTests.swift": {
+    "sha256": "49ea05bf97690ca9e3e8944394f4c9b277d8f5f8262ecfdb090e385ac0cf7a4a"
+  },
+  "Tests/LouppeTests/CleanUpWorkerSafetyTests.swift": {
+    "sha256": "8bd71d8334dc89b4f0958c04a2dfcda717203f00ae42386c4a56f7f89b11612b"
+  },
+  "Tests/LouppeTests/AccessibilityTests.swift": {
+    "sha256": "2f6a6c88e3e7e1a5db45a5d64e07fd3f16d6fdc4dc442c412edbf81f6453edee"
+  },
+  "Tests/LouppeTests/VideoPlayerViewTests.swift": {
+    "sha256": "e21c7eb1a2383f2f4504e2eea2bb9d4c768a0eb8e2c51b7e7a89e5eb71f48f27"
+  },
+  "Tests/LouppeTests/RecoveryGatingTests.swift": {
+    "sha256": "0e507a2c5c2ed90a88add1b3ba62c9fc765bfaf99cbaa2b17a13eba0069522a0"
+  },
+  "Tests/LouppeTests/ExportSelectionConfigurationTests.swift": {
+    "sha256": "3d98f6ba03fd470dc1b9c354c10a3ab9923216e6fc57841a4ab0a6db40262c4b"
+  },
+  "Tests/LouppeTests/ExportWorkerSafetyTests.swift": {
+    "sha256": "08e40193e8ae5a28125844c3343e3383919811ab86d996fb4743f7a379629bee"
+  },
+  "Tests/LouppeTests/HistogramTests.swift": {
+    "sha256": "cf9036f7dd80de3c8986a14c61daff986308784a980c9bf8354a7cc5a26016ab"
+  },
+  "Tests/LouppeTests/DurableFileIOTests.swift": {
+    "sha256": "ad98e46a89781cd9ad63b65c00c0b7c81aaa2afb87bca24036ac467e0a048082"
+  },
+  "Tests/LouppeTests/ZoomInteractionTests.swift": {
+    "sha256": "3795cf13cbec80c970b7b3c591aad63f588f55d5b23f34218f4e6e09dfbe3544"
+  },
+  "Tests/LouppeTests/MultiDestinationExportTests.swift": {
+    "sha256": "268b4f0d69ff75baaeaeafdedde9bb28cad497a7936a7264f000d184ae75c86d"
+  },
+  "Tests/LouppeTests/ZoomTests.swift": {
+    "sha256": "ba794dec552fced7c38bc8345b26dd9aa6a7fb257781d8af4a4214c372541f2b"
+  },
+  "Tests/LouppeTests/GridControlGestureTests.swift": {
+    "sha256": "9f954a05576e65bdac420e5fce1651e19042d5a68945f49d07d1ac83b60436a6"
+  },
+  "Tests/LouppeTests/XMPPhase7Tests.swift": {
+    "sha256": "7b820ccf7f996bcce556ab4a743945d8f4f2284d793e0187459844368430ed1c"
+  },
+  "Tests/LouppeTests/MainWindowLayoutTests.swift": {
+    "sha256": "4eb2acbe9ccfd9f497ec47d9adb4b1248f6e1ef55d4763e544da913181e43751"
+  },
+  "Tests/PerformanceChecks/XMPPublicationStubs.swift": {
+    "sha256": "a4464f0e4b63971bd3ea3fbed8c39826442785150f79b6a35bd11f2cf9cc28ea"
+  },
+  "Tests/PerformanceChecks/main.swift": {
+    "sha256": "fc0dc250c457fdef42011e8c49e71d8549a7fce1340ca87964f66f7e572d5619"
+  },
+  "Tests/ScrollbarChecks/main.swift": {
+    "sha256": "4aa6edb7dac93c5dae3ffe92f78ca47d1c5395221ff35f42adf325b0600f1455"
+  },
+  "Tests/VideoChecks/main.swift": {
+    "sha256": "5acf96db52ebc76175dda21e0f667c6fb7bd86e0049ab4ac555f010bd912420c"
+  },
+  "Package.swift": {
+    "sha256": "d9b492ed3fafe6673ae47b70718aecdc64f6e817ccc2f32cd15fa5c6578d7289"
+  },
+  "build_app.sh": {
+    "sha256": "3aa5e230c3f98322045b3dfd1367036179a010b288b527dfbd4f509c9b10dba4"
+  },
+  "VERSION": {
+    "sha256": "ac34acb978caa39942a85e956889ed8409002a75e8f61d05b21d8860db009722"
+  }
+}

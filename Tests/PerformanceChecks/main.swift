@@ -2324,7 +2324,11 @@ struct PerformanceChecks {
             "a malformed commit marker must remain retryable"
         )
 
+        // The v1 writer standardized paths, unlike the current exact-byte
+        // writer. Resolve the fixture root before generating its records so
+        // /private/tmp aliases cannot produce an impossible legacy source path.
         let legacyRoot = try disposableFolder(named: "JournalLegacyCommit")
+            .resolvingSymlinksInPath().standardizedFileURL
         defer { try? FileManager.default.removeItem(at: legacyRoot) }
         let legacySource = legacyRoot.appendingPathComponent("SOURCE.JPG")
         let legacyDestination = legacyRoot.appendingPathComponent("COPY.JPG")
@@ -2419,7 +2423,7 @@ struct PerformanceChecks {
         try expect(
             legacyReport.committedOperations == 1
                 && !legacyReport.hasUnresolvedFiles,
-            "an exact version-1 commit marker must remain recoverable after update"
+            "an exact version-1 commit marker must remain recoverable after update: \(legacyReport)"
         )
         let legacySourceContents = try Data(contentsOf: legacySource)
         let legacyDestinationContents = try Data(
@@ -3787,7 +3791,11 @@ struct PerformanceChecks {
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         throw CheckFailure(
-            "session did not finish scanning \(expectedItems) items"
+            "session did not finish scanning \(expectedItems) items; "
+                + "phase=\(store.phase), items=\(store.items.count), "
+                + "transitioning=\(store.isSessionTransitioning), saves=\(store.activePersistenceSaveCount), "
+                + "scanError=\(store.scanError ?? "none"), "
+                + "saveWarning=\(store.persistenceWarning ?? "none")"
         )
     }
 

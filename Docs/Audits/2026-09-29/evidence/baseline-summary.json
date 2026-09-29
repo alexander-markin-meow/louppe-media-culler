@@ -1,0 +1,23 @@
+{
+  "appVersion": "1.10.0",
+  "build": 12,
+  "xctest": {
+    "executed": 473,
+    "skipped": 1,
+    "failures": 0,
+    "hotkeyTests": 34
+  },
+  "strictBuild": "passed",
+  "storeStrictBuild": "passed",
+  "performanceChecks": 75,
+  "scrollbarChecks": 10,
+  "nativeMediaChecks": "passed",
+  "releasePreflight": "passed",
+  "websiteTests": "passed",
+  "localWebsiteReferences": 33,
+  "missingLocalReferences": 0,
+  "liveWebsite360pxOverflow": false,
+  "packagedLaunch": "process and v6 sidecar verified",
+  "nativeGUIInspection": "unavailable: ScreenCaptureKit -3811",
+  "credentialScan": "history/staged/unstaged no leaks reported"
+}

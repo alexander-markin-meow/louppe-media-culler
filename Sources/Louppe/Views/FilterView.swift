@@ -1,5 +1,37 @@
 import SwiftUI
 
+/// Only explicitly edited endpoints are parsed from their rounded display.
+/// Untouched endpoints keep the exact filter value; opening/closing is a no-op.
+enum NumericFilterRangeDraft {
+    static func resolve(
+        available: ClosedRange<Double>,
+        currentFrom: Double, currentTo: Double, isEnabled: Bool,
+        fromText: String, toText: String,
+        editedFrom: Bool, editedTo: Bool,
+        parse: (String) -> Double?,
+        snap: (Double, Double) -> Double
+    ) -> (from: Double, to: Double)? {
+        guard editedFrom || editedTo else { return nil }
+        let from: Double
+        let to: Double
+        if editedFrom {
+            guard let parsed = parse(fromText) else { return nil }
+            from = snap(parsed, available.lowerBound)
+        } else {
+            from = isEnabled ? currentFrom : available.lowerBound
+        }
+        if editedTo {
+            guard let parsed = parse(toText) else { return nil }
+            to = snap(parsed, available.upperBound)
+        } else {
+            to = isEnabled ? currentTo : available.upperBound
+        }
+        guard from.isFinite, to.isFinite, from <= to else { return nil }
+        return (from, to)
+    }
+}
+
+
 /// The toolbar filter popover. Metadata is cached during scanning, so every
 /// control below only filters in-memory `PhotoItem` values.
 struct FilterView: View {
@@ -30,6 +62,7 @@ struct FilterView: View {
     @State private var videoFrameRateFromText = ""
     @State private var videoFrameRateToText = ""
     @State private var settingCommitTask: Task<Void, Never>?
+    @State private var editedSettingFields: Set<SettingField> = []
     @FocusState private var isSearchFocused: Bool
     @FocusState private var focusedSettingField: SettingField?
 
@@ -576,7 +609,12 @@ struct FilterView: View {
         width: CGFloat,
         invalid: Bool
     ) -> some View {
-        TextField("", text: text)
+        TextField("", text: Binding {
+            text.wrappedValue
+        } set: { value in
+            editedSettingFields.insert(field)
+            text.wrappedValue = value
+        })
             .textFieldStyle(.roundedBorder)
             .multilineTextAlignment(.trailing)
             .monospacedDigit()
@@ -867,105 +905,179 @@ struct FilterView: View {
     // MARK: - Range drafts
 
     private var apertureDraftIsValid: Bool {
-        guard let from = Self.parseAperture(apertureFromText),
-              let to = Self.parseAperture(apertureToText) else { return false }
-        return from <= to
+        draftIsValid(
+            available: store.apertureRange,
+            currentFrom: store.filter.apertureFrom, currentTo: store.filter.apertureTo,
+            isEnabled: store.filter.apertureEnabled,
+            fromText: apertureFromText, toText: apertureToText,
+            fromField: .apertureFrom, toField: .apertureTo,
+            parse: Self.parseAperture,
+            snap: { Self.snapAperture($0, toDisplayedBound: $1) }
+        )
     }
 
     private var shutterDraftIsValid: Bool {
-        guard let from = Self.parseShutter(shutterFromText),
-              let to = Self.parseShutter(shutterToText) else { return false }
-        return from <= to
+        draftIsValid(
+            available: store.shutterRange,
+            currentFrom: store.filter.shutterFrom, currentTo: store.filter.shutterTo,
+            isEnabled: store.filter.shutterEnabled,
+            fromText: shutterFromText, toText: shutterToText,
+            fromField: .shutterFrom, toField: .shutterTo,
+            parse: Self.parseShutter,
+            snap: { Self.snapShutter($0, toDisplayedBound: $1) }
+        )
     }
 
     private var isoDraftIsValid: Bool {
-        guard let from = Self.parseISO(isoFromText),
-              let to = Self.parseISO(isoToText) else { return false }
-        return from <= to
+        draftIsValid(
+            available: store.isoRange,
+            currentFrom: store.filter.isoFrom, currentTo: store.filter.isoTo,
+            isEnabled: store.filter.isoEnabled,
+            fromText: isoFromText, toText: isoToText,
+            fromField: .isoFrom, toField: .isoTo,
+            parse: Self.parseISO,
+            snap: { Self.snapISO($0, toDisplayedBound: $1) }
+        )
     }
 
     private var durationDraftIsValid: Bool {
-        guard let from = Self.parseDuration(durationFromText),
-              let to = Self.parseDuration(durationToText) else { return false }
-        return from <= to
+        draftIsValid(
+            available: store.durationRange,
+            currentFrom: store.filter.durationFrom, currentTo: store.filter.durationTo,
+            isEnabled: store.filter.durationEnabled,
+            fromText: durationFromText, toText: durationToText,
+            fromField: .durationFrom, toField: .durationTo,
+            parse: Self.parseDuration,
+            snap: { Self.snapDuration($0, toDisplayedBound: $1) }
+        )
     }
 
     private var videoFrameRateDraftIsValid: Bool {
-        guard let from = Self.parseVideoFrameRate(videoFrameRateFromText),
-              let to = Self.parseVideoFrameRate(videoFrameRateToText)
-        else { return false }
-        return from <= to
+        draftIsValid(
+            available: store.videoFrameRateRange,
+            currentFrom: store.filter.videoFrameRateFrom, currentTo: store.filter.videoFrameRateTo,
+            isEnabled: store.filter.videoFrameRateEnabled,
+            fromText: videoFrameRateFromText, toText: videoFrameRateToText,
+            fromField: .videoFrameRateFrom, toField: .videoFrameRateTo,
+            parse: Self.parseVideoFrameRate,
+            snap: { Self.snapVideoFrameRate($0, toDisplayedBound: $1) }
+        )
+    }
+
+    private func draftIsValid(
+        available: ClosedRange<Double>?, currentFrom: Double, currentTo: Double,
+        isEnabled: Bool, fromText: String, toText: String,
+        fromField: SettingField, toField: SettingField,
+        parse: (String) -> Double?, snap: (Double, Double) -> Double
+    ) -> Bool {
+        let editedFrom = editedSettingFields.contains(fromField)
+        let editedTo = editedSettingFields.contains(toField)
+        guard editedFrom || editedTo else { return true }
+        guard let available else { return false }
+        return NumericFilterRangeDraft.resolve(
+            available: available, currentFrom: currentFrom, currentTo: currentTo,
+            isEnabled: isEnabled, fromText: fromText, toText: toText,
+            editedFrom: editedFrom, editedTo: editedTo, parse: parse, snap: snap
+        ) != nil
     }
 
     private func commitApertureDrafts(to filter: inout PhotoFilter) {
         guard let available = store.apertureRange,
-              let parsedFrom = Self.parseAperture(apertureFromText),
-              let parsedTo = Self.parseAperture(apertureToText),
-              parsedFrom <= parsedTo else { return }
-        let from = Self.snapAperture(parsedFrom, toDisplayedBound: available.lowerBound)
-        let to = Self.snapAperture(parsedTo, toDisplayedBound: available.upperBound)
-        filter.apertureFrom = from
-        filter.apertureTo = to
-        filter.apertureEnabled = from != available.lowerBound || to != available.upperBound
+              let resolved = NumericFilterRangeDraft.resolve(
+                available: available,
+                currentFrom: filter.apertureFrom, currentTo: filter.apertureTo,
+                isEnabled: filter.apertureEnabled,
+                fromText: apertureFromText, toText: apertureToText,
+                editedFrom: editedSettingFields.contains(.apertureFrom),
+                editedTo: editedSettingFields.contains(.apertureTo),
+                parse: Self.parseAperture,
+                snap: { Self.snapAperture($0, toDisplayedBound: $1) }
+              ) else { return }
+        filter.apertureFrom = resolved.from
+        filter.apertureTo = resolved.to
+        filter.apertureEnabled = resolved.from != available.lowerBound
+            || resolved.to != available.upperBound
+        editedSettingFields.subtract([.apertureFrom, .apertureTo])
     }
 
     private func commitShutterDrafts(to filter: inout PhotoFilter) {
         guard let available = store.shutterRange,
-              let parsedFrom = Self.parseShutter(shutterFromText),
-              let parsedTo = Self.parseShutter(shutterToText),
-              parsedFrom <= parsedTo else { return }
-        let from = Self.snapShutter(parsedFrom, toDisplayedBound: available.lowerBound)
-        let to = Self.snapShutter(parsedTo, toDisplayedBound: available.upperBound)
-        filter.shutterFrom = from
-        filter.shutterTo = to
-        filter.shutterEnabled = from != available.lowerBound || to != available.upperBound
+              let resolved = NumericFilterRangeDraft.resolve(
+                available: available,
+                currentFrom: filter.shutterFrom, currentTo: filter.shutterTo,
+                isEnabled: filter.shutterEnabled,
+                fromText: shutterFromText, toText: shutterToText,
+                editedFrom: editedSettingFields.contains(.shutterFrom),
+                editedTo: editedSettingFields.contains(.shutterTo),
+                parse: Self.parseShutter,
+                snap: { Self.snapShutter($0, toDisplayedBound: $1) }
+              ) else { return }
+        filter.shutterFrom = resolved.from
+        filter.shutterTo = resolved.to
+        filter.shutterEnabled = resolved.from != available.lowerBound
+            || resolved.to != available.upperBound
+        editedSettingFields.subtract([.shutterFrom, .shutterTo])
     }
 
     private func commitISODrafts(to filter: inout PhotoFilter) {
         guard let available = store.isoRange,
-              let parsedFrom = Self.parseISO(isoFromText),
-              let parsedTo = Self.parseISO(isoToText),
-              parsedFrom <= parsedTo else { return }
-        let from = Self.snapISO(parsedFrom, toDisplayedBound: available.lowerBound)
-        let to = Self.snapISO(parsedTo, toDisplayedBound: available.upperBound)
-        filter.isoFrom = from
-        filter.isoTo = to
-        filter.isoEnabled = from != available.lowerBound || to != available.upperBound
+              let resolved = NumericFilterRangeDraft.resolve(
+                available: available,
+                currentFrom: filter.isoFrom, currentTo: filter.isoTo,
+                isEnabled: filter.isoEnabled,
+                fromText: isoFromText, toText: isoToText,
+                editedFrom: editedSettingFields.contains(.isoFrom),
+                editedTo: editedSettingFields.contains(.isoTo),
+                parse: Self.parseISO,
+                snap: { Self.snapISO($0, toDisplayedBound: $1) }
+              ) else { return }
+        filter.isoFrom = resolved.from
+        filter.isoTo = resolved.to
+        filter.isoEnabled = resolved.from != available.lowerBound
+            || resolved.to != available.upperBound
+        editedSettingFields.subtract([.isoFrom, .isoTo])
     }
 
     private func commitDurationDrafts(to filter: inout PhotoFilter) {
         guard let available = store.durationRange,
-              let parsedFrom = Self.parseDuration(durationFromText),
-              let parsedTo = Self.parseDuration(durationToText),
-              parsedFrom <= parsedTo else { return }
-        let from = Self.snapDuration(parsedFrom, toDisplayedBound: available.lowerBound)
-        let to = Self.snapDuration(parsedTo, toDisplayedBound: available.upperBound)
-        filter.durationFrom = from
-        filter.durationTo = to
-        filter.durationEnabled = from != available.lowerBound || to != available.upperBound
+              let resolved = NumericFilterRangeDraft.resolve(
+                available: available,
+                currentFrom: filter.durationFrom, currentTo: filter.durationTo,
+                isEnabled: filter.durationEnabled,
+                fromText: durationFromText, toText: durationToText,
+                editedFrom: editedSettingFields.contains(.durationFrom),
+                editedTo: editedSettingFields.contains(.durationTo),
+                parse: Self.parseDuration,
+                snap: { Self.snapDuration($0, toDisplayedBound: $1) }
+              ) else { return }
+        filter.durationFrom = resolved.from
+        filter.durationTo = resolved.to
+        filter.durationEnabled = resolved.from != available.lowerBound
+            || resolved.to != available.upperBound
+        editedSettingFields.subtract([.durationFrom, .durationTo])
     }
 
     private func commitVideoFrameRateDrafts(to filter: inout PhotoFilter) {
         guard let available = store.videoFrameRateRange,
-              let parsedFrom = Self.parseVideoFrameRate(videoFrameRateFromText),
-              let parsedTo = Self.parseVideoFrameRate(videoFrameRateToText),
-              parsedFrom <= parsedTo
-        else { return }
-        let from = Self.snapVideoFrameRate(
-            parsedFrom,
-            toDisplayedBound: available.lowerBound
-        )
-        let to = Self.snapVideoFrameRate(
-            parsedTo,
-            toDisplayedBound: available.upperBound
-        )
-        filter.videoFrameRateFrom = from
-        filter.videoFrameRateTo = to
-        filter.videoFrameRateEnabled = from != available.lowerBound
-            || to != available.upperBound
+              let resolved = NumericFilterRangeDraft.resolve(
+                available: available,
+                currentFrom: filter.videoFrameRateFrom, currentTo: filter.videoFrameRateTo,
+                isEnabled: filter.videoFrameRateEnabled,
+                fromText: videoFrameRateFromText, toText: videoFrameRateToText,
+                editedFrom: editedSettingFields.contains(.videoFrameRateFrom),
+                editedTo: editedSettingFields.contains(.videoFrameRateTo),
+                parse: Self.parseVideoFrameRate,
+                snap: { Self.snapVideoFrameRate($0, toDisplayedBound: $1) }
+              ) else { return }
+        filter.videoFrameRateFrom = resolved.from
+        filter.videoFrameRateTo = resolved.to
+        filter.videoFrameRateEnabled = resolved.from != available.lowerBound
+            || resolved.to != available.upperBound
+        editedSettingFields.subtract([.videoFrameRateFrom, .videoFrameRateTo])
     }
 
     private func syncAllSettingDrafts() {
+        editedSettingFields.removeAll()
         if let range = store.apertureRange {
             let from = store.filter.apertureFrom > 0 ? store.filter.apertureFrom : range.lowerBound
             let to = store.filter.apertureTo > 0 ? store.filter.apertureTo : range.upperBound
@@ -1004,6 +1116,7 @@ struct FilterView: View {
     /// but each assignment walks the full photo list. Coalesce continuous
     /// typing just like metadata search while preserving responsive results.
     private func scheduleSettingCommit() {
+        guard !editedSettingFields.isEmpty else { return }
         settingCommitTask?.cancel()
         settingCommitTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 150_000_000)
@@ -1054,8 +1167,9 @@ struct FilterView: View {
                 store.filter.videoFrameRateTo
             )
         default:
-            break
+            return
         }
+        editedSettingFields.remove(field)
     }
 
     // MARK: - Formatting

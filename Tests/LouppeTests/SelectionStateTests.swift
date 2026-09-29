@@ -98,6 +98,38 @@ final class SelectionStateTests: XCTestCase {
         XCTAssertFalse(store.isPreventingIdleSystemSleep)
     }
 
+    func testDisjointSelectionFilteringKeepsDisplayedPhotoInsideDecisionTargets() throws {
+        for ascending in [true, false] {
+            let suite = "Louppe-FilteredSelection-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            ReviewPreferences(advancesAfterDecision: false).save(to: defaults)
+            let store = SessionStore(reviewDefaults: defaults)
+            store.items = [
+                makeItem("A.PNG"), makeItem("B.JPG"),
+                makeItem("C.JPG"), makeItem("D.JPG"),
+            ]
+            store.sort = PhotoSort(key: .name, ascending: ascending)
+            store.phase = .ready
+            store.setIndex(0)
+            store.setSelection([0, 2, 3])
+
+            store.filter.excludedTypes = ["PNG"]
+
+            XCTAssertEqual(store.selectedIndices, [2, 3])
+            XCTAssertEqual(store.currentIndex, ascending ? 2 : 3)
+            XCTAssertTrue(store.effectiveSelection.contains(store.currentIndex))
+            store.rate(.yes)
+            store.setStarRating(.four)
+            store.setColorLabel(.purple)
+            XCTAssertEqual(store.items.map(\.rating), [.undecided, .undecided, .yes, .yes])
+            XCTAssertEqual(store.items.map(\.starRatingState), [.unrated, .unrated, .stars(.four), .stars(.four)])
+            XCTAssertEqual(store.items.map(\.colorLabelState), [.none, .none, .label(.purple), .label(.purple)])
+            XCTAssertEqual(store.currentIndex, ascending ? 2 : 3)
+            XCTAssertEqual(store.selectedIndices, [2, 3])
+        }
+    }
+
     func testRangeSelectionDropsMembersHiddenByFilter() {
         let store = readyStore()
         store.setIndex(1)

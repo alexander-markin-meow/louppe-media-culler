@@ -110,6 +110,7 @@ private struct BrowserRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .help(title)
                             .layoutPriority(1)
                         RoundedRectangle(cornerRadius: 1)
                             .fill(.secondary.opacity(0.5))

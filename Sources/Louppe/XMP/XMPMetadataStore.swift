@@ -127,8 +127,10 @@ actor XMPMetadataStore {
 
     func prepareWrite(
         path: XMPExactFileSystemPath,
-        metadata: XMPPublicationMetadata
+        metadata: XMPPublicationMetadata,
+        sourceValidation: XMPPublicationSourceValidation? = nil
     ) throws -> XMPPreparedWrite {
+        try sourceValidation?.validate()
         try requireSafeParent(of: path)
         if let info = try lstat(path) {
             guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
@@ -139,6 +141,7 @@ actor XMPMetadataStore {
                 packet: original.data,
                 metadata: metadata
             )) != nil {
+                try sourceValidation?.validate()
                 return XMPPreparedWrite(
                     path: path,
                     metadata: metadata,
@@ -153,6 +156,7 @@ actor XMPMetadataStore {
                 metadata: metadata
             )
             try XMPFieldMapping.verify(packet: merged, metadata: metadata)
+            try sourceValidation?.validate()
             return XMPPreparedWrite(
                 path: path,
                 metadata: metadata,
@@ -168,6 +172,7 @@ actor XMPMetadataStore {
             metadata: metadata
         )
         try XMPFieldMapping.verify(packet: created, metadata: metadata)
+        try sourceValidation?.validate()
         return XMPPreparedWrite(
             path: path,
             metadata: metadata,
@@ -180,11 +185,16 @@ actor XMPMetadataStore {
 
     func commit(
         _ prepared: XMPPreparedWrite,
+        sourceValidation: XMPPublicationSourceValidation? = nil,
         testHooks: XMPMetadataStoreTestHooks = .none
     ) throws -> XMPWriteResult {
         try Task.checkCancellation()
+        try sourceValidation?.validate()
+        let directory = try sourceValidation.map { try DurableFileIO.BoundDirectory($0.parent) }
         switch prepared.action {
         case .alreadyCurrent:
+            try testHooks.beforeFinalValidation?()
+            try sourceValidation?.validate()
             let snapshot = try readSnapshot(prepared.path)
             guard snapshot.data == prepared.originalPacket,
                   snapshot.revision == prepared.originalRevision else {
@@ -194,6 +204,7 @@ actor XMPMetadataStore {
                 packet: snapshot.data,
                 metadata: prepared.metadata
             )
+            try sourceValidation?.validate()
             return XMPWriteResult(
                 path: prepared.path,
                 action: .alreadyCurrent,
@@ -201,17 +212,21 @@ actor XMPMetadataStore {
             )
 
         case .create:
-            try DurableFileIO.atomicCreate(
-                prepared.finalPacket,
-                at: prepared.path.url,
-                fullSync: true
-            ) {
+            let validate = {
                 try testHooks.beforeFinalValidation?()
                 try Task.checkCancellation()
+                try sourceValidation?.validate()
                 guard try self.lstat(prepared.path) == nil else {
                     throw StoreError.fileChanged
                 }
                 try self.requireSafeParent(of: prepared.path)
+            }
+            if let directory {
+                try directory.atomicWrite(prepared.finalPacket, to: prepared.path.url,
+                                          exclusive: true, validateBeforePublish: validate)
+            } else {
+                try DurableFileIO.atomicCreate(prepared.finalPacket, at: prepared.path.url,
+                                               fullSync: true, validateBeforePublish: validate)
             }
 
         case .update:
@@ -219,21 +234,27 @@ actor XMPMetadataStore {
                   let expectedRevision = prepared.originalRevision else {
                 throw StoreError.fileChanged
             }
-            try DurableFileIO.atomicWrite(
-                prepared.finalPacket,
-                to: prepared.path.url,
-                fullSync: true
-            ) {
+            let validate = {
                 try testHooks.beforeFinalValidation?()
                 try Task.checkCancellation()
+                try sourceValidation?.validate()
                 let live = try self.readSnapshot(prepared.path)
                 guard live.revision == expectedRevision,
                       live.data == expectedData else {
                     throw StoreError.fileChanged
                 }
             }
+            if let directory {
+                try directory.atomicWrite(prepared.finalPacket, to: prepared.path.url,
+                                          exclusive: false, validateBeforePublish: validate)
+            } else {
+                try DurableFileIO.atomicWrite(prepared.finalPacket, to: prepared.path.url,
+                                              fullSync: true, validateBeforeReplace: validate)
+            }
+
         }
 
+        try sourceValidation?.validate()
         let committed = try readSnapshot(prepared.path)
         guard committed.data == prepared.finalPacket else {
             throw StoreError.fileChanged

@@ -189,6 +189,29 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Open in Louppe</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>openMediaFolder</string>
+            <key>NSPortName</key>
+            <string>Louppe</string>
+            <key>NSSendFileTypes</key>
+            <array>
+                <string>public.folder</string>
+            </array>
+            <key>NSRequiredContext</key>
+            <dict>
+                <key>NSApplicationIdentifier</key>
+                <string>com.apple.finder</string>
+            </dict>
+        </dict>
+    </array>
 PLIST
 
 if ! $APP_STORE; then

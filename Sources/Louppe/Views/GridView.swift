@@ -97,6 +97,8 @@ struct GridView: View {
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .help(title)
                                         RoundedRectangle(cornerRadius: 1)
                                             .fill(.secondary.opacity(0.4))
                                             .frame(height: 2)

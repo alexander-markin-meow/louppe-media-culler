@@ -1,0 +1,10 @@
+{
+  "analytics-consent.js": "ab3d716340d788840b70594df628c4d7243a20cf705248769cbef38610371f1b",
+  "scripts/analytics-consent.test.mjs": "0d8711e1a6754b5abe1a23c8a66f4e5fb67377b063ab1d0697997da6ccef6ece",
+  "package.json": "dda0888e4c591f3ee4d90521ca72c77928ff84d0210995daec0e2f731f156d5b",
+  "README.md": "f697bd71d10d8a02c5fac79cdc942f74e6ca6e680ff985ea286f8e6d1515de52",
+  "index.html": "13c91f07c67a64f69b6c9b996e2d8c90960d8a71bf8e5e76dd2639ef22351beb",
+  "templates/blog.html": "f20f826e1d2ac5a05c8a996129d6215da65b59022a07d23d03d00160e69fbda5",
+  "blog/index.html": "88d142ec095cfb50aa00b879ce9f695904c8038672facccdd628568a57d3ad4d",
+  "blog/a-proper-hello/index.html": "f30ef05bc5be9e1e10110fd037ce87ec04c8dc733b370b46a14c27c273c18d1f"
+}

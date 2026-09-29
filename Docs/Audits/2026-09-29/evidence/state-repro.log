@@ -1,0 +1,10 @@
+FILTER SELECTION: visible=[1, 2], selected=[2], current=1, displayed=B.jpg
+RATE AFTER FILTER: displayed=B.jpg, ratings=["undecided", "undecided", "yes"]
+CAMERA COLLATION: localized comparison=1, groups=[("camera", [1]), ("Camera", [0, 2])], uniqueGroupIDs=2, groupCount=2
+HIDDEN PAIR CLEANUP: mode=separate, visible=[0], excluded=JPEG, pairedJPEGTargets=1
+UNSELECTED PAIR CLEANUP: effectiveSelection=[0], current=SHOT.NEF, pairedJPEGTargets=1
+POST-RENAME SYNC FAILURE + BLOCKED BACKUP: result=savedToSidecar, canDiscard=true
+BACKUP IS REGULAR FILE: true
+READ-ONLY SIDECAR ERROR CLASSIFICATION: savedToBackup(sidecarFailure: StateAuditRepro.SessionPersistence.FailureReason.other)
+DURABLE ERROR NSError DOMAIN: StateAuditRepro.DurableFileIO.IOError, code=0, expected POSIX domain=NSPOSIXErrorDomain
+REPRESENTATIVE ONE-ENTRY ENCODED BYTES: 889

@@ -27,6 +27,36 @@ final class HistogramTests: XCTestCase {
         XCTAssertEqual(analysis.highlightPercentage, 40, accuracy: 0.001)
     }
 
+    func testTranslucentPremultipliedColorsUseStraightLuminanceAndValidOverlay() throws {
+        let alphas: [UInt8] = [0, 3, 128, 255]
+        let values = alphas.flatMap { alpha in
+            [(UInt8(0), UInt8(0), UInt8(0), alpha),
+             (alpha, alpha, alpha, alpha),
+             (alpha / 2, alpha / 2, alpha / 2, alpha)]
+        }
+        let image = try makeImage(values)
+        let histogram = try XCTUnwrap(ClippingWarningProcessor.analyze(image))
+        XCTAssertEqual(histogram.sampleCount, 9)
+        XCTAssertEqual(histogram.shadowCount, 3)
+        XCTAssertEqual(histogram.highlightCount, 3,
+                       "even 3/255-opacity white must remain a highlight")
+        let overlay = try XCTUnwrap(ClippingWarningProcessor.overlay(on: image))
+        let data = try XCTUnwrap(overlay.dataProvider?.data)
+        let bytes = [UInt8](data as Data)
+        for (index, original) in values.enumerated() {
+            let offset = index * 4
+            XCTAssertEqual(bytes[offset + 3], original.3)
+            XCTAssertLessThanOrEqual(bytes[offset], original.3)
+            XCTAssertLessThanOrEqual(bytes[offset + 1], original.3)
+            XCTAssertLessThanOrEqual(bytes[offset + 2], original.3)
+            if original.3 == 0 || index % 3 == 2 {
+                XCTAssertEqual(Array(bytes[offset..<(offset + 4)]),
+                               [original.0, original.1, original.2, original.3],
+                               "transparent pixels and midtones stay unchanged")
+            }
+        }
+    }
+
     func testOnlyValuesAboveTenPercentAreHigh() {
         XCTAssertFalse(HistogramAnalysis.isHighPercentage(9.999))
         XCTAssertFalse(HistogramAnalysis.isHighPercentage(10))
@@ -94,7 +124,7 @@ final class HistogramTests: XCTestCase {
     func testAnalysisSourceLabelsAreExplicit() {
         XCTAssertEqual(
             HistogramAnalysisSource.renderedPreview.shortLabel,
-            "Rendered"
+            "Preview"
         )
         XCTAssertEqual(HistogramAnalysisSource.rawDecode.shortLabel, "RAW")
         XCTAssertEqual(
@@ -175,6 +205,37 @@ final class HistogramTests: XCTestCase {
         let replacementResult = await pipeline.analysis(for: replacement)
         XCTAssertNotNil(replacementResult)
         XCTAssertEqual(counter.value, 2)
+    }
+
+    func testCancelledRawCompletionCannotConsumeSameRevisionRerequest() async throws {
+        let gate = RawCancellationGate()
+        let pipeline = RawHistogramPipeline(delayNanoseconds: 0) { _ in
+            let call = gate.nextCall()
+            if call == 1 {
+                gate.started.signal()
+                _ = gate.release.wait(timeout: .now() + 5)
+            }
+            return HistogramAnalysis(bins: Array(repeating: 0, count: 256),
+                                     sampleCount: 1, shadowCount: call == 1 ? 1 : 0,
+                                     highlightCount: call == 1 ? 0 : 1)
+        }
+        let item = photo(path: "/private/tmp/\(UUID())/cancel-rerequest.NEF")
+        let first = Task { await pipeline.analysis(for: item) }
+        let started = await Task.detached { waitForRawDecode(gate.started) }.value
+        XCTAssertEqual(started, .success)
+        first.cancel()
+        let cancelled = await first.value
+        XCTAssertNil(cancelled)
+        let renewed = Task { await pipeline.analysis(for: item) }
+        try await Task.sleep(for: .milliseconds(50))
+        gate.release.signal()
+        let result = await renewed.value
+        XCTAssertEqual(result?.shadowCount, 0)
+        XCTAssertEqual(result?.highlightCount, 1,
+                       "the cancelled operation must not steal the new same-key waiters")
+        let cached = await pipeline.analysis(for: item)
+        XCTAssertEqual(cached?.highlightCount, 1)
+        XCTAssertEqual(gate.calls, 2)
     }
 
     func testRawPipelineCancelsDuringItsDelayWithoutDecoding() async {
@@ -301,4 +362,17 @@ private final class RawDecodeCounter: @unchecked Sendable {
             highlightCount: 0
         )
     }
+}
+
+private final class RawCancellationGate: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.withLock { count } }
+    func nextCall() -> Int { lock.withLock { count += 1; return count } }
+}
+
+private func waitForRawDecode(_ semaphore: DispatchSemaphore) -> DispatchTimeoutResult {
+    semaphore.wait(timeout: .now() + 5)
 }

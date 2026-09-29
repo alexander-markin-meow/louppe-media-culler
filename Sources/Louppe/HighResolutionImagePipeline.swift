@@ -8,11 +8,15 @@ final class ZoomImageSource: @unchecked Sendable {
     let key: String
     let image: CIImage
     let pixelSize: CGSize
+    let sourceRevision: MediaSourceRevision?
+    let decoder: AppleRawDecoder
 
-    init(key: String, image: CIImage, pixelSize: CGSize) {
+    init(key: String, image: CIImage, pixelSize: CGSize, sourceRevision: MediaSourceRevision? = nil, decoder: AppleRawDecoder = .appleDefault) {
         self.key = key
         self.image = image
         self.pixelSize = pixelSize
+        self.sourceRevision = sourceRevision
+        self.decoder = decoder
     }
 }
 
@@ -119,9 +123,10 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
 
     private init() {}
 
-    func source(for item: PhotoItem) async -> ZoomImageSource? {
+    func source(for item: PhotoItem, decoder: AppleRawDecoder = .appleDefault) async -> ZoomImageSource? {
         await source(
             for: item,
+            decoder: decoder,
             qualityOfService: .userInitiated,
             queuePriority: .veryHigh
         )
@@ -129,11 +134,12 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
 
     private func source(
         for item: PhotoItem,
+        decoder: AppleRawDecoder,
         qualityOfService: QualityOfService,
         queuePriority: Operation.QueuePriority
     ) async -> ZoomImageSource? {
-        let key = ImagePipeline.cacheKey(for: item)
-        let url = item.primaryURL
+        let key = Self.sourceKey(for: item, decoder: decoder)
+        let revision = MediaSourceRevision(item)
         return await withCheckedContinuation { continuation in
             lock.lock()
             if let cached = sourceCache[key] {
@@ -155,7 +161,7 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
             let operation = BlockOperation { [weak self] in
                 guard let self else { return }
                 let source = autoreleasepool {
-                    self.makeSource(url: url, key: key)
+                    revision.read { self.makeSource(revision: revision, key: key, decoder: decoder) }
                 }
                 self.finishSource(key: key, source: source)
             }
@@ -171,10 +177,12 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
     }
 
     func prefetchSources(items: [PhotoItem]) {
+        let decoder = AppleRawDecoder.load()
         for item in items where item.mediaKind == .photo && item.isSupported {
             Task.detached(priority: .utility) { [weak self] in
                 _ = await self?.source(
                     for: item,
+                    decoder: decoder,
                     qualityOfService: .utility,
                     queuePriority: .low
                 )
@@ -215,7 +223,7 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
             let operation = BlockOperation { [weak self] in
                 guard let self else { return }
                 let tile = autoreleasepool {
-                    self.renderTile(
+                    self.validatedTile(
                         source: source,
                         coordinate: coordinate,
                         showsClippingWarnings: showsClippingWarnings
@@ -272,14 +280,17 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
         softwareContext.clearCaches()
     }
 
-    private func makeSource(url: URL, key: String) -> ZoomImageSource? {
+    static func sourceKey(for item: PhotoItem, decoder: AppleRawDecoder) -> String {
+        let key = ImagePipeline.cacheKey(for: item)
+        return item.isRaw ? "\(key)|apple-raw-source-v2|\(decoder.rawValue)" : key
+    }
+
+    private func makeSource(revision: MediaSourceRevision, key: String, decoder: AppleRawDecoder) -> ZoomImageSource? {
+        let url = revision.url
         let ext = url.pathExtension.lowercased()
         let original: CIImage?
-        if FolderScanner.rawExtensions.contains(ext),
-           let filter = CIRAWFilter(imageURL: url) {
-            filter.isDraftModeEnabled = false
-            filter.scaleFactor = 1
-            original = filter.outputImage
+        if FolderScanner.rawExtensions.contains(ext) {
+            original = RawImageRendering.image(url: url, decoder: decoder)
         } else {
             original = CIImage(
                 contentsOf: url,
@@ -299,8 +310,25 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
         return ZoomImageSource(
             key: key,
             image: normalized,
-            pixelSize: extent.size
+            pixelSize: extent.size,
+            sourceRevision: revision,
+            decoder: FolderScanner.rawExtensions.contains(ext) ? decoder : .appleDefault
         )
+    }
+
+    private func validatedTile(
+        source: ZoomImageSource,
+        coordinate: ZoomTileCoordinate,
+        showsClippingWarnings: Bool
+    ) -> ZoomImageTile? {
+        // A cached CIImage recipe can open the URL lazily on its first render.
+        // Validate each new tile, not just the original recipe construction.
+        let render = {
+            self.renderTile(source: source, coordinate: coordinate,
+                            showsClippingWarnings: showsClippingWarnings)
+        }
+        if let revision = source.sourceRevision { return revision.read(render) }
+        return render()
     }
 
     private func renderTile(
@@ -326,12 +354,12 @@ final class HighResolutionImagePipeline: @unchecked Sendable {
                     format: .RGBA8,
                     colorSpace: outputColorSpace
                 )
-                ?? softwareContext.createCGImage(
+                ?? (source.decoder == .appleDefault ? softwareContext.createCGImage(
                     source.image,
                     from: coreImageRect,
                     format: .RGBA8,
                     colorSpace: outputColorSpace
-                )
+                ) : nil)
         else { return nil }
         let image: CGImage
         if showsClippingWarnings {

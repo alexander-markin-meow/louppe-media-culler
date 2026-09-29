@@ -14,6 +14,8 @@ truth, created in `LouppeApp` and passed to every view.
 |---|---|
 | `Sources/Louppe/LouppeApp.swift` | `@main`, window scene, menu-bar commands |
 | `Sources/Louppe/SessionStore.swift` | Main-actor session state: ratings/cached counts, undo, navigation, selection, prepared filtering + cached sort/day groups, file-operation orchestration, persistence snapshots, recents |
+| `Sources/Louppe/ReviewPreferences.swift` | App-domain review defaults; independent of folder session snapshots |
+| `Sources/Louppe/ConnectedDrives.swift` | Read-only physical-drive discovery, capacity snapshots, mounted-device identity, and welcome-screen refresh lifecycle |
 | `Sources/Louppe/PreparedSessionIndex.swift` | Pure item-ID/sort/filter/group/header/location maps projected by `SessionStore`; owns stable Grid group identity and performance signposts |
 | `Sources/Louppe/SelectionState.swift` | Pure stable-ID/index selection authority: range, edge, toggle, rubber-band, filter intersection, and generation remapping; projected by `SessionStore` |
 | `Sources/Louppe/SessionPersistence.swift` | Actor that binds an open folder to stable directory identity, serializes typed sidecar/identity-keyed-backup outcomes, cross-process lineage locking, raw-byte CAS, monotonic generations, schema validation, and durable atomic writes off-main |
@@ -127,8 +129,24 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   it must never block reviewing, rating, navigation, folder open/close/rescan,
   saving, updates, or Quit.
 
+- Journal media and checkpointed artifacts must be regular files. Identity
+  capture itself still supports directories; blocking opens must use
+  `O_NONBLOCK` before checking file type. Recovery removes a started generated
+  partial only when its inode was durably recorded. Completed XMP retirement
+  recognizes either reserved cleanup path, while ambiguity preserves files.
+- Organize validates scanner-visible names and actual hidden/package flags
+  both in preview and before moving. Generated hidden/package-like components
+  are sanitized; explicit unsafe containers are refused.
+
 ## Session persistence
 
+- A visible atomic rename after a sync error establishes observed CAS lineage,
+  not durable success. Under the same transaction lock, recovery must validate
+  the exact bytes/folder before and after a real parent-directory full sync, or
+  secure a fully synced backup. Otherwise the live generation stays dirty and
+  Close/Quit refuses discard; the same save sequence remains retryable.
+- Typed `DurableFileIO` errno failures retain permission, space, unavailable
+  device, and busy remedies at the persistence-warning boundary.
 - **Persistence failures are visible**: a folder sidecar save may fall back to
   the current Application Support snapshot, but failure of both destinations
   must keep the session open and show Retry Saving. Folder/session transitions
@@ -207,6 +225,25 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   *rendered* (on-screen) lazy-grid tiles can be caught by the rectangle —
   fine in practice, but don't "fix" it by de-lazifying the grid.
 
+- Review defaults belong to the app's `UserDefaults` domain, not the folder
+  sidecar. Apply layout defaults only for a new folder or a closed session;
+  same-folder rescan preserves view, sort, and group dividers. Yes/No advancement
+  follows the pre-decision visible order so a decision filter or sort cannot
+  skip the next undecided item. With advancement off, retain visible selection;
+  never retain a current photo that the active filter removed.
+- Folder hierarchy sorting uses exact physical-file parent identities, with
+  natural component order and byte-stable tie-breaks. Root files and parents
+  precede descendants in either direction; reverse affects sibling folders.
+  Full relative paths label groups, while exact bytes own their identity.
+
+- Pair-component Clean Up tests the physical target's own displayed index
+  against All/Filtered/Selected. Together projection shares one index; Separate
+  projection never borrows its partner's inclusion. Count, enablement, and
+  immutable worker snapshots use the same predicate.
+- A surviving explicit selection owns the displayed current item after filter
+  and restore. If it excludes the old current, choose the first selected item
+  in prepared visible order; empty selection keeps the current-item fallback.
+
 ## Media rendering and caches
 
 - Text documents have their own `MediaKind.text`, remain standalone during
@@ -231,17 +268,82 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   trust v4/v3 cache bytes; compatibility is limited to items without scanned
   identity and still requires the cache timestamp to postdate the captured
   source timestamp.
+- Uncached image/RAW/histogram/audio reads validate `MediaSourceRevision`
+  before and after reading. New tiles validate even when a lazy zoom recipe is
+  cached. Validated memory-cache hits remain free of source filesystem reads.
+  Cold player preparation uses one bounded `lstat`; ready-to-play checks run
+  off-main. Identity mismatch gives a Rescan remedy.
+- Histogram and clipping analysis unpremultiply nonzero-alpha input before
+  luminance checks. Warning pixels are repremultiplied with the original alpha.
+
 - **100% view identity is persistent**: `GalleryView` must not add
   `.id(item.id)` back to `FullImageView`. The AppKit actual-size viewport stays
   alive across current-item changes so its normalized inspection position can
   be restored. `FullImageView.loadedItemID` prevents stale preview state from
   appearing while that persistent view changes files.
+- RAW presentation uses `RawImageRendering` for both bounded Fit/Phone
+  renders and lazy source tiles. `RawDisplayMode` changes presentation cache
+  keys, never thumbnail identities or linear RAW analysis. Keep the source
+  label tied to completed visible pixels; fallback requires **Use Preview**.
+  `AppleRawDecoder` persists independently, preserves Apple’s default, and gates
+  RAW 9 on macOS 27 plus that filter’s supported versions (including DNG).
+  Resource preparation has a 15-second timeout on workers. Failure stays visible.
+  The SDK lacks availability annotations on RAW 9 constants: match its verified
+  `9`/`9.dng` identifiers from the supported list to avoid strong new-symbol links
+  in the macOS 14-compatible executable.
+  Preview/clipping/source/tile keys include the choice; changing it advances
+  viewport generations and cancels stale view loads before publication.
 - **100% rendering stays tiled**: one source pixel maps to one backing-store
   pixel. Keep high-resolution work on the two-operation tile queue, retain
   only the visible tile ring, and preserve the 128 MiB decoded-tile ceiling.
   Never replace it with a whole-file 45–100 MP bitmap.
 
 ## Native UI
+
+- `RootView` presents the early-user feedback sheet once per app preference
+  domain during the 1.10 release series. Mark it shown when the sheet appears;
+  Close, Escape, or opening email must not cause a reminder on relaunch or a
+  patch update. Wait for scanning, recovery, file work, and other session
+  presentations to finish. Its presentation joins the shared command gate so
+  session shortcuts and menus cannot act behind the sheet. The email action
+  opens the system mail handler for `a@alex-markin.com`; it sends nothing.
+
+- Gallery video transport, full-screen, and Picture-in-Picture controls stay
+  visible throughout playback. Do not remove them behind pointer hover.
+- Filter drafts track explicit endpoint edits. Opening/closing Filter must not
+  round-trip precise stored bounds through display text; changing one endpoint
+  preserves the other's original precision.
+
+- Finder's **Open in Louppe** service accepts one `public.folder` URL. The app
+  delegate registers the service provider at launch and holds an early request
+  until the main SwiftUI window mounts. It sends the folder through
+  `SessionStore.openFolder` so recovery, save-before-switch, and security-scoped
+  access follow the same path as the in-app chooser. Review builds omit the
+  service to avoid a duplicate Finder command and port-name collision.
+
+- Keep the start page focused on opening media: no large branding block, a
+  short top inset, and content aligned to the top as the window grows.
+  The Help button stays 24 points from the window's bottom and trailing edges,
+  outside the measured content columns; overflow scrolling reserves its footer.
+- Quality cue thresholds use inline editable values with per-cue checkboxes.
+  Numeric fields share a fixed width and aligned edges; their hidden native
+  labels must not reserve space inside the boxes. Units follow each field.
+  Cue preferences remain app-local, apply live, and never affect review ratings
+  or files. Turning a cue off preserves its cutoff for later use.
+- The welcome-screen drive list is read-only and limited to mounted physical
+  external/removable volumes. Enumeration and capacity reads stay off-main.
+  Mount changes invalidate pending snapshots; the selected device is freshly
+  revalidated before opening the existing folder chooser at its root. The
+  welcome screen shows five recent folders and every connected drive in
+  aligned columns, adding drive columns when useful. Its measured content and
+  warning banners set the native window minimum, including toolbar space.
+  The normal page does not scroll. When it exceeds the current display's usable
+  height, the minimum is capped and native vertical scrolling keeps every drive
+  and long error reachable. Display and toolbar changes remeasure usable space.
+  Welcome opens at the measured minimum. New content grows the window; removed
+  content lowers its minimum without unexpectedly shrinking it. Returning from
+  a session resets Welcome to that minimum. No device discovery, polling, or
+  automatic whole-volume scan runs during review.
 
 - Toolbar Liquid Glass groups follow the owner's arrangement in
   `SessionView.toolbarContent` and use Apple's native fixed `ToolbarSpacer`.
@@ -270,9 +372,11 @@ Clean Up. It records ownership boundaries, cache budgets, and verification.
   the initial deferred lookup so fast lazy-grid updates cannot queue main-actor
   work ahead of the scrolling indicator.
 - `RootView` owns the persistent window's phase-aware content layout through
-  `WindowContentLayout`: Welcome/Scanning use a compact launch size and
-  `.fullSizeContentView`, while Ready restores the session minimum and removes
-  full-size content so photos cannot scroll behind the liquid-glass toolbar.
+  `WindowContentLayout`: Welcome opens at its measured minimum, Scanning keeps
+  its compact launch size, and Ready fills the display's usable frame. Welcome
+  and Scanning use `.fullSizeContentView`; Ready restores the session minimum
+  and removes full-size content so photos cannot scroll behind the liquid-glass
+  toolbar. Manual session resizes persist until the display changes.
   These settings do not choose the window radius. Welcome and Scanning include
   a real unified toolbar (`LaunchToolbarTitle`) so macOS 26 supplies its larger
   native toolbar-window corners; never fake them with a custom window mask.

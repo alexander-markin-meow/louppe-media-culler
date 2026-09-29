@@ -1,0 +1,10 @@
+{
+  "source": "/private/tmp/louppe-audit-2026-09-29/state-fixture/Photos/.louppe_session.json",
+  "sidecar_bytes": 917,
+  "compact_bytes": 631,
+  "reduction_percent": 31.2,
+  "snapshot_generation": 4,
+  "sidecar_sha256": "6bd59f4ac9f2132ecc34792a707d9c7ca209a8637e6e2337d5d916aac6e60259",
+  "harness_in_memory_session_bytes": 889,
+  "explanation": "The harness log encodes the in-memory SessionFile before the persistence actor adds snapshotGeneration. The compact comparison measures the resulting on-disk sidecar, which includes that field."
+}

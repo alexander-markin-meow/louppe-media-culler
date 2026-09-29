@@ -1,0 +1,5 @@
+Actual Debug testable Louppe module; ExportWorker.makePlan; different source subfolders, identical PHOTO.JPG basename; empty destination.
+n=100 seconds=0.1272580623626709 files=100
+n=200 seconds=0.5082650184631348 files=200
+n=400 seconds=2.131152033805847 files=400
+n=800 seconds=8.724665999412537 files=800

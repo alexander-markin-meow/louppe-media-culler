@@ -1,0 +1,3 @@
+probe returned error promptly: Choose a single, visible folder name for the organized files. Names beginning with a dot and macOS package names such as .app cannot be scanned.
+
+exit=0

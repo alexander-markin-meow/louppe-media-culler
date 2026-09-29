@@ -81,34 +81,34 @@ struct UpdaterSettingsView: View {
 }
 #endif
 
-/// Keeps the two independent app-wide preference areas together without
-/// mixing updater controls into the photographer's quality-cue choices.
+/// Focused native pages keep review choices out of the working toolbar.
 struct LouppeSettingsView: View {
     #if !APP_STORE
     let updater: SPUUpdater
     #endif
 
     var body: some View {
-        #if !APP_STORE
         TabView {
+            ReviewPreferencesSettingsView()
+                .tabItem {
+                    Label("Review", systemImage: "photo.on.rectangle")
+                }
+
             CameraQualityWarningsSettingsView()
                 .tabItem {
                     Label("Quality Cues", systemImage: "waveform.path.ecg")
                 }
 
+            #if !APP_STORE
             if !AppBuildInfo.isReviewBuild {
                 UpdaterSettingsView(updater: updater)
                     .tabItem {
                         Label("Updates", systemImage: "arrow.down.circle")
                     }
             }
+            #endif
         }
-        .frame(width: 480, height: 380)
+        .frame(width: 480, height: 420)
         .tint(Color.louppeAccent)
-        #else
-        CameraQualityWarningsSettingsView()
-            .frame(width: 480, height: 380)
-            .tint(Color.louppeAccent)
-        #endif
     }
 }

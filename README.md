@@ -29,16 +29,35 @@ macOS may ask you to confirm its first launch.
 3. Press **F** to mark an item Yes or **D** to mark it No.
 4. Filter, sort, select, clean up, organize, or export your media.
 
+From Finder, select one media folder, right-click, and choose **Services → Open
+in Louppe**. Install this build in Applications first so macOS can add the
+service. Louppe opens that folder in its existing window.
+
 ![Louppe Grid comparing street scenes, architecture, reflections and still life, with a photo selected in purple](Docs/Media/2026-09-26/grid-overview.png)
 
 *Grid lets you compare nearby frames and select media for the next step.*
 
 The compact bottom panel shows active filters, review status, and saving.
-Use its zoom slider or pinch on a photo to adjust magnification, then pan with
+Use its 30–400% zoom slider or pinch on a photo to adjust magnification, then pan with
 two-finger scrolling or click and drag. **S** returns custom zoom to centered
 100%, then toggles Fit; **A** still toggles Phone size. **Help → Louppe Help** contains
 a quick-start guide and searchable shortcuts. Review tips can be dismissed
 and shown again from Help.
+
+For RAW photos, **Fast** uses a preview below 100% and Apple RAW rendering at
+100% and above. Choose **RAW** beside zoom or in **Settings → Review** to use RAW
+at every zoom level. Apple’s rendering may differ from your photo editor and
+the camera’s JPEG. The source label shows **Preview** or **RAW**; **RAW…** means
+rendering is in progress. RAW mode offers **Use Preview** if rendering fails.
+The same menu and Review settings offer **Apple Default** (unchanged default) or
+**RAW 9** for rendered RAW previews and 100% viewing. RAW 9 requires macOS 27,
+a supported file, and Apple’s model resources, and uses more time and memory.
+Unavailable RAW 9 offers Retry or **Use Apple Default**; it never silently switches decoders.
+Grid and Browser thumbnails keep their fast previews.
+
+The histogram changes from **Preview** to **RAW** when background RAW analysis
+finishes. RAW analysis uses a scaled linear decode, independently of the photo
+rendering. The X clipping overlay measures the displayed rendering.
 
 Yes/No decisions, stars, and color labels are independent. Marking **No** does
 not trash a file. Decisions save automatically; reopen the same folder to
@@ -59,8 +78,17 @@ ratings, camera details, and other metadata.
 
 ## Sort, review, and clean up
 
+In the current development build, **Settings → Review** controls advancement
+on Yes/No commands and the starting Gallery/Grid view, sort, and group dividers
+for new folders. Rescanning keeps the current layout. Connected external drives
+and memory cards appear on the start screen with capacity information; select
+one to choose a media folder on it.
+
 - Filter and sort by decisions, stars, color labels, dates, folders, camera
   details, file types, and media properties.
+- Choose **Sort → Folder hierarchy** to review each folder before its nested
+  folders. Root files come first; reversing changes the order of sibling
+  folders. Group headers show their full relative paths.
 - Choose **Sort → Review groups → Analyze Folder Locally** to review exact
   duplicates, likely similar photos, and capture bursts. The analysis stays on
   your Mac and does not change ratings or files automatically.
@@ -111,8 +139,8 @@ controls keep their normal shortcuts.
 
 | Shortcut | Action |
 |---|---|
-| **F** | Mark Yes and move to the next undecided item |
-| **D** | Mark No and move to the next undecided item |
+| **F** | Mark Yes; advance if enabled in Review settings |
+| **D** | Mark No; advance if enabled in Review settings |
 | **0–5** | Clear or assign a 1–5 star rating |
 | **← / →** | Previous / next item; in Gallery video, seek 0.5 seconds |
 | **↑ / ↓** | Previous / next item in Gallery; previous / next row in Grid |
@@ -138,6 +166,16 @@ controls keep their normal shortcuts.
 | **⌘⇧← / ⌘⇧→** | Select from the current item to the first / last |
 | **Esc** | Cancel a scan or clear the current selection |
 | **⌘⌫** | Send the selection to the macOS Trash without a dialog |
+
+## Local review build
+
+Run `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./Scripts/build_review.sh`
+to package `dist/louppe - to review.app` and its ZIP. Install this separately from
+`Louppe.app`. Its app identity and preferences are separate, and automatic
+updates are disabled. The name is a review label; the release version remains
+in `VERSION`. Folder ratings still use the compatible `.louppe_session.json`
+sidecar, so use copies of media when experimenting. See
+[the review record](Docs/REVIEW_BUILD.md) for scope and verification.
 
 For planned work, see [BACKLOG.md](BACKLOG.md). For development and release
 guidance, see [AGENTS.md](AGENTS.md),

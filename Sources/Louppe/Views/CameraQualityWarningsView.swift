@@ -65,7 +65,7 @@ struct CameraQualityCuesRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if isRawAnalysisPending {
+            if preferences.isClippingEnabled && isRawAnalysisPending {
                 HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
@@ -105,71 +105,76 @@ struct CameraQualityCuesRow: View {
     }
 }
 
-/// The preferences page deliberately exposes only the three practical
-/// thresholds behind the optional review cues.
+/// Three compact, independently optional cues; values are written only when
+/// their text field commits a valid edit.
 struct CameraQualityWarningsSettingsView: View {
     @AppStorage(CameraQualityWarningPreferences.Keys.isEnabled)
     private var isEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isHighISOEnabled)
+    private var isHighISOEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isSlowShutterEnabled)
+    private var isSlowShutterEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isClippingEnabled)
+    private var isClippingEnabled = true
     @AppStorage(CameraQualityWarningPreferences.Keys.highISOThreshold)
     private var highISOThreshold = CameraQualityWarningPreferences.defaultHighISOThreshold
     @AppStorage(CameraQualityWarningPreferences.Keys.slowShutterThreshold)
     private var slowShutterThreshold = CameraQualityWarningPreferences.defaultSlowShutterThreshold
     @AppStorage(CameraQualityWarningPreferences.Keys.clippingPercentageThreshold)
     private var clippingPercentageThreshold = CameraQualityWarningPreferences.defaultClippingPercentageThreshold
+    @State private var thresholdResetGeneration = 0
 
     var body: some View {
         Form {
             Section {
                 Toggle("Show quality cues", isOn: $isEnabled)
-            } footer: {
-                Text("Optional review cues only — they never affect ratings, filters, selection, exports, sidecars, or files.")
             }
 
-            Section("Cue thresholds") {
-                Picker("High ISO", selection: $highISOThreshold) {
-                    ForEach(
-                        CameraQualityWarningPreferences.highISOThresholdOptions,
-                        id: \.self
-                    ) { threshold in
-                        Text("ISO \(MetadataFormat.iso(threshold)) or above")
-                            .tag(threshold)
-                    }
+            Section {
+                HStack(spacing: 10) {
+                    cueToggle("High ISO", isOn: $isHighISOEnabled)
+                    CameraQualityThresholdField(
+                        kind: .highISO, value: $highISOThreshold,
+                        resetGeneration: $thresholdResetGeneration
+                    )
+                    .disabled(!isHighISOEnabled)
+                    cueDetail("ISO or above")
                 }
-
-                Picker("Slow shutter", selection: $slowShutterThreshold) {
-                    ForEach(
-                        CameraQualityWarningPreferences.slowShutterThresholdOptions,
-                        id: \.self
-                    ) { threshold in
-                        Text("\(shutter(threshold)) or slower")
-                            .tag(threshold)
-                    }
+                HStack(spacing: 10) {
+                    cueToggle("Slow shutter", isOn: $isSlowShutterEnabled)
+                    CameraQualityThresholdField(
+                        kind: .slowShutter, value: $slowShutterThreshold,
+                        resetGeneration: $thresholdResetGeneration
+                    )
+                    .disabled(!isSlowShutterEnabled)
+                    cueDetail("s or slower")
                 }
-
-                Picker("Clipping", selection: $clippingPercentageThreshold) {
-                    ForEach(
-                        CameraQualityWarningPreferences.clippingPercentageThresholdOptions,
-                        id: \.self
-                    ) { threshold in
-                        Text("\(percentage(threshold)) near black or white")
-                            .tag(threshold)
-                    }
+                HStack(spacing: 10) {
+                    cueToggle("Clipping", isOn: $isClippingEnabled)
+                        .help(CameraQualityWarning.clippingSettingsDescription)
+                    CameraQualityThresholdField(
+                        kind: .clipping, value: $clippingPercentageThreshold,
+                        resetGeneration: $thresholdResetGeneration
+                    )
+                    .disabled(!isClippingEnabled)
+                    cueDetail("% near black or white")
                 }
             }
             .disabled(!isEnabled)
 
             Section {
                 Button("Restore Quality Cue Defaults") {
+                    // Retire focused drafts before changing any values. A
+                    // delayed focus-loss callback cannot restore stale text.
+                    thresholdResetGeneration &+= 1
                     isEnabled = true
+                    isHighISOEnabled = true
+                    isSlowShutterEnabled = true
+                    isClippingEnabled = true
                     highISOThreshold = CameraQualityWarningPreferences.defaultHighISOThreshold
                     slowShutterThreshold = CameraQualityWarningPreferences.defaultSlowShutterThreshold
                     clippingPercentageThreshold = CameraQualityWarningPreferences.defaultClippingPercentageThreshold
                 }
-            }
-
-            Section {
-                Text(CameraQualityWarning.clippingSettingsDescription)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -178,12 +183,73 @@ struct CameraQualityWarningsSettingsView: View {
         .tint(Color.louppeAccent)
     }
 
-    private func shutter(_ value: Double) -> String {
-        let formatted = MetadataFormat.shutter(value)
-        return formatted.hasSuffix("s") ? formatted : "\(formatted)s"
+    private func cueDetail(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func percentage(_ value: Double) -> String {
-        String(format: "%.0f%%", value)
+    private func cueToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(title, isOn: isOn)
+            .toggleStyle(.checkbox)
+            .frame(width: 108, alignment: .leading)
+    }
+}
+
+private struct CameraQualityThresholdField: View {
+    let kind: CameraQualityThresholdInput
+    @Binding var value: Double
+    @Binding var resetGeneration: Int
+    @Environment(\.locale) private var locale
+    @Environment(\.isEnabled) private var isEnabled
+    @FocusState private var isFocused: Bool
+    @State private var draft = ""
+    @State private var hasEdits = false
+    @State private var observedResetGeneration = 0
+
+    var body: some View {
+        TextField("", text: Binding(
+            get: { draft },
+            set: { draft = $0; hasEdits = true }
+        ))
+        .textFieldStyle(.roundedBorder)
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .frame(width: 76)
+        .focused($isFocused)
+        .accessibilityLabel(kind.accessibilityLabel)
+        .help(kind.inputHelp)
+        .onAppear { refreshDraft() }
+        .onSubmit { commit() }
+        .onExitCommand { refreshDraft() }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { commit() }
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled { commit() }
+        }
+        .onChange(of: resetGeneration) { _, _ in refreshDraft() }
+        .onChange(of: value) { _, _ in
+            if !isFocused { refreshDraft() }
+        }
+        .onChange(of: locale) { _, _ in
+            if !isFocused { refreshDraft() }
+        }
+    }
+
+    private func commit() {
+        guard observedResetGeneration == resetGeneration else {
+            refreshDraft()
+            return
+        }
+        guard hasEdits else { return }
+        value = kind.committedValue(for: draft, previous: value, locale: locale)
+        refreshDraft()
+    }
+
+    private func refreshDraft() {
+        draft = kind.format(value, locale: locale)
+        hasEdits = false
+        observedResetGeneration = resetGeneration
     }
 }

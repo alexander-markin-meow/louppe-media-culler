@@ -420,6 +420,7 @@ final class XMPPhase6Tests: XCTestCase {
             cameraModel: nil,
             lensModel: nil,
             fileSize: 1,
+            scannedIdentity: try? FileOperationJournal.captureIdentity(at: url),
             rating: decision,
             starRating: stars,
             colorLabel: color

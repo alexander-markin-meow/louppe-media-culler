@@ -1,60 +1,118 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Louppe logo — the same 3×3 grid as the app icon, with the middle
-/// "keeper" tile filled — drawn natively so it stays crisp at any size and
-/// always matches the brand purple. Proportions were measured from the
-/// 1024 px app-icon master (AppIcon/AppIcon-1024.png).
-struct LouppeLogo: View {
-    var size: CGFloat = 64
-
-    var body: some View {
-        let tile = size / 3.82          // 3 tiles + 2 gaps of 0.41 × tile
-        let gap = tile * 0.41
-        let stroke = tile * 0.135
-        let radius = tile * 0.2
-        VStack(spacing: gap) {
-            ForEach(0..<3) { row in
-                HStack(spacing: gap) {
-                    ForEach(0..<3) { column in
-                        RoundedRectangle(cornerRadius: radius)
-                            .strokeBorder(Color.louppeAccent, lineWidth: stroke)
-                            .background(
-                                // Only the center tile — the keeper — is filled.
-                                row == 1 && column == 1
-                                    ? RoundedRectangle(cornerRadius: radius).fill(Color.louppeAccent)
-                                    : nil
-                            )
-                            .frame(width: tile, height: tile)
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// The start screen: pick a folder (or a recent one) to begin a session.
 struct WelcomeView: View {
     @ObservedObject var store: SessionStore
+    private let availableScreenWidth: CGFloat
+    private let scrollsVertically: Bool
+    // Preserve the minimum height and keep scrolling rows clear of Help.
+    private let helpFooterHeight: CGFloat = 16 + 28 + 24
+    @StateObject private var connectedDrives: ConnectedDrivesStore
     @Environment(\.openWindow) private var openWindow
     @State private var isFolderDropTarget = false
     @State private var folderDropError: String?
     @State private var isNewSessionConfirmationPresented = false
 
+    init(
+        store: SessionStore,
+        availableScreenWidth: CGFloat = NSScreen.main?.visibleFrame.width ?? 1280,
+        connectedDrives: ConnectedDrivesStore = ConnectedDrivesStore(),
+        scrollsVertically: Bool = false
+    ) {
+        self.store = store
+        self.availableScreenWidth = availableScreenWidth
+        self.scrollsVertically = scrollsVertically
+        _connectedDrives = StateObject(wrappedValue: connectedDrives)
+    }
+
+    // Keep the common case to two quiet columns. Additional drive columns
+    // use the display's available width instead of hiding drives in an overflow.
+    private var driveColumnCount: Int {
+        let recentWidth: CGFloat = store.recentFolders.isEmpty ? 0 : 300
+        let available = availableScreenWidth - 64 - recentWidth
+        let fittingColumns = max(1, Int((available + 16) / 296))
+        return min(fittingColumns, max(1, (connectedDrives.drives.count + 5) / 6))
+    }
+
+    private var sourcesWidth: CGFloat {
+        let drivesWidth = CGFloat(driveColumnCount) * 280 + CGFloat(driveColumnCount - 1) * 16
+        return hasConnectedDrives && !store.recentFolders.isEmpty ? 300 + drivesWidth : max(392, drivesWidth)
+    }
+
+    private var hasConnectedDrives: Bool {
+        !connectedDrives.drives.isEmpty || connectedDrives.statusMessage != nil
+    }
+
+    private var measuredContent: some View {
+        welcomeContent
+            .frame(width: sourcesWidth)
+            .padding(.horizontal, 32)
+            .padding(.top, 20)
+            .padding(.bottom, helpFooterHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: WelcomeContentSizeKey.self, value: geometry.size)
+                }
+            }
+    }
+
     var body: some View {
-        VStack(spacing: 18) {
-            Link(destination: URL(string: "https://louppe.eu/")!) {
-                LouppeLogo(size: 64)
-                    .contentShape(Rectangle())
+        ZStack(alignment: .top) {
+            if scrollsVertically {
+                ScrollView(.vertical) {
+                    measuredContent
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.bottom, helpFooterHeight)
+            } else {
+                measuredContent
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                openWindow(id: LouppeHelpWindow.id)
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.title3)
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Visit the Louppe website")
-            .help("Open louppe.eu")
-            Text("Louppe")
-                .font(.largeTitle.bold())
-                .foregroundStyle(Color.louppeAccent)
+            .foregroundStyle(Color.louppeAccent)
+            .accessibilityLabel("Quick Start and supported formats")
+            .help("Quick Start and supported formats")
+            .padding(24)
+        }
+        .onAppear { connectedDrives.start() }
+        .onDisappear { connectedDrives.stop() }
+        .contentShape(Rectangle())
+        .onDrop(
+            of: [UTType.fileURL.identifier],
+            isTargeted: $isFolderDropTarget,
+            perform: openDroppedFolder
+        )
+        .alert(
+            "Open as a New Session?",
+            isPresented: $isNewSessionConfirmationPresented
+        ) {
+            Button("Open as New Session", role: .destructive) {
+                store.openIdentityConflictAsNewSession()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This replaces the saved Louppe decisions for this folder and opens the current files unrated. Your photos and videos are not changed."
+            )
+        }
+        .toolbar { LaunchToolbarTitle() }
+        .navigationTitle("")
+    }
 
-            VStack(spacing: 10) {
+    private var welcomeContent: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
                 Button {
                     store.promptForSourceFolder()
                 } label: {
@@ -68,7 +126,7 @@ struct WelcomeView: View {
                 Label(
                     isFolderDropTarget
                         ? "Release to open this folder"
-                        : "or drag a media folder here",
+                        : "or drag a media folder in this window",
                     systemImage: isFolderDropTarget
                         ? "folder.badge.plus"
                         : "arrow.down.doc"
@@ -78,32 +136,10 @@ struct WelcomeView: View {
                     isFolderDropTarget ? Color.louppeAccent : .secondary
                 )
             }
-            .frame(maxWidth: 360)
-            .padding(16)
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(
-                        isFolderDropTarget
-                            ? Color.louppeAccent
-                            : Color.secondary.opacity(0.45),
-                        style: StrokeStyle(lineWidth: isFolderDropTarget ? 2 : 1, dash: [6])
-                    )
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .frame(maxWidth: .infinity)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Open a media folder")
-            .accessibilityHint("Choose a folder or drag a folder here to start reviewing it")
-
-            VStack(spacing: 3) {
-                Text("Photos (including RAW), videos, and audio")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Quick Start and supported formats") {
-                    openWindow(id: LouppeHelpWindow.id)
-                }
-                .buttonStyle(.link)
-                .font(.caption)
-            }
+            .accessibilityHint("Choose a folder or drag one anywhere in this window to start reviewing it")
 
             if let folderDropError {
                 Text(folderDropError)
@@ -128,7 +164,7 @@ struct WelcomeView: View {
                             store.openMismatchedSessionAnyway()
                         }
                         .accessibilityHint(
-                            "Verifies saved filenames, then uses this legacy session with the current folder"
+                            "Loads saved ratings after checking they match the files in this folder"
                         )
                     } else if store.canOpenIdentityConflictAsNewSession {
                         Button("Open as New Session") {
@@ -141,52 +177,55 @@ struct WelcomeView: View {
                 }
             }
 
-            if !store.recentFolders.isEmpty {
-                VStack(spacing: 6) {
-                    Text("Recent")
-                        .font(.caption.smallCaps())
-                        .foregroundStyle(.secondary)
-                    ForEach(store.recentFolders.prefix(5), id: \.path) { url in
-                        Button {
-                            store.openFolder(url)
-                        } label: {
-                            Label(url.lastPathComponent, systemImage: "clock")
-                                .frame(maxWidth: 320)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(Color.louppeAccent)
+            if !store.recentFolders.isEmpty || hasConnectedDrives {
+                Divider()
+                HStack(alignment: .top, spacing: 20) {
+                    if !store.recentFolders.isEmpty {
+                        recentFolders
+                            .frame(width: hasConnectedDrives ? 280 : 392)
+                    }
+                    if hasConnectedDrives {
+                        ConnectedDrivesView(drives: connectedDrives, columnCount: driveColumnCount) { directory in
+                            store.promptForSourceFolder(initialDirectory: directory)
                         }
-                        .buttonStyle(.link)
-                        .accessibilityLabel("Open \(url.path)")
-                        .help(url.path)
                     }
                 }
-                .padding(.top, 8)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+        }
+    }
+
+    private var recentFolders: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent folders")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            VStack(spacing: 4) {
+                ForEach(store.recentFolders.prefix(5), id: \.path) { url in
+                    Button {
+                        store.openFolder(url)
+                    } label: {
+                        WelcomeSourceRow(
+                            name: url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent,
+                            detail: abbreviatedParentPath(url),
+                            symbol: "clock"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(url.path)")
+                    .help(url.path)
+                }
             }
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onDrop(
-            of: [UTType.fileURL.identifier],
-            isTargeted: $isFolderDropTarget,
-            perform: openDroppedFolder
-        )
-        .alert(
-            "Open as a New Session?",
-            isPresented: $isNewSessionConfirmationPresented
-        ) {
-            Button("Open as New Session", role: .destructive) {
-                store.openIdentityConflictAsNewSession()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "This replaces the saved Louppe decisions for this folder and opens the current files unrated. Your photos and videos are not changed."
-            )
-        }
-        .toolbar { LaunchToolbarTitle() }
-        .navigationTitle("")
+    }
+
+    private func abbreviatedParentPath(_ url: URL) -> String {
+        let path = url.deletingLastPathComponent().path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
     }
 
     private func openDroppedFolder(_ providers: [NSItemProvider]) -> Bool {
@@ -234,6 +273,103 @@ struct WelcomeView: View {
     }
 }
 
+/// A compact source shortcut, shown only while physical drives are connected.
+/// The native chooser gives the photographer control of the folder to review.
+struct ConnectedDrivesView: View {
+    @ObservedObject var drives: ConnectedDrivesStore
+    var columnCount: Int = 1
+    let chooseFolder: (URL) -> Void
+
+    private var rowsPerColumn: Int {
+        max(1, (drives.drives.count + columnCount - 1) / columnCount)
+    }
+
+    var body: some View {
+        if !drives.drives.isEmpty || drives.statusMessage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Connected drives")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(0..<columnCount, id: \.self) { column in
+                        VStack(spacing: 4) {
+                            ForEach(Array(drives.drives.dropFirst(column * rowsPerColumn).prefix(rowsPerColumn))) { drive in
+                                driveButton(drive)
+                            }
+                        }
+                        .frame(width: 280)
+                    }
+                }
+                if let message = drives.statusMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func driveButton(_ drive: ConnectedDrive) -> some View {
+        Button {
+            Task { @MainActor in
+                if let directory = await drives.directoryForOpening(drive) {
+                    chooseFolder(directory)
+                }
+            }
+        } label: {
+            WelcomeSourceRow(
+                name: drive.name,
+                detail: drive.capacityDescription,
+                symbol: "externaldrive",
+                isOpening: drives.openingDriveID == drive.id
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(drives.openingDriveID != nil)
+        .accessibilityLabel("Choose a media folder on \(drive.name)")
+        .accessibilityValue(drive.capacityDescription)
+        .help("Choose a folder on \(drive.name)…\n\(drive.capacityDescription)")
+    }
+}
+
+/// Folder and drive shortcuts share one compact, keyboard-accessible row.
+private struct WelcomeSourceRow: View {
+    let name: String
+    let detail: String
+    let symbol: String
+    var isOpening = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if isOpening {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name)
+                    .foregroundStyle(Color.louppeAccent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+}
+
 /// Shown while a folder scan is in progress.
 struct ScanningView: View {
     @ObservedObject var store: SessionStore
@@ -263,8 +399,11 @@ struct ScanningView: View {
                 Button {
                     store.cancelScan()
                 } label: {
-                    Label("Cancel Scan", systemImage: "xmark")
-                        .labelStyle(.titleAndIcon)
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark")
+                            .accessibilityHidden(true)
+                        Text("Cancel Scan")
+                    }
                 }
                 .keyboardShortcut(.cancelAction)
                 .help("Cancel scanning and return to the start screen (Esc)")

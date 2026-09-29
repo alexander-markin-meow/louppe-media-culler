@@ -1,0 +1,5 @@
+bound atomicWrite rejected substitution: DestinationChanged()
+bound atomicWrite returned success: false
+target original preserved: true
+target intended bytes: false
+target substituted bytes: false

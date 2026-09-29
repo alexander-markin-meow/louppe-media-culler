@@ -5,7 +5,45 @@ by the app are defined in `VERSION`; `build_app.sh` verifies that the marketing
 version and build number have a matching entry below before it creates a
 release bundle.
 
-## 1.9.1 (12) — 2026-09-28
+## 1.10.0 (12) — 2026-09-29
+
+- Removed explanatory footers beneath Review and Quality Cues settings.
+
+- Added a closable, one-time invitation for early users to email Alex their
+  experience, workflow, and feature requests. Its shown status stays local.
+
+- Added a compact RAW display choice for Apple RAW rendering at every zoom
+  level, with Preview/RAW source labels and explicit preview fallback.
+  The zoom slider now spans 30–400% while Fit still shows the whole photo.
+- Added a persisted Apple RAW decoder choice, with RAW 9 opt-in on supported
+  macOS 27 files, bounded model-resource preparation, visible retry/default
+  remedies, and decoder-specific preview and 100% caches.
+
+- Fixed all 17 confirmed findings from the full audit: exact RAW/JPEG Clean Up
+  scope, save durability and Retry, filtered selection, source-bound XMP and
+  media reads, interrupted file recovery, transparent-image analysis, precise
+  filters, persistent video controls, and actionable save errors.
+- Made repeated-basename export planning scale with the batch size and stopped
+  abandoned audio analysis before it delays the next recording.
+
+- Clarified how to load saved ratings after moving or renaming a folder.
+- Anchored the start-page Help button to the window's bottom-right corner.
+- Added **Open in Louppe** to Finder's Services menu for a selected media folder.
+- Simplified the start page by removing the large branding block and reducing
+  its top spacing. Quality cue thresholds are directly editable, and each cue
+  can be switched off independently without losing its threshold.
+- Added folder-hierarchy review in Sort, with parent folders before their
+  descendants and full relative folder names in Browser and Grid.
+- Added Review settings for advancement after a decision and the starting
+  view, sort, and group dividers for new folders. Rating under a decision
+  filter now advances without skipping the next undecided item.
+- Added connected external drives and memory cards to the start screen, with
+  available capacity and a folder chooser that starts on the selected drive.
+  Five recent folders and all connected drives share a compact, aligned start
+  page whose window minimum follows the space its content needs. On smaller
+  displays, overflow can scroll so every drive and long message stays reachable.
+- Isolated the local “louppe - to review” app from the stable app's identity,
+  preferences, recents, and window restoration; automatic updates stay off.
 
 - Strengthened Move, Rename, Organize, and undo against folder-path replacement
   on standard macOS volumes.

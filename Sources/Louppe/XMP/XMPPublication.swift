@@ -220,6 +220,76 @@ struct XMPSameStemConflictDescriptor: Equatable, Sendable, Identifiable {
     }
 }
 
+/// Authority frozen by preflight for the entire shared stem family, including
+/// siblings excluded by the export predicate. Folder timestamps are not identity.
+struct XMPPublicationSourceValidation: Equatable, Sendable {
+    struct Member: Equatable, Sendable {
+        let path: XMPExactFileSystemPath
+        let identity: FileOperationJournal.FileIdentity
+    }
+
+    let members: [Member]
+    let parent: DurableFileIO.DirectoryBinding
+    let sourceFolder: URL?
+    let sourceFolderIdentity: SessionPersistence.SourceFolderIdentity?
+
+    init(family: XMPSidecarFamilyPlan, sourceFolder: URL?,
+         sourceFolderIdentity: SessionPersistence.SourceFolderIdentity?) throws {
+        guard let sidecar = family.canonicalSidecar else {
+            throw XMPPublicationSourceChanged()
+        }
+        members = try family.members.map { member in
+            guard let identity = member.scannedIdentity,
+                  member.mediaPath.parent == sidecar.parent else {
+                throw XMPPublicationSourceChanged()
+            }
+            return Member(path: member.mediaPath, identity: identity)
+        }
+        guard !members.isEmpty else { throw XMPPublicationSourceChanged() }
+        do { parent = try DurableFileIO.DirectoryBinding(url: sidecar.parent.url) }
+        catch { throw XMPPublicationSourceChanged() }
+        self.sourceFolder = sourceFolder
+        self.sourceFolderIdentity = sourceFolderIdentity
+        if let sourceFolder {
+            let root = try XMPExactFileSystemPath(url: sourceFolder)
+            let prefix = root.bytes + Data([UInt8(ascii: "/")])
+            guard sidecar.parent == root || sidecar.parent.bytes.starts(with: prefix) else {
+                throw XMPPublicationSourceChanged()
+            }
+        }
+        try validate()
+    }
+
+    func validate() throws {
+        do { try parent.requireCurrentPath() }
+        catch { throw XMPPublicationSourceChanged() }
+        if let sourceFolder {
+            guard let sourceFolderIdentity,
+                  sourceFolderIdentity.matches(folder: sourceFolder) else {
+                throw XMPPublicationSourceChanged()
+            }
+        }
+        for member in members {
+            var info = Darwin.stat()
+            guard member.path.withFileSystemRepresentation({ Darwin.lstat($0, &info) }) == 0,
+                  info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                  let live = try? FileOperationJournal.captureIdentity(
+                    at: member.path.url,
+                    volumeRoot: URL(fileURLWithPath: member.identity.volumeRootPath),
+                    volumeUUIDString: member.identity.volumeUUIDString
+                  ), live == member.identity else {
+                throw XMPPublicationSourceChanged()
+            }
+        }
+    }
+}
+
+struct XMPPublicationSourceChanged: LocalizedError {
+    var errorDescription: String? {
+        "The media files or source folder changed after scanning. Rescan the folder before publishing XMP."
+    }
+}
+
 struct XMPPublicationPlanEntry: Equatable, Sendable, Identifiable {
     let id: String
     let filenames: [String]
@@ -233,6 +303,7 @@ struct XMPPublicationPlanEntry: Equatable, Sendable, Identifiable {
     let applicationPacketCount: Int
     let excludedACRCompanionCount: Int
     let sameStemConflict: XMPSameStemConflictDescriptor?
+    let sourceValidation: XMPPublicationSourceValidation?
     /// Whether a packet was really on disk at preflight. A failed *create*
     /// still carries the sidecar path it was going to write, so the path alone
     /// cannot answer "how many recognized sidecars are already there".
@@ -302,6 +373,8 @@ struct XMPPublicationResult: Equatable, Sendable {
 }
 
 struct XMPPublicationInput: Sendable {
+    let sourceFolder: URL?
+    let sourceFolderIdentity: SessionPersistence.SourceFolderIdentity?
     let sessionGeneration: UInt64
     let selectedItemCount: Int
     let selectedPhysicalFileCount: Int
@@ -315,11 +388,18 @@ struct XMPPublicationInput: Sendable {
         items: [PhotoItem],
         familyContextItems: [PhotoItem]? = nil,
         sessionGeneration: UInt64 = 0,
+        sourceFolder: URL? = nil,
+        sourceFolderIdentity: SessionPersistence.SourceFolderIdentity? = nil,
         profile: XMPApplicationProfile,
         visibleDecisionKeywords: Bool,
         allowExternalLabelReplacement: Bool = false
     ) throws {
         self.sessionGeneration = sessionGeneration
+        self.sourceFolder = sourceFolder
+        self.sourceFolderIdentity = sourceFolderIdentity
+        if sourceFolder != nil && sourceFolderIdentity == nil {
+            throw XMPPublicationSourceChanged()
+        }
         selectedItemCount = items.count
         let selectedFiles = items.flatMap(\.individualFiles)
         selectedPhysicalFileCount = selectedFiles.count(where: {
@@ -383,6 +463,8 @@ enum XMPPublicationPlanner {
         let family: XMPSidecarFamilyPlan
         let sessionGeneration: UInt64
         let selectedMediaPaths: Set<XMPExactFileSystemPath>
+        let sourceFolder: URL?
+        let sourceFolderIdentity: SessionPersistence.SourceFolderIdentity?
     }
 
     private actor JobQueue {
@@ -440,7 +522,9 @@ enum XMPPublicationPlanner {
                 order: $0.offset,
                 family: $0.element,
                 sessionGeneration: input.sessionGeneration,
-                selectedMediaPaths: input.selectedMediaPaths
+                selectedMediaPaths: input.selectedMediaPaths,
+                sourceFolder: input.sourceFolder,
+                sourceFolderIdentity: input.sourceFolderIdentity
             )
         }
         let queue = JobQueue(jobs)
@@ -458,6 +542,8 @@ enum XMPPublicationPlanner {
                                 job.family,
                                 sessionGeneration: job.sessionGeneration,
                                 selectedMediaPaths: job.selectedMediaPaths,
+                                sourceFolder: job.sourceFolder,
+                                sourceFolderIdentity: job.sourceFolderIdentity,
                                 store: store
                             )
                         ))
@@ -514,6 +600,8 @@ enum XMPPublicationPlanner {
         _ family: XMPSidecarFamilyPlan,
         sessionGeneration: UInt64,
         selectedMediaPaths: Set<XMPExactFileSystemPath>,
+        sourceFolder: URL?,
+        sourceFolderIdentity: SessionPersistence.SourceFolderIdentity?,
         store: XMPMetadataStore
     ) async -> XMPPublicationPlanEntry {
         let filenames = family.members.map {
@@ -565,9 +653,14 @@ enum XMPPublicationPlanner {
                 )
             }
             do {
+                let validation = try XMPPublicationSourceValidation(
+                    family: family, sourceFolder: sourceFolder,
+                    sourceFolderIdentity: sourceFolderIdentity
+                )
                 let prepared = try await store.prepareWrite(
                     path: path,
-                    metadata: metadata
+                    metadata: metadata,
+                    sourceValidation: validation
                 )
                 if prepared.action != .alreadyCurrent {
                     try await store.requireWritable(prepared)
@@ -587,6 +680,7 @@ enum XMPPublicationPlanner {
                         ? "The sidecar already contains the selected Louppe metadata."
                         : "The sidecar is ready to \(category == .create ? "create" : "update").",
                     fingerprint: prepared.preflightFingerprint,
+                    sourceValidation: validation,
                     changeCounts: XMPPublicationChangeCounts(
                         stars: changes.stars ? 1 : 0,
                         colors: changes.color ? 1 : 0,
@@ -619,6 +713,7 @@ enum XMPPublicationPlanner {
             category: XMPPublicationCategory,
             message: String,
             fingerprint: XMPPreflightFingerprint? = nil,
+            sourceValidation: XMPPublicationSourceValidation? = nil,
             changeCounts: XMPPublicationChangeCounts = .init(),
             sameStemConflict: XMPSameStemConflictDescriptor? = nil,
             sidecarExisted: Bool? = nil
@@ -636,6 +731,7 @@ enum XMPPublicationPlanner {
                 applicationPacketCount: applicationPacketCount,
                 excludedACRCompanionCount: excludedACRCompanionCount,
                 sameStemConflict: sameStemConflict,
+                sourceValidation: sourceValidation,
                 // The prepared paths below state existence exactly. Anywhere
                 // else, only a real directory entry counts.
                 canonicalSidecarExisted: sidecarExisted
@@ -649,6 +745,11 @@ enum XMPPublicationPlanner {
     ]
 
     static func category(for error: Error) -> XMPPublicationCategory {
+        if error is XMPPublicationSourceChanged { return .externalModificationConflict }
+        if error is DurableFileIO.DestinationChanged { return .externalModificationConflict }
+        if let posix = error as? POSIXError, posix.code == .EEXIST {
+            return .externalModificationConflict
+        }
         if let mapping = error as? XMPFieldMappingError {
             switch mapping {
             case .ownershipConflict:
@@ -725,7 +826,8 @@ enum XMPPublicationWorker {
                     while !cancelFlag.isSet, let entry = await queue.next() {
                         guard let path = entry.canonicalSidecar,
                               let metadata = entry.metadata,
-                              let fingerprint = entry.fingerprint else {
+                              let fingerprint = entry.fingerprint,
+                              let validation = entry.sourceValidation else {
                             partial.details.append(runtimeFailure(
                                 entry,
                                 category: .unsafeFileType,
@@ -737,7 +839,8 @@ enum XMPPublicationWorker {
                         do {
                             let prepared = try await store.prepareWrite(
                                 path: path,
-                                metadata: metadata
+                                metadata: metadata,
+                                sourceValidation: validation
                             )
                             guard prepared.preflightFingerprint == fingerprint else {
                                 throw XMPMetadataStore.StoreError.fileChanged
@@ -745,6 +848,7 @@ enum XMPPublicationWorker {
                             if cancelFlag.isSet { break }
                             let result = try await store.commit(
                                 prepared,
+                                sourceValidation: validation,
                                 testHooks: XMPMetadataStoreTestHooks(
                                     beforeFinalValidation: {
                                         if cancelFlag.isSet {
@@ -811,6 +915,7 @@ enum XMPPublicationWorker {
             applicationPacketCount: entry.applicationPacketCount,
             excludedACRCompanionCount: entry.excludedACRCompanionCount,
             sameStemConflict: entry.sameStemConflict,
+            sourceValidation: entry.sourceValidation,
             canonicalSidecarExisted: entry.canonicalSidecarExisted
         )
     }

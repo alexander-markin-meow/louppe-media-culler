@@ -1,0 +1,3 @@
+durable started partial with exact identity captured
+report unresolvedOperations=1 unresolvedFiles=1 removedPartialCopies=0 partialExists=true
+details=["Recovery couldn\'t verify that .louppe-f51e31e1-9b7d-40a5-8c08-3995569991ff-1.partial belongs to the interrupted operation, so it left the file untouched."]

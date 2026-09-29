@@ -1,0 +1,6 @@
+n=100 seconds=0.004662036895751953 files=100 filesystemProbes=100
+n=200 seconds=0.0084000825881958 files=200 filesystemProbes=200
+n=400 seconds=0.017405033111572266 files=400 filesystemProbes=400
+n=800 seconds=0.035292983055114746 files=800 filesystemProbes=800
+
+exit=0

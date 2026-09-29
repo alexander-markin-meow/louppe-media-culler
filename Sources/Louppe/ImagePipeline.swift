@@ -134,8 +134,8 @@ final class ImagePipeline: @unchecked Sendable {
     /// view construction. They let the Gallery view show *something* the very
     /// frame the photo changes (the prefetched full image, or the Browser
     /// thumbnail as a low-res preview) instead of flashing an empty pane.
-    func cachedFullImage(for item: PhotoItem) -> NSImage? {
-        fullCache.object(forKey: Self.cacheKey(for: item) as NSString)
+    func cachedFullImage(for item: PhotoItem, mode: RawDisplayMode = .fast, decoder: AppleRawDecoder = .appleDefault) -> NSImage? {
+        fullCache.object(forKey: Self.fullCacheKey(for: item, mode: mode, decoder: decoder) as NSString)
     }
 
     func cachedThumbnail(for item: PhotoItem) -> NSImage? {
@@ -155,33 +155,38 @@ final class ImagePipeline: @unchecked Sendable {
         guard !item.isAudio && !item.isText else { return nil }
         let key = Self.cacheKey(for: item)
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
+        let revision = MediaSourceRevision(item)
         return await decodeOnce(
             kind: .thumbnail,
             key: key,
             qualityOfService: .userInitiated,
             queuePriority: .normal
         ) { [self] in
-            loadThumbnailSync(item: item, key: key)
+            loadThumbnailSync(item: item, revision: revision, key: key)
         }
     }
 
-    func fullImage(for item: PhotoItem) async -> NSImage? {
+    func fullImage(for item: PhotoItem, mode: RawDisplayMode = .fast, decoder: AppleRawDecoder = .appleDefault) async -> NSImage? {
         guard !item.isAudio && !item.isText else { return nil }
-        let key = Self.cacheKey(for: item)
+        let key = Self.fullCacheKey(for: item, mode: mode, decoder: decoder)
         if let cached = fullCache.object(forKey: key as NSString) { return cached }
         return await fullImage(
-            for: item.primaryURL,
+            for: MediaSourceRevision(item),
             key: key,
             qualityOfService: .userInitiated,
-            queuePriority: .veryHigh
+            queuePriority: .veryHigh,
+            rendersRAW: mode.rendersRAW(for: item),
+            decoder: decoder
         )
     }
 
     private func fullImage(
-        for url: URL,
+        for revision: MediaSourceRevision,
         key: String,
         qualityOfService: QualityOfService,
-        queuePriority: Operation.QueuePriority
+        queuePriority: Operation.QueuePriority,
+        rendersRAW: Bool = false,
+        decoder: AppleRawDecoder = .appleDefault
     ) async -> NSImage? {
         await decodeOnce(
             kind: .full,
@@ -189,7 +194,7 @@ final class ImagePipeline: @unchecked Sendable {
             qualityOfService: qualityOfService,
             queuePriority: queuePriority
         ) { [self] in
-            loadFullSync(url: url, key: key)
+            loadFullSync(revision: revision, key: key, rendersRAW: rendersRAW, decoder: decoder)
         }
     }
 
@@ -200,7 +205,7 @@ final class ImagePipeline: @unchecked Sendable {
             if fullCache.object(forKey: key as NSString) != nil { continue }
             Task.detached(priority: .utility) { [weak self] in
                 _ = await self?.fullImage(
-                    for: item.primaryURL,
+                    for: MediaSourceRevision(item),
                     key: key,
                     qualityOfService: .utility,
                     queuePriority: .low
@@ -260,7 +265,7 @@ final class ImagePipeline: @unchecked Sendable {
 
     // MARK: - Decoding
 
-    private func loadThumbnailSync(item: PhotoItem, key: String) -> NSImage? {
+    private func loadThumbnailSync(item: PhotoItem, revision: MediaSourceRevision, key: String) -> NSImage? {
         guard !item.isAudio && !item.isText else { return nil }
         if let cached = thumbCache.object(forKey: key as NSString) { return cached }
 
@@ -314,9 +319,11 @@ final class ImagePipeline: @unchecked Sendable {
             return image
         }
 
-        let cgImage = item.isVideo
-            ? decodeFirstVideoFrame(url: item.primaryURL, maxPixel: Self.thumbPixelSize)
-            : Self.decodeImage(url: item.primaryURL, maxPixel: Self.thumbPixelSize)
+        let cgImage = revision.read {
+            item.isVideo
+                ? decodeFirstVideoFrame(url: revision.url, maxPixel: Self.thumbPixelSize)
+                : Self.decodeImage(url: revision.url, maxPixel: Self.thumbPixelSize)
+        }
         guard let cgImage else { return nil }
         let image = NSImage(cgImage: cgImage, size: .zero)
         thumbCache.setObject(image, forKey: key as NSString, cost: Self.cost(of: cgImage))
@@ -332,9 +339,13 @@ final class ImagePipeline: @unchecked Sendable {
         return image
     }
 
-    private func loadFullSync(url: URL, key: String) -> NSImage? {
+    private func loadFullSync(revision: MediaSourceRevision, key: String, rendersRAW: Bool, decoder: AppleRawDecoder) -> NSImage? {
         if let cached = fullCache.object(forKey: key as NSString) { return cached }
-        guard let cgImage = Self.decodeImage(url: url, maxPixel: Self.fullPixelSize) else { return nil }
+        guard let cgImage = revision.read({
+            rendersRAW
+                ? RawImageRendering.preview(url: revision.url, maximumPixelSize: Self.fullPixelSize, decoder: decoder)
+                : Self.decodeImage(url: revision.url, maxPixel: Self.fullPixelSize)
+        }) else { return nil }
         let image = NSImage(cgImage: cgImage, size: .zero)
         fullCache.setObject(image, forKey: key as NSString, cost: Self.cost(of: cgImage))
         return image
@@ -403,6 +414,11 @@ final class ImagePipeline: @unchecked Sendable {
             kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, fullOptions as CFDictionary) ?? fast
+    }
+
+    static func fullCacheKey(for item: PhotoItem, mode: RawDisplayMode, decoder: AppleRawDecoder = .appleDefault) -> String {
+        let key = cacheKey(for: item)
+        return mode.rendersRAW(for: item) ? "\(key)|apple-raw-presentation-v2|\(decoder.rawValue)" : key
     }
 
     // MARK: - Cache keys

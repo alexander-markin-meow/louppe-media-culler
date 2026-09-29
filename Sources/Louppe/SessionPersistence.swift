@@ -412,9 +412,8 @@ actor SessionPersistence: SessionPersistenceClient {
                 if case .differentSourceFolder(.sidecar) = $0 { return true }
                 return false
             }) {
-                return "This folder contains a Louppe session created for a different folder path. "
-                    + "If you recognize it as this folder's session, you can open it anyway. "
-                    + "Nothing has been changed."
+                return "This folder has saved ratings from a different location. "
+                    + "If you moved or renamed the folder, choose Open Anyway to load them."
             }
             if problems.contains(where: {
                 if case .invalidEntry(.sidecar) = $0 { return true }
@@ -492,6 +491,8 @@ actor SessionPersistence: SessionPersistenceClient {
     private let beforeBackupValidationForTesting:
         (@Sendable () throws -> Void)?
     private let afterBackupReplaceForTesting: (@Sendable () throws -> Void)?
+    private let beforeDirectorySyncRetryForTesting:
+        (@Sendable (URL) throws -> Void)?
 
     init(
         backupDirectory: URL? = nil,
@@ -501,7 +502,9 @@ actor SessionPersistence: SessionPersistenceClient {
         afterSidecarReplaceForTesting: (@Sendable () throws -> Void)? = nil,
         beforeBackupValidationForTesting:
             (@Sendable () throws -> Void)? = nil,
-        afterBackupReplaceForTesting: (@Sendable () throws -> Void)? = nil
+        afterBackupReplaceForTesting: (@Sendable () throws -> Void)? = nil,
+        beforeDirectorySyncRetryForTesting:
+            (@Sendable (URL) throws -> Void)? = nil
     ) {
         self.afterSidecarReadForTesting = afterSidecarReadForTesting
         self.beforeSaveLockForTesting = beforeSaveLockForTesting
@@ -511,6 +514,8 @@ actor SessionPersistence: SessionPersistenceClient {
         self.beforeBackupValidationForTesting =
             beforeBackupValidationForTesting
         self.afterBackupReplaceForTesting = afterBackupReplaceForTesting
+        self.beforeDirectorySyncRetryForTesting =
+            beforeDirectorySyncRetryForTesting
         // Advisory locks only need to survive while processes are alive. The
         // per-user temporary root is shared by those processes and remains
         // writable even when Application Support or a custom backup location
@@ -755,7 +760,7 @@ actor SessionPersistence: SessionPersistenceClient {
         } catch SaveGuardError.sidecarChanged {
             return .sidecarChanged
         } catch {
-            let sidecarFailure = Self.failureReason(for: error)
+            var sidecarFailure = Self.failureReason(for: error)
             switch Self.sourceFolderState(
                 expected: access.folderIdentity,
                 at: sourceFolder
@@ -782,29 +787,90 @@ actor SessionPersistence: SessionPersistenceClient {
             }
             let observedRevision = Self.sidecarRevision(at: sidecar)
             if observedRevision == desiredRevision {
-                // The rename committed and only the trailing directory sync
-                // failed. Exact bytes keep this access on the same CAS lineage.
-                let finalBackupRevision = writeBackupBestEffort(
-                    data,
-                    for: access.folderIdentity,
-                    expectedRevision: expectedBackupRevision
-                )
-                recordSuccessfulSave(
+                // Visible bytes advance our CAS/generation lineage, but do
+                // not prove durability. Retry the missing directory flush;
+                // otherwise require a fully synced backup before success.
+                effectiveSidecarRevision = desiredRevision
+                recordObservedSave(
                     accessID: access.id,
                     sidecarRevision: desiredRevision,
-                    backupRevision: finalBackupRevision,
-                    assignedGeneration: assignedGeneration,
-                    folderKey: folderKey,
-                    sequence: sequence
+                    backupRevision: expectedBackupRevision,
+                    assignedGeneration: assignedGeneration
                 )
                 possibleCommittedSidecarRevisionByAccessID.removeValue(
                     forKey: access.id
                 )
-                return .savedToSidecar
+                do {
+                    try retryDirectorySync(at: sidecar) {
+                        switch Self.sourceFolderState(
+                            expected: access.folderIdentity,
+                            at: sourceFolder
+                        ) {
+                        case .matching: break
+                        case .unavailable:
+                            throw SaveGuardError.sourceFolderUnavailable
+                        case .changed:
+                            throw SaveGuardError.sourceFolderChanged
+                        }
+                        guard Self.sidecarRevision(at: sidecar)
+                                == desiredRevision else {
+                            throw SaveGuardError.sidecarChanged
+                        }
+                    }
+                    let finalBackupRevision = writeBackupBestEffort(
+                        data,
+                        for: access.folderIdentity,
+                        expectedRevision: expectedBackupRevision
+                    )
+                    recordSuccessfulSave(
+                        accessID: access.id,
+                        sidecarRevision: desiredRevision,
+                        backupRevision: finalBackupRevision,
+                        assignedGeneration: assignedGeneration,
+                        folderKey: folderKey,
+                        sequence: sequence
+                    )
+                    return .savedToSidecar
+                } catch SaveGuardError.sourceFolderUnavailable {
+                    return saveToBackupWhileSourceUnavailable(
+                        data,
+                        sourceFolder: sourceFolder,
+                        sequence: sequence,
+                        folderKey: folderKey,
+                        access: access,
+                        expectedSidecarRevision: desiredRevision,
+                        expectedBackupRevision: expectedBackupRevision,
+                        assignedGeneration: assignedGeneration
+                    )
+                } catch SaveGuardError.sourceFolderChanged {
+                    return .sourceFolderChanged
+                } catch SaveGuardError.sidecarChanged {
+                    return .sidecarChanged
+                } catch {
+                    switch Self.sourceFolderState(
+                        expected: access.folderIdentity,
+                        at: sourceFolder
+                    ) {
+                    case .matching: break
+                    case .changed: return .sourceFolderChanged
+                    case .unavailable:
+                        return saveToBackupWhileSourceUnavailable(
+                            data,
+                            sourceFolder: sourceFolder,
+                            sequence: sequence,
+                            folderKey: folderKey,
+                            access: access,
+                            expectedSidecarRevision: desiredRevision,
+                            expectedBackupRevision: expectedBackupRevision,
+                            assignedGeneration: assignedGeneration
+                        )
+                    }
+                    sidecarFailure = Self.failureReason(for: error)
+                }
             }
             guard Self.revisionsMatch(
                 expected: effectiveSidecarRevision,
-                current: observedRevision
+                current: Self.sidecarRevision(at: sidecar)
             ), Self.backupLineageAllowsSidecarSave(
                 expected: expectedBackupRevision,
                 current: Self.sidecarRevision(at: backup)
@@ -835,26 +901,32 @@ actor SessionPersistence: SessionPersistenceClient {
             } catch SaveGuardError.sidecarChanged {
                 return .sidecarChanged
             } catch {
-                if recordCommittedBackupIfObserved(
-                    desiredRevision: desiredRevision,
-                    folderIdentity: access.folderIdentity,
-                    accessID: access.id,
-                    sidecarRevision: effectiveSidecarRevision,
-                    assignedGeneration: assignedGeneration,
-                    folderKey: folderKey,
-                    sequence: sequence
-                ) {
-                    // The backup rename committed and only the trailing
-                    // directory sync (or its deterministic test boundary)
-                    // failed. Adopt those exact bytes so Retry stays on the
-                    // same lineage instead of conflicting with our own save.
-                    return .savedToBackup(sidecarFailure: sidecarFailure)
+                let backupFailure: FailureReason
+                do {
+                    if try recordCommittedBackupIfObserved(
+                        desiredRevision: desiredRevision,
+                        folderIdentity: access.folderIdentity,
+                        sourceFolder: sourceFolder,
+                        accessID: access.id,
+                        sidecarRevision: effectiveSidecarRevision,
+                        assignedGeneration: assignedGeneration,
+                        folderKey: folderKey,
+                        sequence: sequence
+                    ) {
+                        return .savedToBackup(sidecarFailure: sidecarFailure)
+                    }
+                    backupFailure = Self.failureReason(for: error)
+                } catch SaveGuardError.sourceFolderChanged {
+                    return .sourceFolderChanged
+                } catch SaveGuardError.sidecarChanged {
+                    return .sidecarChanged
+                } catch {
+                    backupFailure = Self.failureReason(for: error)
                 }
-                // Do not mark the sequence as persisted. A later request (or
-                // an explicit retry of this snapshot) must still be accepted.
+                // Keep the request retryable unless one destination flushed.
                 return .failed(SaveFailure(
                     sidecar: sidecarFailure,
-                    backup: Self.failureReason(for: error)
+                    backup: backupFailure
                 ))
             }
         }
@@ -884,6 +956,15 @@ actor SessionPersistence: SessionPersistenceClient {
         }
         let desiredRevision = SidecarRevision.content(Self.digest(data))
         var validatedSidecarRevision = expectedSidecarRevision
+        if sidecarMayContainDesiredRevision {
+            // Preserve a possible interrupted sidecar even if the backup also
+            // fails, so reconnect/Retry can adopt only our own exact bytes.
+            possibleCommittedSidecarRevisionByAccessID[access.id] =
+                desiredRevision
+            if let assignedGeneration {
+                snapshotGenerationByAccessID[access.id] = assignedGeneration
+            }
+        }
         do {
             try writeBackup(
                 data,
@@ -908,7 +989,8 @@ actor SessionPersistence: SessionPersistenceClient {
                         ) || (
                             sidecarMayContainDesiredRevision
                                 && current == desiredRevision
-                        ) else {
+                        ) || current == possibleCommittedSidecarRevisionByAccessID[access.id]
+                        else {
                             throw SaveGuardError.sidecarChanged
                         }
                         validatedSidecarRevision = current
@@ -927,14 +1009,12 @@ actor SessionPersistence: SessionPersistenceClient {
                validatedSidecarRevision != desiredRevision {
                 possibleCommittedSidecarRevisionByAccessID[access.id] =
                     desiredRevision
-            } else {
+            } else if validatedSidecarRevision == desiredRevision {
                 possibleCommittedSidecarRevisionByAccessID.removeValue(
                     forKey: access.id
                 )
             }
-            return validatedSidecarRevision == desiredRevision
-                ? .savedToSidecar
-                : .savedToBackup(sidecarFailure: .volumeUnavailable)
+            return .savedToBackup(sidecarFailure: .volumeUnavailable)
         } catch SaveGuardError.sourceFolderChanged {
             return .sourceFolderChanged
         } catch SaveGuardError.sidecarChanged {
@@ -944,25 +1024,32 @@ actor SessionPersistence: SessionPersistenceClient {
                     && validatedSidecarRevision != desiredRevision
                 ? desiredRevision
                 : nil
-            if recordCommittedBackupIfObserved(
-                desiredRevision: desiredRevision,
-                folderIdentity: access.folderIdentity,
-                accessID: access.id,
-                sidecarRevision: validatedSidecarRevision,
-                assignedGeneration: assignedGeneration,
-                folderKey: folderKey,
-                sequence: sequence,
-                possibleSidecarRevision: possibleSidecarRevision
-            ) {
-                // As above, exact destination bytes prove the rename landed
-                // even when its following directory sync reported an error.
-                return validatedSidecarRevision == desiredRevision
-                    ? .savedToSidecar
-                    : .savedToBackup(sidecarFailure: .volumeUnavailable)
+            let backupFailure: FailureReason
+            do {
+                if try recordCommittedBackupIfObserved(
+                    desiredRevision: desiredRevision,
+                    folderIdentity: access.folderIdentity,
+                    sourceFolder: sourceFolder,
+                    accessID: access.id,
+                    sidecarRevision: validatedSidecarRevision,
+                    assignedGeneration: assignedGeneration,
+                    folderKey: folderKey,
+                    sequence: sequence,
+                    possibleSidecarRevision: possibleSidecarRevision
+                ) {
+                    return .savedToBackup(sidecarFailure: .volumeUnavailable)
+                }
+                backupFailure = Self.failureReason(for: error)
+            } catch SaveGuardError.sourceFolderChanged {
+                return .sourceFolderChanged
+            } catch SaveGuardError.sidecarChanged {
+                return .sidecarChanged
+            } catch {
+                backupFailure = Self.failureReason(for: error)
             }
             return .failed(SaveFailure(
                 sidecar: .volumeUnavailable,
-                backup: Self.failureReason(for: error)
+                backup: backupFailure
             ))
         }
     }
@@ -1497,30 +1584,83 @@ actor SessionPersistence: SessionPersistenceClient {
         folderKey: String,
         sequence: UInt64
     ) {
+        recordObservedSave(
+            accessID: accessID,
+            sidecarRevision: sidecarRevision,
+            backupRevision: backupRevision,
+            assignedGeneration: assignedGeneration
+        )
+        latestSequenceByFolder[folderKey] = sequence
+    }
+
+    /// An observed rename owns the next CAS revision and generation without
+    /// declaring the request durable or superseding an explicit Retry.
+    private func recordObservedSave(
+        accessID: UUID,
+        sidecarRevision: SidecarRevision,
+        backupRevision: SidecarRevision,
+        assignedGeneration: UInt64?
+    ) {
         revisionByAccessID[accessID] = sidecarRevision
         backupRevisionByAccessID[accessID] = backupRevision
         if let assignedGeneration {
             snapshotGenerationByAccessID[accessID] = assignedGeneration
         }
-        latestSequenceByFolder[folderKey] = sequence
     }
 
-    /// `atomicWrite` can throw after its rename has committed. Exact
-    /// destination bytes are sufficient to adopt that commit and keep the
-    /// access's CAS/generation lineage usable for the next save.
+    private func retryDirectorySync(
+        at snapshot: URL,
+        validate: () throws -> Void
+    ) throws {
+        try beforeDirectorySyncRetryForTesting?(snapshot)
+        try validate()
+        try DurableFileIO.syncDirectory(
+            snapshot.deletingLastPathComponent(),
+            fullSync: true
+        )
+        try validate()
+    }
+
+    /// Adopt exact renamed bytes for Retry, then require the missing flush
+    /// before recording durable success.
     private func recordCommittedBackupIfObserved(
         desiredRevision: SidecarRevision,
         folderIdentity: SourceFolderIdentity,
+        sourceFolder: URL,
         accessID: UUID,
         sidecarRevision: SidecarRevision,
         assignedGeneration: UInt64?,
         folderKey: String,
         sequence: UInt64,
         possibleSidecarRevision: SidecarRevision? = nil
-    ) -> Bool {
+    ) throws -> Bool {
         let backup = backupSessionURL(for: folderIdentity)
         guard Self.sidecarRevision(at: backup) == desiredRevision else {
             return false
+        }
+        recordObservedSave(
+            accessID: accessID,
+            sidecarRevision: sidecarRevision,
+            backupRevision: desiredRevision,
+            assignedGeneration: assignedGeneration
+        )
+        if let possibleSidecarRevision {
+            possibleCommittedSidecarRevisionByAccessID[accessID] =
+                possibleSidecarRevision
+        }
+        try retryDirectorySync(at: backup) {
+            switch Self.sourceFolderState(expected: folderIdentity, at: sourceFolder) {
+            case .unavailable: break
+            case .changed: throw SaveGuardError.sourceFolderChanged
+            case .matching:
+                let observed = Self.sidecarRevision(at: Self.sidecarURL(for: sourceFolder))
+                guard Self.revisionsMatch(expected: sidecarRevision, current: observed)
+                        || observed == possibleCommittedSidecarRevisionByAccessID[accessID]
+                else { throw SaveGuardError.sidecarChanged }
+            }
+            guard Self.sidecarRevision(at: backup) == desiredRevision else {
+                throw SaveGuardError.sidecarChanged
+            }
         }
         recordSuccessfulSave(
             accessID: accessID,
@@ -1530,10 +1670,6 @@ actor SessionPersistence: SessionPersistenceClient {
             folderKey: folderKey,
             sequence: sequence
         )
-        if let possibleSidecarRevision {
-            possibleCommittedSidecarRevisionByAccessID[accessID] =
-                possibleSidecarRevision
-        }
         return true
     }
 
@@ -1730,12 +1866,9 @@ actor SessionPersistence: SessionPersistenceClient {
     }
 
     private static func failureReason(for error: Error) -> FailureReason {
-        if case DurableFileIO.IOError.system(
-            operation: "wait for persistence lock",
-            path: _,
-            code: _
-        ) = error {
-            return .busy
+        if case let DurableFileIO.IOError.system(operation, _, code) = error {
+            if operation == "wait for persistence lock" { return .busy }
+            return failureReason(forPOSIXCode: Int(code))
         }
         let nsError = error as NSError
         if nsError.domain == NSCocoaErrorDomain {
@@ -1751,17 +1884,21 @@ actor SessionPersistence: SessionPersistenceClient {
             }
         }
         if nsError.domain == NSPOSIXErrorDomain {
-            switch nsError.code {
-            case Int(EACCES), Int(EPERM), Int(EROFS):
-                return .permissionDenied
-            case Int(ENOSPC):
-                return .outOfSpace
-            case Int(ENOENT), Int(ENODEV):
-                return .volumeUnavailable
-            default:
-                break
-            }
+            return failureReason(forPOSIXCode: nsError.code)
         }
         return .other
+    }
+
+    private static func failureReason(forPOSIXCode code: Int) -> FailureReason {
+        switch code {
+        case Int(EACCES), Int(EPERM), Int(EROFS):
+            return .permissionDenied
+        case Int(ENOSPC):
+            return .outOfSpace
+        case Int(ENOENT), Int(ENODEV):
+            return .volumeUnavailable
+        default:
+            return .other
+        }
     }
 }

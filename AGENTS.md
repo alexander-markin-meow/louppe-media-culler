@@ -16,6 +16,8 @@ There is no separate support team. The sole contact is Alex Markin at
 
 ## Engineering approach
 
+- Prefer a minimal, simple UI: direct editing and compact native controls;
+  avoid redundant branding, extra steps, and unnecessary visible explanation.
 - Reuse nearby implementations and existing state owners. Keep changes scoped;
   add abstractions only for concrete needs. Prefer native SwiftUI/AppKit controls
   and Apple APIs; preserve the documented bridges that solve native limitations.

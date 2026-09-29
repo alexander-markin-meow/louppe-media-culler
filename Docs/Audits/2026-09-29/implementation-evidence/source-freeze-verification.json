@@ -1,0 +1,8 @@
+{
+  "productionInputsUnchanged": true,
+  "testSynchronizationFilesChanged": [
+    "Tests/LouppeTests/GalleryVideoAccessibilityTests.swift",
+    "Tests/LouppeTests/SessionDurabilityTests.swift"
+  ],
+  "inputCount": 490
+}

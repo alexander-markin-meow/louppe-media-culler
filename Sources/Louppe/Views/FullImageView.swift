@@ -5,6 +5,8 @@ import AppKit
 struct FullImageView: View {
     private static let navigationDebounceNanoseconds: UInt64 = 40_000_000
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(RawDisplayMode.preferenceKey) private var rawDisplayMode = RawDisplayMode.fast
+    @AppStorage(AppleRawDecoder.preferenceKey) private var rawDecoder = AppleRawDecoder.appleDefault
 
     let item: PhotoItem
     @Binding var zoomMode: ZoomMode
@@ -21,8 +23,13 @@ struct FullImageView: View {
     /// Reports decode start/finish upward — the toolbar shows a small spinner
     /// there instead of flashing one in the middle of the photo area.
     var onLoading: (Bool) -> Void
+    let onRepresentation: (PhotoRepresentation, PhotoContentRevision) -> Void
 
     @State private var image: NSImage?
+    @State private var loadedDisplayMode = RawDisplayMode.fast
+    @State private var loadedDecoder = AppleRawDecoder.appleDefault
+    @State private var fallbackRevision: PhotoContentRevision?
+    @State private var actualRenderingFailed = false
     @State private var clippingImage: NSImage?
     /// Low-res stand-in (the Browser thumbnail) shown while the real
     /// decode runs, so switching photos never flashes an empty pane.
@@ -32,16 +39,26 @@ struct FullImageView: View {
     @State private var fittedPinchGeneration: UInt64 = 0
     @State private var fittedPinchResetGeneration: UInt64 = 0
     @State private var imageRevision: PhotoContentRevision
+    @State private var clippingDisplayMode = RawDisplayMode.fast
+    @State private var clippingDecoder = AppleRawDecoder.appleDefault
     @State private var clippingRevision: PhotoContentRevision
 
     private struct ClippingLoadID: Hashable {
         let contentRevision: PhotoContentRevision
         let isEnabled: Bool
+        let mode: RawDisplayMode
+        let decoder: AppleRawDecoder
     }
 
     private struct PreviewLoadID: Hashable {
         let contentRevision: PhotoContentRevision
         let retryGeneration: UInt64
+        let mode: RawDisplayMode
+        let decoder: AppleRawDecoder
+    }
+
+    private var displayMode: RawDisplayMode {
+        fallbackRevision == item.contentRevision ? .fast : rawDisplayMode
     }
 
     init(
@@ -55,6 +72,7 @@ struct FullImageView: View {
         onZoomScaleChanged: @escaping (CGFloat, Bool) -> Void = { _, _ in },
         onFittedScaleMeasured: @escaping (CGFloat, PhotoContentRevision, ZoomMode) -> Void = { _, _, _ in },
         onZoomFromFit: @escaping (CGFloat, NormalizedImagePosition, CGPoint, PhotoContentRevision) -> Void = { _, _, _, _ in },
+        onRepresentation: @escaping (PhotoRepresentation, PhotoContentRevision) -> Void = { _, _ in },
         onLoading: @escaping (Bool) -> Void = { _ in }
     ) {
         self.item = item
@@ -68,6 +86,7 @@ struct FullImageView: View {
         self.onFittedScaleMeasured = onFittedScaleMeasured
         self.onZoomFromFit = onZoomFromFit
         self.onLoading = onLoading
+        self.onRepresentation = onRepresentation
         let revision = item.contentRevision
         self._imageRevision = State(initialValue: revision)
         self._clippingRevision = State(initialValue: revision)
@@ -75,27 +94,36 @@ struct FullImageView: View {
         // nothing is decoded here. Prefetched neighbours appear instantly at
         // full quality; anything else starts from its thumbnail.
         guard item.isSupported else { return }
-        let cachedFull = ImagePipeline.shared.cachedFullImage(for: item)
+        let mode = RawDisplayMode(rawValue: UserDefaults.standard.string(forKey: RawDisplayMode.preferenceKey) ?? "") ?? .fast
+        let decoder = AppleRawDecoder.load()
+        self._loadedDecoder = State(initialValue: decoder)
+        self._clippingDecoder = State(initialValue: decoder)
+        self._loadedDisplayMode = State(initialValue: mode)
+        self._clippingDisplayMode = State(initialValue: mode)
+        let cachedFull = ImagePipeline.shared.cachedFullImage(for: item, mode: mode, decoder: decoder)
         self._image = State(initialValue: cachedFull)
         self._clippingImage = State(
-            initialValue: ClippingPreviewPipeline.shared.cachedImage(for: item)
+            initialValue: ClippingPreviewPipeline.shared.cachedImage(for: item, mode: mode, decoder: decoder)
         )
-        if cachedFull == nil {
+        if cachedFull == nil, !mode.rendersRAW(for: item) {
             self._preview = State(initialValue: ImagePipeline.shared.cachedThumbnail(for: item))
         }
     }
 
     var body: some View {
         let contentRevision = item.contentRevision
-        let displayedImage = imageRevision == contentRevision
+        let mode = displayMode
+        let rendersRAW = mode.rendersRAW(for: item)
+        let currentLoad = imageRevision == contentRevision && loadedDisplayMode == mode && loadedDecoder == rawDecoder
+        let displayedImage = currentLoad
             ? image
-            : ImagePipeline.shared.cachedFullImage(for: item)
-        let displayedPreview = imageRevision == contentRevision
+            : ImagePipeline.shared.cachedFullImage(for: item, mode: mode, decoder: rawDecoder)
+        let displayedPreview = rendersRAW ? nil : currentLoad
             ? preview
             : ImagePipeline.shared.cachedThumbnail(for: item)
-        let displayedClippingImage = clippingRevision == contentRevision
+        let displayedClippingImage = clippingRevision == contentRevision && clippingDisplayMode == mode && clippingDecoder == rawDecoder
             ? clippingImage
-            : ClippingPreviewPipeline.shared.cachedImage(for: item)
+            : ClippingPreviewPipeline.shared.cachedImage(for: item, mode: mode, decoder: rawDecoder)
         let presentationImage = showsClippingWarnings
             ? displayedClippingImage ?? displayedImage
             : displayedImage
@@ -126,7 +154,15 @@ struct FullImageView: View {
                         onDoubleClick: onZoomToFit,
                         onLoading: onLoading,
                         zoomScale: zoomScale,
-                        onZoomScaleChanged: onZoomScaleChanged
+                        onZoomScaleChanged: onZoomScaleChanged,
+                        previewIsRAW: rendersRAW,
+                        decoder: rawDecoder,
+                        retryGeneration: previewRetryGeneration,
+                        onRenderingFailure: { failed in actualRenderingFailed = failed },
+                        onRepresentation: { representation in
+                            guard zoomMode == .actual else { return }
+                            onRepresentation(representation, contentRevision)
+                        }
                     )
                 case .fit where presentationImage != nil:
                     if let presentationImage {
@@ -134,6 +170,7 @@ struct FullImageView: View {
                             item: item,
                             mode: .fit,
                             image: presentationImage,
+                            decoder: rawDecoder,
                             pinchResetGeneration: fittedPinchResetGeneration,
                             onMeasuredScale: onFittedScaleMeasured,
                             onDoubleClick: onZoomToActual,
@@ -155,6 +192,7 @@ struct FullImageView: View {
                             item: item,
                             mode: .small,
                             image: presentationImage,
+                            decoder: rawDecoder,
                             maximumSize: CGSize(width: 400, height: 600),
                             pinchResetGeneration: fittedPinchResetGeneration,
                             onMeasuredScale: onFittedScaleMeasured,
@@ -172,14 +210,24 @@ struct FullImageView: View {
                         )
                     }
                 case .fit, .small:
-                    if imageRevision == contentRevision, failedToLoad {
+                    if currentLoad, failedToLoad {
                         ContentUnavailableView {
-                            Label("Can't preview this photo", systemImage: "exclamationmark.triangle")
+                            Label(rendersRAW ? "RAW unavailable" : "Can't preview this photo", systemImage: "exclamationmark.triangle")
                         } description: {
-                            Text("Louppe couldn't read \(item.displayName). The file may be unavailable or in a format this Mac can't decode. You can still rate it.")
+                            if rendersRAW {
+                                Text(rawDecoder.failureMessage)
+                            } else {
+                                Text("Louppe couldn't read \(item.displayName). The file may be unavailable or in a format this Mac can't decode. You can still rate it.")
+                            }
                         } actions: {
-                            Button("Retry Preview") {
+                            Button(rendersRAW ? "Retry RAW" : "Retry Preview") {
                                 previewRetryGeneration &+= 1
+                            }
+                            if rendersRAW {
+                                if rawDecoder == .raw9 {
+                                    Button("Use Apple Default") { rawDecoder = .appleDefault }
+                                }
+                                Button("Use Preview") { fallbackRevision = contentRevision }
                             }
                             Button("Show in Finder") { showInFinder() }
                         }
@@ -190,6 +238,7 @@ struct FullImageView: View {
                             item: item,
                             mode: zoomMode,
                             image: presentationPreview,
+                            decoder: rawDecoder,
                             maximumSize: zoomMode == .small
                                 ? CGSize(width: 400, height: 600)
                                 : nil,
@@ -216,17 +265,58 @@ struct FullImageView: View {
                 }
             }
         }
+        .overlay {
+            if zoomMode == .actual, item.isRaw, actualRenderingFailed {
+                VStack(spacing: 8) {
+                    Text("RAW unavailable").font(.callout)
+                    Text(rawDecoder.failureMessage).font(.caption).frame(maxWidth: 320)
+                    Button("Retry RAW") { previewRetryGeneration &+= 1 }
+                    if rawDecoder == .raw9 {
+                        Button("Use Apple Default") { rawDecoder = .appleDefault }
+                    }
+                    Button("Use Preview") {
+                        fallbackRevision = contentRevision
+                        onZoomToFit()
+                    }
+                }
+                .padding()
+                .background(Color.appBackground)
+            }
+        }
+        .onChange(of: fittedRepresentation, initial: true) { _, representation in
+            if zoomMode != .actual { onRepresentation(representation, contentRevision) }
+        }
+        .onChange(of: zoomMode) { _, mode in
+            if mode != .actual { onRepresentation(fittedRepresentation, contentRevision) }
+        }
+        .onChange(of: contentRevision) { _, _ in
+            actualRenderingFailed = false
+            if zoomMode != .actual { onRepresentation(fittedRepresentation, contentRevision) }
+        }
+        .onChange(of: mode) { _, _ in actualRenderingFailed = false }
+        .onChange(of: rawDisplayMode) { _, _ in fallbackRevision = nil }
+        .onChange(of: rawDecoder) { _, _ in
+            fallbackRevision = nil
+            actualRenderingFailed = false
+            fittedPinchGeneration &+= 1
+            if zoomMode != .actual { onRepresentation(fittedRepresentation, contentRevision) }
+        }
         .task(id: PreviewLoadID(
             contentRevision: contentRevision,
-            retryGeneration: previewRetryGeneration
+            retryGeneration: previewRetryGeneration,
+            mode: mode,
+            decoder: rawDecoder
         )) {
             let requestedItem = item
+            let decoder = rawDecoder
             let requestedRevision = requestedItem.contentRevision
             let cachedFull = ImagePipeline.shared.cachedFullImage(
-                for: requestedItem
+                for: requestedItem, mode: mode, decoder: decoder
             )
+            loadedDisplayMode = mode
+            loadedDecoder = decoder
             image = cachedFull
-            preview = cachedFull == nil
+            preview = cachedFull == nil && !rendersRAW
                 ? ImagePipeline.shared.cachedThumbnail(for: requestedItem)
                 : nil
             failedToLoad = false
@@ -238,24 +328,24 @@ struct FullImageView: View {
             try? await Task.sleep(
                 nanoseconds: Self.navigationDebounceNanoseconds
             )
-            guard !Task.isCancelled, imageRevision == requestedRevision
+            guard !Task.isCancelled, rawDecoder == decoder, loadedDisplayMode == mode, imageRevision == requestedRevision
             else { return }
             onLoading(true)
             defer { onLoading(false) }
             async let full = ImagePipeline.shared.fullImage(
-                for: requestedItem
+                for: requestedItem, mode: mode, decoder: decoder
             )
-            if preview == nil,
+            if !rendersRAW, preview == nil,
                let thumb = await ImagePipeline.shared.thumbnail(
                    for: requestedItem
                ),
-               !Task.isCancelled,
+               !Task.isCancelled, rawDecoder == decoder, loadedDisplayMode == mode,
                imageRevision == requestedRevision,
                image == nil {
                 preview = thumb
             }
             let loaded = await full
-            guard !Task.isCancelled, imageRevision == requestedRevision
+            guard !Task.isCancelled, rawDecoder == decoder, loadedDisplayMode == mode, imageRevision == requestedRevision
             else { return }
             image = loaded
             failedToLoad = (loaded == nil)
@@ -263,15 +353,20 @@ struct FullImageView: View {
         .task(
             id: ClippingLoadID(
                 contentRevision: contentRevision,
-                isEnabled: showsClippingWarnings
+                isEnabled: showsClippingWarnings,
+                mode: mode,
+                decoder: rawDecoder
             )
         ) {
             let requestedItem = item
+            let decoder = rawDecoder
             let requestedRevision = requestedItem.contentRevision
             let cached = ClippingPreviewPipeline.shared.cachedImage(
-                for: requestedItem
+                for: requestedItem, mode: mode, decoder: decoder
             )
             clippingImage = cached
+            clippingDisplayMode = mode
+            clippingDecoder = decoder
             clippingRevision = requestedRevision
             guard showsClippingWarnings,
                   requestedItem.mediaKind == .photo,
@@ -284,17 +379,27 @@ struct FullImageView: View {
             try? await Task.sleep(
                 nanoseconds: Self.navigationDebounceNanoseconds
             )
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, rawDecoder == decoder, clippingDisplayMode == mode,
                   clippingRevision == requestedRevision else { return }
             onLoading(true)
             defer { onLoading(false) }
             let loaded = await ClippingPreviewPipeline.shared.image(
-                for: requestedItem
+                for: requestedItem, mode: mode, decoder: decoder
             )
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, rawDecoder == decoder, clippingDisplayMode == mode,
                   clippingRevision == requestedRevision else { return }
             clippingImage = loaded
         }
+    }
+
+    private var fittedRepresentation: PhotoRepresentation {
+        let mode = displayMode
+        guard mode.rendersRAW(for: item) else { return .preview }
+        guard loadedDisplayMode == mode, loadedDecoder == rawDecoder, imageRevision == item.contentRevision else {
+            return ImagePipeline.shared.cachedFullImage(for: item, mode: mode, decoder: rawDecoder) == nil ? .loadingRAW : .raw
+        }
+        if image != nil { return .raw }
+        return failedToLoad ? .unavailable : .loadingRAW
     }
 
     private func showInFinder() {
@@ -313,9 +418,11 @@ struct FullImageView: View {
         let generation = fittedPinchGeneration
         let requestedItem = item
         let revision = item.contentRevision
+        let decoder = rawDecoder
         Task { @MainActor in
-            let source = await HighResolutionImagePipeline.shared.source(for: requestedItem)
+            let source = await HighResolutionImagePipeline.shared.source(for: requestedItem, decoder: decoder)
             guard generation == fittedPinchGeneration,
+                  rawDecoder == decoder,
                   revision == item.contentRevision,
                   zoomMode != .actual
             else { return }
@@ -346,6 +453,7 @@ private struct ZoomableFittedImage: View {
     let item: PhotoItem
     let mode: ZoomMode
     let image: NSImage
+    var decoder: AppleRawDecoder = .appleDefault
     var maximumSize: CGSize? = nil
     let pinchResetGeneration: UInt64
     let onMeasuredScale: (CGFloat, PhotoContentRevision, ZoomMode) -> Void
@@ -414,9 +522,9 @@ private struct ZoomableFittedImage: View {
                     containerSize = size
                 }
         }
-        .task(id: item.contentRevision) {
+        .task(id: HighResolutionImagePipeline.sourceKey(for: item, decoder: decoder)) {
             let revision = item.contentRevision
-            let source = await HighResolutionImagePipeline.shared.source(for: item)
+            let source = await HighResolutionImagePipeline.shared.source(for: item, decoder: decoder)
             guard !Task.isCancelled else { return }
             measuredRevision = revision
             sourcePixelSize = source?.pixelSize

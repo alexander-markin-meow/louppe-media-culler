@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import UniformTypeIdentifiers
 
 struct SourceOrganizationProgress: Equatable, Sendable {
     enum Action: Equatable, Sendable {
@@ -296,7 +297,7 @@ enum SourceOrganizationPlanner {
         var errorDescription: String? {
             switch self {
             case .invalidContainerName:
-                return "Choose a single, non-empty folder name for the organized files."
+                return "Choose a single, visible folder name for the organized files. Names beginning with a dot and macOS package names such as .app cannot be scanned."
             case .invalidFileName(let reason):
                 return reason
             case .noFilenameParts:
@@ -591,7 +592,7 @@ enum SourceOrganizationPlanner {
                             id: "unsafe-directory:\(unsafe.bytes.base64EncodedString())",
                             destination: unsafe.url,
                             sources: item.allURLs,
-                            message: "A destination component already exists but is not a normal folder."
+                            message: "A destination component is not a visible folder that Louppe can scan."
                         ))
                     }
                 }
@@ -1070,6 +1071,19 @@ enum SourceOrganizationPlanner {
             && !trimmed.contains("/")
             && !trimmed.contains(":")
             && !trimmed.contains("\0")
+            && isScannerVisibleFolderName(value)
+    }
+
+    /// Match the scanner's hidden/package traversal exclusions before moving
+    /// originals. Directory-specific UTI lookup distinguishes an .app bundle
+    /// from the different regular-file type sharing the same extension.
+    static func isScannerVisibleFolderName(_ name: String) -> Bool {
+        guard !name.hasPrefix(".") else { return false }
+        let ext = (name as NSString).pathExtension
+        guard !ext.isEmpty,
+              let type = UTType(filenameExtension: ext, conformingTo: .directory)
+        else { return true }
+        return !type.conforms(to: .package) && !type.conforms(to: .bundle)
     }
 
     private static func existingFolderComponents(
@@ -1151,6 +1165,8 @@ enum SourceOrganizationPlanner {
             }
             result = truncated.isEmpty ? "Unknown" : truncated
         }
+        if result.hasPrefix(".") { result = "_" + result }
+        if !isScannerVisibleFolderName(result) { result += "_" }
         return result
     }
 
@@ -1231,9 +1247,15 @@ enum SourceOrganizationPlanner {
             let result = next.withFileSystemRepresentation {
                 Darwin.lstat($0, &status)
             }
-            if result == 0,
-               (status.st_mode & mode_t(S_IFMT)) != mode_t(S_IFDIR) {
+            if !isScannerVisibleFolderName(String(decoding: component, as: UTF8.self)) {
                 return next
+            }
+            if result == 0 {
+                let values = try? next.url.resourceValues(forKeys: [.isHiddenKey, .isPackageKey])
+                if (status.st_mode & mode_t(S_IFMT)) != mode_t(S_IFDIR)
+                    || values?.isHidden == true || values?.isPackage == true {
+                    return next
+                }
             }
             current = next
         }

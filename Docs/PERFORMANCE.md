@@ -26,8 +26,11 @@ encoding, and file operations belong elsewhere:
   When the exact opened path is absent because its card/drive disconnected,
   saving advances only that stable identity's local backup under the same lock;
   it never recreates the path, and any replacement or ambiguous path failure
-  remains a conflict. Post-rename sync errors reconcile only exact destination
-  bytes; a reconnect can adopt only the one sidecar revision that the same
+  remains a conflict. Post-rename sync errors adopt exact observed bytes only
+  into CAS lineage. They count as durable only after a real recovery directory
+  flush under the same lock, or a fully synced backup; failed durability keeps
+  the generation dirty and its save sequence retryable. A reconnect can adopt
+  only the one sidecar revision that the same
   access marked as a possible interrupted commit, never an ordinary rollback
   to an older backup. `SessionStore` tracks a monotonic live-change generation
   against the generation captured by each successful sidecar/backup request.
@@ -59,7 +62,13 @@ encoding, and file operations belong elsewhere:
   tasks with one serial store per worker; they never create one task per photo
   or retain a batch of complete packets. The immutable preflight plan keeps
   only exact paths, metadata snapshots, file revisions, and SHA-256 packet
-  fingerprints. Each worker reparses one packet immediately before commit, so
+  fingerprints. Standalone publication also carries every selected and
+  unselected stem-family member's scanned identity, the original parent binding,
+  and the opened source-folder authority. Preflight and final publication
+  revalidate them. Temporary creation, rename, cleanup, and directory flush
+  use one held parent descriptor; the flushed temporary's identity is checked
+  before rename. Existing packet-byte/revision CAS remains mandatory.
+  Each worker reparses one packet immediately before commit, so
   a change after confirmation becomes a visible conflict. Reads refuse leaf
   symlinks and non-regular
   files, stop at 64 MiB, and retain the exact bytes plus device/inode/time
@@ -98,7 +107,11 @@ encoding, and file operations belong elsewhere:
 - `AudioLevelPipeline` starts only for the selected playable video or audio
   recording (after the Info-panel dwell, or when the Gallery needs an audio
   waveform). One utility-priority `AVAssetReader` PCM decode runs at a time,
-  same-content requests coalesce, and cancellation removes stale waiters. Its
+  same-content requests coalesce, and cancellation removes stale waiters.
+  Canceling the last waiter stops a running reader at its checked boundary;
+  the serial lane stays occupied until that task exits. Completion compares
+  operation identity, so an abandoned request cannot consume/cache a renewed
+  same-revision request. Histogram lanes share that completion guard. Its
   64-entry LRU retains only per-channel min/max/RMS envelope bins and sample
   peaks, never decoded samples or on-disk output. Temporal resolution is 20
   bins per second, clamped to 256...6,000 bins per recording; this keeps the
@@ -252,9 +265,12 @@ UI. The AppKit scroll view survives item changes, clamps the position for each
 new aspect ratio, and preserves an unscrollable axis for the next larger
 photo. Pressing S or closing/changing folders resets it to center.
 
-The Gallery zoom slider and trackpad pinch span 5–400% using native
+The Gallery zoom slider spans 30–400%; Fit and trackpad pinch retain the
+5–400% geometry range so large photos can still fit completely. Both use native
 `NSScrollView` magnification of that same backing-pixel document. Below 100%,
-the canvas uses the bounded full preview; at 100% and above it requests only
+the canvas uses the bounded full preview; RAW display mode supplies that
+preview from `RawImageRendering`, using the same Apple RAW defaults as tiles.
+At 100% and above it requests only
 the visible source tiles and their existing one-tile ring. The two-operation
 queue and 128 MiB tile budget are unchanged. Native pinch owns its transform
 until the gesture ends; occasional scale publications update the footer
@@ -297,6 +313,52 @@ than counted as black. At 100%, the threshold is applied inside the existing
 two-operation tile lane, keyed by warning mode, so toggling never constructs a
 whole source-resolution bitmap. Changing photos or warning mode advances the
 viewport generation before stale tile results can display.
+
+RAW display mode is an app preference (`review.rawDisplayMode`), shared by
+Settings and the Gallery source menu. It applies immediately and leaves Grid
+and Browser thumbnails on their fast path. Fitted RAW images render on the
+existing two-operation full-image queue, use the 4,096-pixel allocation bound,
+and share its existing memory budget. Presentation mode separates full-image
+and clipping-overlay cache keys; content revision still owns source identity.
+RAW mode never substitutes a camera preview without the user's per-photo
+**Use Preview** action. The Gallery source label follows completed visible
+tiles, not requested zoom: it stays Preview while any camera-preview regions
+remain, and a RAW-fitted stand-in already counts as RAW. Missing offscreen
+margin tiles do not delay the label. Apple RAW rendering can differ from the
+camera JPEG and other editing software. Histogram analysis remains independent.
+
+Apple RAW decoder choice (`review.appleRawDecoder`) is shared by Settings and
+the Gallery menu, defaulting to Apple Default. RAW 9 is an explicit macOS 27
+opt-in, checked against each filter’s supported versions before assignment.
+On-demand Core Image resources are prepared on a background worker with a
+15-second timeout and a bounded 16-second wait; failures return unavailable
+without a different decoder. RAW 9 does not retry using the CPU renderer.
+Preview, clipping, lazy-source, and therefore tile caches distinguish decoders;
+Fast previews and non-RAW images retain shared keys. Source switches retire
+viewport tiles and reject previous source generations. Fitted and clipping
+loads also compare decoder, mode, revision, and cancellation before publishing.
+
+Decoder benchmark, 2026-09-29, macOS 27 / Xcode 27 SDK: three uncompressed
+X-T50 RAFs (XT508475, XT508539, XT508553), separate debug XCTest processes,
+one pass per file and size. All reported versions 7/8/9, default 8. Originals
+were read only. Timings include filter creation and resource preparation.
+
+| Render | Apple Default (8) | RAW 9 |
+| --- | --- | --- |
+| 1,024-pixel preview | 0.408–0.678 s | 0.777–0.821 s after first warm-up |
+| First 1,024-pixel preview | 0.554 s | 6.213 s |
+| 4,096-pixel preview | 0.255–0.655 s | 1.825–2.008 s |
+| Central 1,024-pixel source tile | 0.032–0.122 s | 0.139–0.210 s |
+| Test-process peak RSS | 459 MiB | 469 MiB |
+
+RSS covers the test process only, excluding Core ML/graphics helper services
+and their memory. This single-pass comparison includes concurrent repository
+activity and is not a general device performance guarantee. Repeat with
+`LOUPPE_RAW_BENCHMARK_FOLDER` set to the sample folder and
+`LOUPPE_RAW_BENCHMARK_DECODER=appleDefault` or `raw9`, running
+`swift test --disable-keychain --filter AppleRawDecoderTests/testFujiDecoderBenchmark`.
+The API/resource contract is verified against the selected SDK’s CIRAWFilter.h
+and [Apple’s RAW 9 session](https://developer.apple.com/videos/play/wwdc2026/305/).
 
 For supported RAW primaries, the delayed histogram and clipping Quality cues
 replace that rendered estimate with the scaled Core Image RAW result. The RAW
@@ -412,6 +474,17 @@ tick pays a redundant `tile()` layout on both scroll views.
 
 ## Filtering and derived data
 
+Folder-hierarchy sort computes each distinct relative directory's component
+order once, then sorts photos by cached integer folder ranks and existing
+chronological tie-breaks. It performs no filesystem reads while sorting.
+Byte-exact encoded parent identity keeps Unicode-equivalent displayed paths
+in separate groups. Filter-only changes reuse the prepared hierarchy order.
+
+Welcome-screen drive discovery uses one serial actor and coalesced refreshes.
+Capacity refresh runs only while Welcome is visible, on topology/activation
+notifications and a 30-second interval; leaving Welcome stops polling. There
+is no per-volume task fan-out or recursive media scan during discovery.
+
 `PhotoItem.searchableText` is locale-folded once during scanning. Capture-day,
 aperture, shutter-duration, ISO, video resolution, frame rate, and codec
 values are also cached on `PhotoItem`; do not reopen files when their filters
@@ -433,7 +506,9 @@ The date and exposure controls are always visible. Their folder-wide
 minimum-to-maximum values are neutral: the corresponding internal filter flag
 is set only after a bound is narrowed, so unknown metadata remains visible in
 the default state. Re-scan keeps narrowed bounds but expands untouched ranges
-to the newly derived folder span.
+to the newly derived folder span. Numeric display formatting is not a filter
+mutation: only explicit endpoint edits parse/commit, preserving all untouched
+stored precision and combining real changes into one filter assignment.
 
 The multi-selection Info summary is built only from metadata and byte counts
 already cached on `PhotoItem`. Do not reopen every selected file to assemble
@@ -542,6 +617,10 @@ then `applyFilter()`. Rating-only changes must update the tally through
 `transitionRatingCount` or replace the tally deliberately for a batch reset.
 
 ## Clean Up lifecycle
+
+Pair-component scope resolves the target physical member's displayed index;
+Separate mode cannot borrow inclusion from its partner. Together mode naturally
+uses the shared pair index. Enablement/counts use the same snapshot predicate.
 
 Clean Up and its undo have three phases:
 
@@ -718,7 +797,12 @@ physical-file counts. `ExportWorker` runs the copy or move loop
 off-main (reusing `ThrottledProgress`), and the main actor applies one result.
 `ExportWorker.makePlan` reserves every destination name first and chooses one
 collision suffix per photo or same-stem XMP family, keeping RAW+JPEG, canonical
-XMP, and extension-qualified application-packet basenames matched. When XMP is
+XMP, and extension-qualified application-packet basenames matched. Internally
+normalization-equivalent family names fail before collision search. Search is
+cancellable, checks batch reservations before filesystem probes, and caches
+next suffixes by the complete normalized filename family. This avoids quadratic
+repeated-basename planning without splitting families or weakening no-overwrite.
+When XMP is
 enabled, `XMPExportPlanner` resolves the complete live stem family and prepares
 merged destination bytes off-main before `FileOperationJournal` activation.
 The activated version-4 plan covers every media and XMP source, temporary,
@@ -899,7 +983,9 @@ intersection, and rescan remapping rules. An empty explicit selection still
 means “the current visible item”; when a filter has zero matches, the effective
 selection is truly empty. Focused logic and app-level XCTest cases protect
 these rules so future controller extraction cannot silently rate hidden media
-or remap a selection by stale numeric position.
+or remap a selection by stale numeric position. A surviving explicit selection
+also determines current after filter/restore, in prepared visible order, so
+Gallery, keyboard rating, and the highlighted selection refer to the same item.
 
 ## Verification
 

@@ -1,0 +1,5 @@
+resolver families=1 members=2 disposition=publish
+calling actual makePlan
+probe returned error promptly: Some files in one media/XMP family have equivalent destination names. Export them separately without XMP, or give them distinct names before exporting.
+
+exit=0

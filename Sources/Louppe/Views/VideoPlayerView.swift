@@ -1,19 +1,35 @@
 import SwiftUI
 import AVKit
 
-/// Gallery video surface with controls that appear without changing the
-/// picture. AVPlayerView applies an unavoidable whole-video hover scrim, so the
-/// Gallery uses AVPlayerLayer directly while audio and Grid keep AVPlayerView.
+#if DEBUG
+/// Hosted AppKit checks track the actual mounted transport lifetime; this also
+/// works when a test process has no enabled accessibility client or key loop.
+@MainActor
+enum GalleryVideoControlsTestProbe {
+    private static var mountedControllers: Set<ObjectIdentifier> = []
+    static func isMounted(for playback: VideoPlaybackController) -> Bool {
+        mountedControllers.contains(ObjectIdentifier(playback))
+    }
+    static func mount(_ playback: VideoPlaybackController) {
+        mountedControllers.insert(ObjectIdentifier(playback))
+    }
+    static func unmount(_ playback: VideoPlaybackController) {
+        mountedControllers.remove(ObjectIdentifier(playback))
+    }
+}
+#endif
+
+/// Gallery video surface with persistent native controls. AVPlayerView applies
+/// an unavoidable whole-video hover scrim, so Gallery uses AVPlayerLayer.
+/// Keeping the transport visible also preserves keyboard and VoiceOver access.
 struct GalleryVideoPlayerView: View {
     let item: PhotoItem
     @ObservedObject var playback: VideoPlaybackController
     @StateObject private var presentation = GalleryVideoPresentationController()
-    @State private var isHovering = false
     @State private var isScrubbing = false
     @State private var scrubPosition = 0.0
     @State private var volume = 1.0
     @State private var isMuted = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -34,50 +50,49 @@ struct GalleryVideoPlayerView: View {
                         presentationSize: videoPresentationSize,
                         presentation: presentation
                     )
-                    if showsControls {
-                        VStack(spacing: 0) {
-                            HStack(spacing: 10) {
-                                Spacer()
-                                controlButton(
-                                    systemName: presentation.isPictureInPictureActive
-                                        ? "pip.exit" : "pip.enter",
-                                    help: presentation.isPictureInPictureActive
-                                        ? "Close Picture in Picture"
-                                        : "Picture in Picture"
-                                ) {
-                                    presentation.togglePictureInPicture()
-                                }
-                                .disabled(!presentation.pictureInPictureSupported)
-                                controlButton(
-                                    systemName: "arrow.up.left.and.arrow.down.right",
-                                    help: "Toggle full screen"
-                                ) {
-                                    presentation.toggleFullScreen()
-                                }
-                            }
-                            .padding(12)
+                    // Native transport stays visible during playback, so all
+                    // controls remain reachable without moving the pointer.
+                    VStack(spacing: 0) {
+                        HStack(spacing: 10) {
                             Spacer()
-                            GalleryMediaTransportView(
-                                item: item,
-                                playback: playback,
-                                isScrubbing: $isScrubbing,
-                                scrubPosition: $scrubPosition,
-                                volume: $volume,
-                                isMuted: $isMuted,
-                                compact: false
-                            )
-                                .padding(.horizontal, 18)
-                                .padding(.bottom, 14)
+                            controlButton(
+                                systemName: presentation.isPictureInPictureActive
+                                    ? "pip.exit" : "pip.enter",
+                                help: presentation.isPictureInPictureActive
+                                    ? "Close Picture in Picture"
+                                    : "Picture in Picture"
+                            ) {
+                                presentation.togglePictureInPicture()
+                            }
+                            .disabled(!presentation.pictureInPictureSupported)
+                            controlButton(
+                                systemName: "arrow.up.left.and.arrow.down.right",
+                                help: "Toggle full screen"
+                            ) {
+                                presentation.toggleFullScreen()
+                            }
                         }
-                        .transition(.opacity)
+                        .padding(12)
+                        Spacer()
+                        GalleryMediaTransportView(
+                            item: item,
+                            playback: playback,
+                            isScrubbing: $isScrubbing,
+                            scrubPosition: $scrubPosition,
+                            volume: $volume,
+                            isMuted: $isMuted,
+                            compact: false
+                        )
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 14)
                     }
+                    .accessibilityIdentifier("louppe.gallery.video.controls")
+#if DEBUG
+                    .onAppear { GalleryVideoControlsTestProbe.mount(playback) }
+                    .onDisappear { GalleryVideoControlsTestProbe.unmount(playback) }
+#endif
                 }
                 .contentShape(Rectangle())
-                .onHover { hovering in
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
-                        isHovering = hovering
-                    }
-                }
                 .onTapGesture(count: 2) {
                     presentation.toggleFullScreen()
                 }
@@ -89,10 +104,6 @@ struct GalleryVideoPlayerView: View {
             isMuted = playback.player.isMuted
         }
         .onChange(of: item.contentRevision) { playback.prepare(item) }
-    }
-
-    private var showsControls: Bool {
-        isHovering || !playback.isPlaying || isScrubbing
     }
 
     private func controlButton(

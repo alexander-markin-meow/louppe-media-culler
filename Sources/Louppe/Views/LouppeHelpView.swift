@@ -21,7 +21,7 @@ struct LouppeHelpView: View {
     }
 
     private static let shortcuts: [Shortcut] = [
-        .init(keys: "F / D", action: "Mark Yes / No and move to the next undecided item"),
+        .init(keys: "F / D", action: "Mark Yes / No; advance by default (Settings → Review)"),
         .init(keys: "0–5", action: "Clear or set stars, independently of Yes / No"),
         .init(keys: "← / →, J / L", action: "Previous / next item; arrows seek in Gallery video"),
         .init(keys: "↑ / ↓", action: "Previous / next item or Grid row"),
@@ -61,7 +61,7 @@ struct LouppeHelpView: View {
                     Text("Get started")
                         .font(.title2.bold())
                     Text("Choose or drop a media folder. Louppe scans its subfolders and opens the review in Gallery or Grid.")
-                    Text("Mark keepers Yes (F) and rejects No (D). Both keys advance to the next undecided item. Stars (0–5) and color labels are separate from that decision.")
+                    Text("Mark keepers Yes (F) and rejects No (D). Both keys advance to the next undecided item by default; change this in Settings → Review. Stars (0–5) and color labels are separate from that decision.")
                     Text("Use Export to copy chosen media. The Clean Up toolbar action asks before moving rejects to the macOS Trash.")
                     Text("Decisions, stars, and color labels save automatically. Reopen the same folder to continue. Marking No never trashes a file by itself. Export → Metadata (XMP) makes ratings available to compatible editing apps.")
                     Toggle("Show quick-start tips while reviewing", isOn: $showQuickStart)

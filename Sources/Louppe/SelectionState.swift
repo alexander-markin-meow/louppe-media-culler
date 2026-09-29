@@ -73,10 +73,22 @@ struct SelectionState: Equatable {
             })
         }
         replace(with: remapped, items: items)
-        guard !remapped.isEmpty, !remapped.contains(currentIndex) else {
+        return replacementCurrentIndex(
+            currentIndex: currentIndex,
+            preparedIndex: preparedIndex
+        )
+    }
+
+    /// Filtering and structural restores keep the displayed photo inside a
+    /// surviving explicit selection, in the current review order.
+    func replacementCurrentIndex(
+        currentIndex: Int,
+        preparedIndex: PreparedSessionIndex
+    ) -> Int? {
+        guard !indices.isEmpty, !indices.contains(currentIndex) else {
             return nil
         }
-        return remapped.min {
+        return indices.min {
             (preparedIndex.location(forItemIndex: $0)?.position ?? $0)
                 < (preparedIndex.location(forItemIndex: $1)?.position ?? $1)
         }

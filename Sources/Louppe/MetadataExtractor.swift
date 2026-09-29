@@ -1,5 +1,56 @@
 import Foundation
 import ImageIO
+import Darwin
+
+/// Captured alongside the cache key, so workers cannot read a replacement file
+/// and publish its bytes under the folder scan's earlier content revision.
+/// Cache hits remain filesystem-free. Only uncached source reads validate.
+struct MediaSourceRevision: Sendable {
+    let url: URL
+    private let identity: FileOperationJournal.FileIdentity?
+
+    init(_ item: PhotoItem) {
+        url = item.primaryURL
+        identity = item.primaryFile.scannedIdentity
+    }
+
+    func matchesCurrentFile() -> Bool {
+        // Synthetic/legacy items have no scan identity; preserve their API.
+        guard let identity else { return true }
+        var current = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.lstat(path, &current)
+        }
+        guard result == 0,
+              current.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              UInt64(current.st_dev) == identity.systemNumber,
+              UInt64(current.st_ino) == identity.fileNumber,
+              identity.logicalSize.map({ $0 == Int64(current.st_size) }) ?? true
+        else { return false }
+        func matches(_ expected: FileOperationJournal.FileIdentity.Timestamp?,
+                     _ actual: timespec) -> Bool {
+            expected.map {
+                $0.seconds == Int64(actual.tv_sec)
+                    && $0.nanoseconds == Int64(actual.tv_nsec)
+            } ?? true
+        }
+        return matches(identity.modificationTime, current.st_mtimespec)
+            && matches(identity.statusChangeTime, current.st_ctimespec)
+            && matches(identity.birthTime, current.st_birthtimespec)
+    }
+
+    func read<Result>(_ body: () -> Result?) -> Result? {
+        guard matchesCurrentFile() else { return nil }
+        let result = body()
+        guard matchesCurrentFile() else { return nil }
+        return result
+    }
+
+    static let changedMessage =
+        "This file changed since the folder was scanned. Rescan the folder to use the current file."
+}
+
 
 enum MetadataExtractor {
 
@@ -69,6 +120,8 @@ enum MetadataExtractor {
             add("Paired file", paired.lastPathComponent)
         }
 
+        let revision = MediaSourceRevision(item)
+        guard revision.matchesCurrentFile() else { return changedFileFields(for: item) }
         var props: [CFString: Any] = [:]
         if let source = CGImageSourceCreateWithURL(item.primaryURL as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
            let p = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
@@ -154,7 +207,15 @@ enum MetadataExtractor {
             } ?? (lon < 0 ? "W" : "E")
             add("GPS", String(format: "%.5f°%@, %.5f°%@", lat, latRef, lon, lonRef))
         }
+        guard revision.matchesCurrentFile() else { return changedFileFields(for: item) }
         return fields
+    }
+
+    private static func changedFileFields(for item: PhotoItem) -> [MetadataField] {
+        [
+            MetadataField(id: "Filename", label: "Filename", value: item.displayName),
+            MetadataField(id: "File changed", label: "File changed", value: MediaSourceRevision.changedMessage),
+        ]
     }
 
     private static func videoFields(for item: PhotoItem) -> [MetadataField] {

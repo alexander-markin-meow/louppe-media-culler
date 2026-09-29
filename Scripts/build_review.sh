@@ -3,9 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REVIEW_NAME="${1:-louppe-$(date +%Y.%m.%d)}"
-if [[ ! "$REVIEW_NAME" =~ ^louppe-[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
-    echo "Usage: $0 [louppe-YYYY.MM.DD]" >&2
+REVIEW_NAME="${1:-louppe - to review}"
+REVIEW_BUNDLE_ID="com.alexandermarkin.louppe.review2"
+if [[ "$REVIEW_NAME" != "louppe - to review" && ! "$REVIEW_NAME" =~ ^louppe-[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
+    echo "Usage: $0 ['louppe - to review'|louppe-YYYY.MM.DD]" >&2
     exit 2
 fi
 
@@ -18,12 +19,21 @@ ditto --noextattr --noqtn dist/Louppe.app "$REVIEW_APP"
 REVIEW_PLIST="$REVIEW_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $REVIEW_NAME" "$REVIEW_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $REVIEW_NAME" "$REVIEW_PLIST"
+# A distinct identity isolates Launch Services, preferences, recents, and window
+# restoration from the installed stable app. The production identifier is unchanged.
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $REVIEW_BUNDLE_ID" "$REVIEW_PLIST"
+# The installed release owns Finder's Open in Louppe service. Do not advertise
+# a second service with the same port and menu item from this review copy.
+/usr/libexec/PlistBuddy -c 'Delete :NSServices' "$REVIEW_PLIST"
 /usr/libexec/PlistBuddy -c 'Add :LouppeReviewBuild bool true' "$REVIEW_PLIST"
 /usr/libexec/PlistBuddy -c 'Set :SUEnableAutomaticChecks false' "$REVIEW_PLIST"
 /usr/libexec/PlistBuddy -c 'Set :SUAutomaticallyUpdate false' "$REVIEW_PLIST"
 xattr -cr "$REVIEW_APP"
 codesign --force --sign - "$REVIEW_APP"
 codesign --verify --deep --strict "$REVIEW_APP"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$REVIEW_PLIST")" == "$REVIEW_BUNDLE_ID" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$REVIEW_PLIST")" == false ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$REVIEW_PLIST")" == false ]]
 
 REVIEW_OUTPUT="$PWD/dist/$REVIEW_NAME.app"
 REVIEW_ARCHIVE="$PWD/dist/$REVIEW_NAME.zip"

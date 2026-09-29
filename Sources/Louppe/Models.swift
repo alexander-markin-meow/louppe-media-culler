@@ -1138,10 +1138,11 @@ struct ExportSelectionSnapshot: Equatable, Sendable {
 
 /// How the toolbar sort menu orders the visible photos.
 struct PhotoSort: Equatable, Sendable {
-    enum Key: Hashable, Sendable {
+    enum Key: String, CaseIterable, Hashable, Sendable {
         case captureDate
         case name
         case subfolder
+        case folderHierarchy
         case fileType
         case mediaKind
         case camera
@@ -1161,6 +1162,7 @@ struct PhotoSort: Equatable, Sendable {
             switch self {
             case .captureDate: return "Oldest first"
             case .name, .subfolder, .fileType, .camera, .lens, .videoCodec: return "A–Z"
+            case .folderHierarchy: return "Folders A–Z"
             case .mediaKind: return "Photos first"
             case .aperture: return "Widest first"
             case .shutterSpeed: return "Fastest first"
@@ -1178,6 +1180,7 @@ struct PhotoSort: Equatable, Sendable {
             switch self {
             case .captureDate: return "Newest first"
             case .name, .subfolder, .fileType, .camera, .lens, .videoCodec: return "Z–A"
+            case .folderHierarchy: return "Folders Z–A"
             case .mediaKind: return "Text first"
             case .aperture: return "Narrowest first"
             case .shutterSpeed: return "Slowest first"
@@ -1205,6 +1208,8 @@ struct PhotoSort: Equatable, Sendable {
                 return true
             case .subfolder:
                 return a.subfolderLabel == b.subfolderLabel
+            case .folderHierarchy:
+                return FolderPath.identity(for: a) == FolderPath.identity(for: b)
             case .fileType:
                 return a.fileTypeLabel == b.fileTypeLabel
             case .mediaKind:
@@ -1249,6 +1254,8 @@ struct PhotoSort: Equatable, Sendable {
                 return ""
             case .subfolder:
                 return item.subfolderLabel
+            case .folderHierarchy:
+                return item.subfolder ?? "Source folder"
             case .fileType:
                 return item.fileTypeLabel
             case .mediaKind:
@@ -1312,6 +1319,8 @@ struct PhotoSort: Equatable, Sendable {
                 value = .ungrouped
             case .subfolder:
                 value = .text(item.subfolderLabel)
+            case .folderHierarchy:
+                value = .folderPath(FolderPath.identity(for: item))
             case .fileType:
                 value = .text(item.fileTypeLabel)
             case .mediaKind:
@@ -1355,6 +1364,52 @@ struct PhotoSort: Equatable, Sendable {
             MediaNumeric.roundedNonnegativeInt(value)
         }
     }
+    /// A relative source directory with lossless identity. Scanned file IDs
+    /// already contain percent-encoded filesystem bytes; display strings alone
+    /// would merge canonically equivalent Unicode folder names.
+    struct FolderPath {
+        private struct Component {
+            let identity: Data
+            let name: String
+        }
+
+        let identity: Data
+        private let components: [Component]
+
+        static func identity(for item: PhotoItem) -> Data {
+            let path = item.primaryFile.id
+            guard let separator = path.lastIndex(of: "/") else { return Data() }
+            return Data(path[..<separator].utf8)
+        }
+
+        init(identity: Data) {
+            self.identity = identity
+            components = String(decoding: identity, as: UTF8.self)
+                .split(separator: "/")
+                .map {
+                    let encodedName = String($0)
+                    return Component(
+                        identity: Data(encodedName.utf8),
+                        name: encodedName.removingPercentEncoding ?? encodedName
+                    )
+                }
+        }
+
+        /// Depth-first folder order: a folder's own files always precede its
+        /// descendants. Reversing changes sibling order, never tree structure.
+        func isOrdered(before other: FolderPath, ascending: Bool) -> Bool {
+            for (left, right) in zip(components, other.components) {
+                guard left.identity != right.identity else { continue }
+                let comparison = left.name.localizedStandardCompare(right.name)
+                let precedes = comparison == .orderedSame
+                    ? left.identity.lexicographicallyPrecedes(right.identity)
+                    : comparison == .orderedAscending
+                return ascending ? precedes : !precedes
+            }
+            return components.count < other.components.count
+        }
+    }
+
     var key: Key = .captureDate
     var ascending = true
 
@@ -1372,6 +1427,13 @@ struct PhotoSort: Equatable, Sendable {
             return optionalStringsInOrder(a.subfolder, b.subfolder, ascending: ascending) {
                 dateThenNameInOrder(a, b)
             }
+        case .folderHierarchy:
+            let aFolder = FolderPath(identity: FolderPath.identity(for: a))
+            let bFolder = FolderPath(identity: FolderPath.identity(for: b))
+            if aFolder.identity != bFolder.identity {
+                return aFolder.isOrdered(before: bFolder, ascending: ascending)
+            }
+            return dateThenNameInOrder(a, b)
         case .fileType:
             return stringsInOrder(a.fileTypeLabel, b.fileTypeLabel, ascending: ascending) {
                 dateThenNameInOrder(a, b)
@@ -1597,6 +1659,7 @@ struct PhotoGroup: Equatable, Identifiable, Sendable {
             case ungrouped
             case date(Date?)
             case text(String)
+            case folderPath(Data)
             case mediaKind(MediaKind)
             case numberBits(UInt64?)
             case roundedDuration(Int?)

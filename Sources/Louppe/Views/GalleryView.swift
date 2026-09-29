@@ -77,6 +77,9 @@ struct GalleryView: View {
                                     at: position,
                                     viewportAnchor: anchor
                                 )
+                            },
+                            onRepresentation: { representation, revision in
+                                store.reportPhotoRepresentation(representation, revision: revision)
                             }
                         ) { loading in
                             store.fullImageLoads += loading ? 1 : -1

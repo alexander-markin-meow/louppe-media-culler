@@ -18,6 +18,7 @@ swiftc \
     Sources/Louppe/FolderScanner.swift \
     Sources/Louppe/MetadataExtractor.swift \
     Sources/Louppe/VideoSupport.swift \
+    Sources/Louppe/RawDisplay.swift \
     Sources/Louppe/ImagePipeline.swift \
     Sources/Louppe/VideoPlaybackController.swift \
     Tests/VideoChecks/main.swift \

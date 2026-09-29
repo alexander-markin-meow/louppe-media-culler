@@ -19,6 +19,7 @@ swiftc \
     Sources/Louppe/FolderScanner.swift \
     Sources/Louppe/MetadataExtractor.swift \
     Sources/Louppe/VideoSupport.swift \
+    Sources/Louppe/RawDisplay.swift \
     Sources/Louppe/ImagePipeline.swift \
     Sources/Louppe/HistogramPipeline.swift \
     Sources/Louppe/HighResolutionImagePipeline.swift \
@@ -38,6 +39,7 @@ swiftc \
     Sources/Louppe/SessionPersistence.swift \
     Tests/PerformanceChecks/XMPPublicationStubs.swift \
     Sources/Louppe/XMP/XMPSidecarResolver.swift \
+    Sources/Louppe/ReviewPreferences.swift \
     Sources/Louppe/SessionStore.swift \
     Tests/PerformanceChecks/main.swift \
     -o .build/performance-checks/LouppePerformanceChecks

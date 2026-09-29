@@ -95,6 +95,25 @@ inconsistent.
 Homebrew uses this same ZIP. Publishing a stable release automatically updates
 the package definition; see [HOMEBREW.md](HOMEBREW.md).
 
+## GitHub release notes
+
+Use the published [1.9.0 note](https://github.com/murlexander/louppe-media-culler/releases/tag/v1.9.0)
+as the model for reader-facing notes. Title each release `Louppe vX.Y.Z` and
+write:
+
+1. One sentence on the main benefit.
+2. `### What’s new` with a few short bullets about changes people will notice.
+   Combine related changes; lead with the biggest benefit. Keep beta limits or
+   file-safety caveats when they affect a user's choice.
+3. `### Download` with the ZIP installation or update path and the minimum
+   macOS requirement.
+4. A link to the complete version history in `CHANGELOG.md`.
+
+Keep implementation details and exhaustive change lists in the changelog. Check
+installation and signing claims against the specific release: versions before
+1.8.0 needed the first-launch right-click workaround; 1.8.0 and later are
+signed and notarized.
+
 ## Local verification
 
 `build_app.sh` preserves Sparkle's versioned framework symlinks, embeds it in

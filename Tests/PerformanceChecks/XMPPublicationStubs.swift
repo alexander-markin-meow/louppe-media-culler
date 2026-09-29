@@ -200,6 +200,8 @@ struct XMPPublicationInput: Sendable {
         items: [PhotoItem],
         familyContextItems: [PhotoItem]? = nil,
         sessionGeneration: UInt64 = 0,
+        sourceFolder: URL? = nil,
+        sourceFolderIdentity: SessionPersistence.SourceFolderIdentity? = nil,
         profile: XMPApplicationProfile,
         visibleDecisionKeywords: Bool,
         allowExternalLabelReplacement: Bool = false

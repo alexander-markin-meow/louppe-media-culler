@@ -33,6 +33,12 @@ struct MetadataPanel: View {
     @FocusState private var filenameIsFocused: Bool
     @AppStorage(CameraQualityWarningPreferences.Keys.isEnabled)
     private var cameraQualityWarningsEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isHighISOEnabled)
+    private var highISOWarningEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isSlowShutterEnabled)
+    private var slowShutterWarningEnabled = true
+    @AppStorage(CameraQualityWarningPreferences.Keys.isClippingEnabled)
+    private var clippingWarningEnabled = true
     @AppStorage(CameraQualityWarningPreferences.Keys.highISOThreshold)
     private var highISOWarningThreshold =
         CameraQualityWarningPreferences.defaultHighISOThreshold
@@ -123,6 +129,9 @@ struct MetadataPanel: View {
     private var cameraQualityWarningPreferences: CameraQualityWarningPreferences {
         CameraQualityWarningPreferences(
             isEnabled: cameraQualityWarningsEnabled,
+            isHighISOEnabled: highISOWarningEnabled,
+            isSlowShutterEnabled: slowShutterWarningEnabled,
+            isClippingEnabled: clippingWarningEnabled,
             highISOThreshold: highISOWarningThreshold,
             slowShutterThreshold: slowShutterWarningThreshold,
             clippingPercentageThreshold: clippingWarningThreshold

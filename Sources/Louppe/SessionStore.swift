@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-enum ViewMode {
+enum ViewMode: String, CaseIterable, Sendable {
     case gallery
     case grid
 }
@@ -187,6 +187,7 @@ final class SessionStore: ObservableObject {
     /// The searchable Command Palette. Its modal text field owns normal
     /// typing while the photo session remains unchanged behind it.
     @Published var isActionPalettePresented = false
+    @Published var isEarlyUserFeedbackPresented = false
     @Published var isFilterPresented = false
     @Published var isSortPresented = false
     private var filterSearchFocusRequestGeneration: UInt64 = 0
@@ -221,6 +222,19 @@ final class SessionStore: ObservableObject {
     /// arrow-key navigation can't blank the spinner early). The toolbar shows
     /// a small spinner while it's above zero.
     @Published var fullImageLoads = 0
+    @Published private(set) var photoRepresentation: PhotoRepresentation = .preview
+    private var photoRepresentationRevision: PhotoContentRevision?
+
+    var currentPhotoRepresentation: PhotoRepresentation? {
+        photoRepresentationRevision == currentItem?.contentRevision ? photoRepresentation : nil
+    }
+
+    func reportPhotoRepresentation(_ representation: PhotoRepresentation, revision: PhotoContentRevision) {
+        guard currentItem?.contentRevision == revision else { return }
+        let changed = photoRepresentationRevision != revision || photoRepresentation != representation
+        photoRepresentationRevision = revision
+        if changed { photoRepresentation = representation }
+    }
     @Published var scanError: String?
     /// A legacy folder-path mismatch can be acknowledged only for the exact
     /// sidecar revision that produced the current welcome-screen message.
@@ -321,6 +335,7 @@ final class SessionStore: ObservableObject {
     private var selectionState = SelectionState()
 
     private(set) var sourceFolder: URL?
+    private let reviewDefaults: UserDefaults
     @Published private(set) var activeFileOperation: FileOperationKind? {
         didSet {
             updateFileOperationPowerActivity()
@@ -419,6 +434,7 @@ final class SessionStore: ObservableObject {
             || isOrganizePresented
             || isRenamePresented
             || isActionPalettePresented
+            || isEarlyUserFeedbackPresented
             || isFilterPresented
             || isSortPresented
             || isClearAllRatingsConfirmationPresented
@@ -723,9 +739,15 @@ final class SessionStore: ObservableObject {
         saveTrailingDelay: TimeInterval = 0.5,
         saveMaximumDelay: TimeInterval = 5,
         operationJournalDirectory: URL? = nil,
-        automaticallyRecoversInterruptedOperations: Bool = false
+        automaticallyRecoversInterruptedOperations: Bool = false,
+        reviewDefaults: UserDefaults = .standard
     ) {
         self.persistence = persistence
+        self.reviewDefaults = reviewDefaults
+        let preferences = ReviewPreferences.load(from: reviewDefaults)
+        viewMode = preferences.defaultView
+        sort = preferences.defaultSort
+        isGroupingEnabled = preferences.isGroupingEnabled
         self.saveTrailingDelay = max(0, saveTrailingDelay)
         // These clocks are independent: production normally uses a longer
         // maximum dirty age, while tests deliberately put the hard deadline
@@ -1134,6 +1156,12 @@ final class SessionStore: ObservableObject {
             if changed {
                 selectedIndices = selectionState.indices
             }
+        }
+        if let replacementCurrent = selectionState.replacementCurrentIndex(
+            currentIndex: currentIndex,
+            preparedIndex: preparedIndex
+        ) {
+            currentIndex = replacementCurrent
         }
         // Keep the current photo visible: snap to the nearest photo that
         // passes the filter (forward first, else the last visible one).
@@ -1792,13 +1820,14 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Opening a folder
 
-    func promptForSourceFolder() {
+    func promptForSourceFolder(initialDirectory: URL? = nil) {
         guard !isFileOperationRunning else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose the media folder with photos, videos, audio, or text files to review (an SD card's DCIM folder works too)."
+        panel.directoryURL = initialDirectory
+        panel.message = "Choose a media folder or external drive to review."
         panel.prompt = "Open Folder"
         if panel.runModal() == .OK, let url = panel.url {
             openFolder(url)
@@ -1942,7 +1971,7 @@ final class SessionStore: ObservableObject {
         resetDerivedData()
         if !preservesCurrentFilter {
             filter = PhotoFilter()
-            sort = PhotoSort()
+            applyReviewDefaults()
         }
         undoStack = []
         isClearAllRatingsConfirmationPresented = false
@@ -2339,6 +2368,13 @@ final class SessionStore: ObservableObject {
                 visibleOnly: true
             )
             prefetchAroundCurrent()
+        } else if let first = visibleIndices.first(where: {
+            items[$0].rating == .undecided
+        }) ?? visibleIndices.first {
+            // A new folder starts at the first pending item in its chosen
+            // default order, rather than the scanner's chronological order.
+            currentIndex = first
+            prefetchAroundCurrent()
         }
         phase = loaded.isEmpty ? .welcome : .ready
         if !loaded.isEmpty, let organizationUndo = deferredOrganizationUndo {
@@ -2596,14 +2632,35 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Rating
 
-    /// Rates the current photo — or, when a multi-selection is active, every
-    /// selected photo at once (one ⌘Z reverts the whole batch) — then jumps
-    /// to the next undecided photo.
+    /// Rates the current photo or selection as one undoable decision. The
+    /// preference applies to this review command; individual tile controls,
+    /// stars, and colors keep their existing non-advancing behavior.
     func rate(_ rating: Rating) {
         guard canRate else { return }
-        applyRating(rating, to: effectiveSelection.sorted())
-        setSelectionIndices([])
-        advanceToNextUndecided()
+        flushPendingFilter()
+        let targets = effectiveSelection.sorted()
+        guard !targets.isEmpty else { return }
+        // Retain the displayed order before a decision can change its filter
+        // membership or sort position. Advancing from the post-filter current
+        // photo would skip the next undecided item.
+        let previousOrder = visibleIndices
+        let previousIndex = currentIndex
+        let previousPosition = preparedIndex.location(forItemIndex: currentIndex)?.position
+        applyRating(rating, to: targets)
+        if ReviewPreferences.load(from: reviewDefaults).advancesAfterDecision {
+            setSelectionIndices([])
+            advanceAfterDecision(
+                position: previousPosition,
+                in: previousOrder
+            )
+        } else if preparedIndex.location(forItemIndex: previousIndex) == nil {
+            // Staying cannot retain a hidden photo. Choose the nearest
+            // surviving selection, then the nearest item in the old order.
+            restoreVisibleCurrentAfterDecision(
+                position: previousPosition,
+                in: previousOrder
+            )
+        }
     }
 
     /// Grid rating-control click: cycle the clicked photo's rating. Using the
@@ -3029,11 +3086,8 @@ final class SessionStore: ObservableObject {
         let candidateIndices = Set(cleanUpCandidates)
         return rawJPEGPairs.compactMap { pair in
             let target = mode == .pairedJPEGs ? pair.jpeg : pair.raw
-            let pairIndices = [pair.raw.id, pair.jpeg.id].compactMap {
-                itemIndexByFileID[$0]
-            }
-            guard pairIndices.contains(where: candidateIndices.contains),
-                  let index = itemIndexByFileID[target.id]
+            guard let index = itemIndexByFileID[target.id],
+                  candidateIndices.contains(index)
             else { return nil }
             return CleanUpPhotoSnapshot(
                 index: index,
@@ -3072,9 +3126,11 @@ final class SessionStore: ObservableObject {
         case .pairedJPEGs, .pairedRAWs:
             let candidateIndices = Set(cleanUpCandidates)
             return rawJPEGPairs.contains { pair in
-                [pair.raw.id, pair.jpeg.id]
-                    .compactMap { itemIndexByFileID[$0] }
-                    .contains(where: candidateIndices.contains)
+                let target = mode == .pairedJPEGs ? pair.jpeg : pair.raw
+                guard let index = itemIndexByFileID[target.id] else {
+                    return false
+                }
+                return candidateIndices.contains(index)
             }
         }
     }
@@ -4158,6 +4214,8 @@ final class SessionStore: ObservableObject {
                 items: selected,
                 familyContextItems: items,
                 sessionGeneration: scanGeneration,
+                sourceFolder: sourceFolder,
+                sourceFolderIdentity: persistenceAccess?.folderIdentity,
                 profile: profile,
                 visibleDecisionKeywords: visibleDecisionKeywords,
                 allowExternalLabelReplacement: allowExternalLabelReplacement
@@ -4518,21 +4576,60 @@ final class SessionStore: ObservableObject {
         prefetchAroundCurrent()
     }
 
-    private func advanceToNextUndecided() {
-        guard !visibleIndices.isEmpty else { return }
-        let pos = preparedIndex.location(forItemIndex: currentIndex)?.position ?? 0
-        // Search forward from the current photo, wrapping around once.
-        let count = visibleIndices.count
-        for offset in 1...count {
-            let candidate = visibleIndices[(pos + offset) % count]
-            if items[candidate].rating == .undecided {
+    private func advanceAfterDecision(
+        position: Int?,
+        in previousOrder: [Int]
+    ) {
+        guard !visibleIndices.isEmpty, !previousOrder.isEmpty else { return }
+        let position = position ?? 0
+        // Search the order the photographer was reviewing, wrapping once.
+        // Decision sorting may have moved the rated item to another group.
+        for offset in 1...previousOrder.count {
+            let candidate = previousOrder[(position + offset) % previousOrder.count]
+            if preparedIndex.location(forItemIndex: candidate) != nil,
+               items[candidate].rating == .undecided {
                 currentIndex = candidate
                 prefetchAroundCurrent()
                 return
             }
         }
-        // Nothing undecided left: just step forward if possible.
-        stepVisible(1)
+        // With every visible item decided, step forward if possible and
+        // stay at the last item instead of wrapping the completed review.
+        restoreVisibleCurrentAfterDecision(
+            position: position,
+            in: previousOrder,
+            advances: true
+        )
+    }
+
+    private func restoreVisibleCurrentAfterDecision(
+        position: Int?,
+        in previousOrder: [Int],
+        advances: Bool = false
+    ) {
+        guard !visibleIndices.isEmpty else { return }
+        let position = position ?? 0
+        let start = min(position + (advances ? 1 : 0), previousOrder.count)
+        func eligible(_ index: Int) -> Bool {
+            preparedIndex.location(forItemIndex: index) != nil
+                && (selectedIndices.isEmpty || selectedIndices.contains(index))
+        }
+        let next = previousOrder.dropFirst(start).first(where: eligible)
+            ?? previousOrder.prefix(start).last(where: eligible)
+            ?? visibleIndices.first
+        if let next {
+            currentIndex = next
+            prefetchAroundCurrent()
+        }
+    }
+
+    /// Starting layout is applied only to a new folder or a closed session;
+    /// changing Settings never reorders an in-progress review or its rescan.
+    private func applyReviewDefaults() {
+        let preferences = ReviewPreferences.load(from: reviewDefaults)
+        sort = preferences.defaultSort
+        isGroupingEnabled = preferences.isGroupingEnabled
+        viewMode = preferences.defaultView
     }
 
     func toggleViewMode() {
@@ -5209,9 +5306,8 @@ final class SessionStore: ObservableObject {
         pendingCleanUp = nil
         dismissCleanUpError()
         currentIndex = 0
-        viewMode = .gallery
         filter = PhotoFilter()
-        sort = PhotoSort()
+        applyReviewDefaults()
         visibleIndices = []
         isFilterPresented = false
         isSortPresented = false
@@ -5219,7 +5315,6 @@ final class SessionStore: ObservableObject {
         isRenamePresented = false
         isActionPalettePresented = false
         actionPaletteFollowUp = nil
-        isGroupingEnabled = true
         phase = .welcome
     }
 }

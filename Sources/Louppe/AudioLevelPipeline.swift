@@ -260,14 +260,23 @@ final class AudioLevelPipeline: @unchecked Sendable {
     private var cachedEnvelopeCount = 0
     private var inFlight: [String: PendingAnalysis] = [:]
 
-    private init() {}
+    typealias Decoder = @Sendable (
+        URL, TimeInterval?, @escaping @Sendable () -> Bool
+    ) -> AudioLevelAnalysis?
+    private let decoder: Decoder
+
+    init(decoder: @escaping Decoder = { url, duration, isCancelled in
+        AudioLevelPipeline.decode(url: url, duration: duration, isCancelled: isCancelled)
+    }) {
+        self.decoder = decoder
+    }
 
     func analysis(for item: PhotoItem) async -> AudioLevelAnalysis? {
         guard (item.isVideo || item.isAudio), item.isPlayableMedia else {
             return nil
         }
         let key = ImagePipeline.cacheKey(for: item)
-        let url = item.primaryURL
+        let revision = MediaSourceRevision(item)
         let duration = item.duration
         let requestID = UUID()
         return await withTaskCancellationHandler {
@@ -294,12 +303,10 @@ final class AudioLevelPipeline: @unchecked Sendable {
                 operation.addExecutionBlock { [weak self, weak operation] in
                     guard let self, let operation, !operation.isCancelled
                     else { return }
-                    let result = Self.decode(
-                        url: url,
-                        duration: duration,
-                        isCancelled: { operation.isCancelled }
-                    )
-                    self.finish(key: key, result: result)
+                    let result = revision.read {
+                        self.decoder(revision.url, duration, { operation.isCancelled })
+                    }
+                    self.finish(key: key, operation: operation, result: result)
                 }
                 operation.qualityOfService = .utility
                 inFlight[key] = PendingAnalysis(
@@ -328,10 +335,11 @@ final class AudioLevelPipeline: @unchecked Sendable {
         while completed.wait(timeout: .now() + 0.05) == .timedOut {
             if isCancelled() {
                 task.cancel()
-                return nil
+                // Keep the serial queue slot until the detached reader exits;
+                // releasing it here can overlap two whole-clip decodes.
             }
         }
-        return result.load()
+        return isCancelled() ? nil : result.load()
     }
 
     private static func decodeAsync(
@@ -435,13 +443,14 @@ final class AudioLevelPipeline: @unchecked Sendable {
         return accumulator?.analysis
     }
 
-    private func finish(key: String, result: AudioLevelAnalysis?) {
+    private func finish(key: String, operation: BlockOperation, result: AudioLevelAnalysis?) {
         lock.lock()
-        guard let pending = inFlight.removeValue(forKey: key) else {
+        guard let pending = inFlight[key], pending.operation === operation else {
             lock.unlock()
             return
         }
-        if let result {
+        inFlight.removeValue(forKey: key)
+        if let result, !operation.isCancelled {
             if let previous = cache[key] {
                 cachedEnvelopeCount -= Self.envelopeCount(in: previous)
             }
@@ -474,15 +483,10 @@ final class AudioLevelPipeline: @unchecked Sendable {
             return
         }
         if pending.waiters.isEmpty {
-            // A queued decode can be dropped. A running reader stays in its
-            // single queue slot until it reaches a safe boundary, preventing
-            // cancellation churn from briefly running two whole-clip decodes.
-            // Keep the running operation registered so a new request can join
-            // it and its completed result still reaches the small LRU cache.
-            if !pending.operation.isExecuting {
-                inFlight.removeValue(forKey: key)
-                pending.operation.cancel()
-            }
+            // Cancel even an executing whole-clip reader. Its operation keeps
+            // the serial slot until the detached task confirms completion.
+            inFlight.removeValue(forKey: key)
+            pending.operation.cancel()
         }
         lock.unlock()
         waiter.resume(returning: nil)

@@ -39,6 +39,8 @@ struct LouppeApp: App {
             RootView(store: store)
                 .onAppear {
                     appDelegate.store = store
+                    appDelegate.showMainWindow = { openWindow(id: "main") }
+                    appDelegate.openPendingFolderIfNeeded()
                     NSApp.activate(ignoringOtherApps: true)
                     // Optional launch argument for testing:
                     //   open Louppe.app --args -openFolder /path/to/photos
@@ -57,7 +59,7 @@ struct LouppeApp: App {
         // platform appearance (including macOS 26 window geometry) instead of
         // freezing a custom or plain style in the app.
         .windowStyle(.automatic)
-        .defaultSize(width: 560, height: 560)
+        .defaultSize(width: 456, height: 220)
         .commands {
             // Standard About panel reads its version from the release bundle
             // and adds credits plus a link to the complete release history.
@@ -343,7 +345,54 @@ extension FocusedValues {
 @MainActor
 private final class LouppeApplicationDelegate: NSObject, NSApplicationDelegate {
     weak var store: SessionStore?
+    var showMainWindow: (() -> Void)?
+    private var pendingFolderURL: URL?
     private var isPreparingToTerminate = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = self
+    }
+
+    @objc(openMediaFolder:userData:error:)
+    func openMediaFolder(
+        _ pasteboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        guard urls.count == 1,
+              (try? urls[0].resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else {
+            error.pointee = "Select one folder in Finder to open in Louppe."
+            return
+        }
+
+        let folder = urls[0].standardizedFileURL
+        if let store {
+            guard !store.isFileOperationRunning else {
+                error.pointee = "Wait for Louppe to finish its current operation, then try again."
+                return
+            }
+            store.openFolder(folder)
+        } else {
+            // Finder can invoke the service before SwiftUI mounts the window.
+            pendingFolderURL = folder
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        if let showMainWindow {
+            showMainWindow()
+        } else {
+            NSApp.windows.first { $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    func openPendingFolderIfNeeded() {
+        guard let folder = pendingFolderURL, let store else { return }
+        pendingFolderURL = nil
+        store.openFolder(folder)
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if store?.isRecoveringInterruptedOperations == true {

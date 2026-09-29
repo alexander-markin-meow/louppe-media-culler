@@ -148,6 +148,13 @@ final class VideoPlaybackController: ObservableObject {
             return
         }
 
+        let sourceRevision = MediaSourceRevision(item)
+        // One bounded lstat preserves immediate prepare/play behavior. Media
+        // decoding and the asynchronous readiness recheck remain off-main.
+        guard sourceRevision.matchesCurrentFile() else {
+            errorMessage = MediaSourceRevision.changedMessage
+            return
+        }
         let playerItem = AVPlayerItem(url: item.primaryURL)
         // AVPlayerView's native Play button uses the default rate; speed is
         // one shared review preference for videos and audio recordings.
@@ -165,7 +172,8 @@ final class VideoPlaybackController: ObservableObject {
         observe(
             playerItem,
             contentRevision: requestedRevision,
-            generation: playbackGeneration
+            generation: playbackGeneration,
+            sourceRevision: sourceRevision
         )
     }
 
@@ -342,7 +350,8 @@ final class VideoPlaybackController: ObservableObject {
     private func observe(
         _ playerItem: AVPlayerItem,
         contentRevision observedRevision: PhotoContentRevision,
-        generation observedGeneration: UInt64
+        generation observedGeneration: UInt64,
+        sourceRevision: MediaSourceRevision
     ) {
         removeObservers()
         endObserver.replace(with: NotificationCenter.default.addObserver(
@@ -372,9 +381,24 @@ final class VideoPlaybackController: ObservableObject {
             }
         })
         itemStatusObservation = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
-            guard item.status == .failed else { return }
+            let status = item.status
+            guard status == .failed || status == .readyToPlay else { return }
             let message = item.error?.localizedDescription ?? "This media file couldn't be played."
             Task { @MainActor in
+                if status == .readyToPlay {
+                    let matches = await Task.detached(priority: .userInitiated) {
+                        sourceRevision.matchesCurrentFile()
+                    }.value
+                    guard self?.playbackGeneration == observedGeneration,
+                          self?.contentRevision == observedRevision else { return }
+                    if !matches {
+                        self?.player.pause()
+                        self?.player.replaceCurrentItem(with: nil)
+                        self?.isPlaying = false
+                        self?.errorMessage = MediaSourceRevision.changedMessage
+                    }
+                    return
+                }
                 guard self?.playbackGeneration == observedGeneration,
                       self?.contentRevision == observedRevision else { return }
                 self?.isPlaying = false

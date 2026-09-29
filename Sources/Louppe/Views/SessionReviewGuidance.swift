@@ -14,7 +14,7 @@ struct SessionReviewFooter: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help("F marks Yes and D marks No, then moves to the next undecided item. Arrow keys browse; ⌘Z undoes. Decisions save automatically, and No never moves files to Trash.")
+                        .help("F marks Yes and D marks No. By default, they move to the next undecided item; change this in Settings → Review. Arrow keys browse; ⌘Z undoes. Decisions save automatically, and No never moves files to Trash.")
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Dismiss tips", systemImage: "xmark") {
                         showQuickStart = false
@@ -44,7 +44,7 @@ struct SessionReviewFooter: View {
                         Color.clear
                     }
                 }
-                .frame(width: 240, height: 28)
+                .frame(width: store.currentItem?.isRaw == true ? 300 : 240, height: 28)
 
                 Text(store.sessionSaveStatus)
                     .font(.caption)

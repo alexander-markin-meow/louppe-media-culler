@@ -20,6 +20,8 @@ struct SortView: View {
                         keyRow("Star rating", .starRating)
                         keyRow("Color label", .colorLabel)
                         keyRow("Subfolder", .subfolder, disabled: store.availableSubfolders.count <= 1)
+                        keyRow("Folder hierarchy", .folderHierarchy)
+                            .help("Review each source folder before its subfolders. Files within each folder stay chronological.")
                         keyRow("File type", .fileType)
                         keyRow("Media type", .mediaKind, disabled: store.availableMediaKinds.count <= 1)
                         keyRow("Camera", .camera)

@@ -204,6 +204,11 @@ enum SourceOrganizationWorker {
                 throw WorkerError.unsafeDestination(directory.url)
             }
             let next = try current.appending(componentBytes: component)
+            guard SourceOrganizationPlanner.isScannerVisibleFolderName(
+                String(decoding: component, as: UTF8.self)
+            ) else {
+                throw WorkerError.unsafeDestination(next.url)
+            }
             let status = lstat(next)
             if let status {
                 guard (status.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR),
@@ -220,27 +225,27 @@ enum SourceOrganizationWorker {
                     if result != 0 { failure = errno }
                     return result == 0
                 }
-                guard created else {
-                    if failure == EEXIST, let raced = lstat(next),
-                       (raced.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) {
-                        current = next
-                        continue
+                if !created {
+                    guard failure == EEXIST, let raced = lstat(next),
+                          (raced.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
+                        throw WorkerError.couldNotCreateDirectory(next.url, failure)
                     }
-                    throw WorkerError.couldNotCreateDirectory(
-                        next.url,
-                        failure
+                } else {
+                    try DurableFileIO.syncDirectory(
+                        current.url,
+                        fullSync: true,
+                        policy: syncPolicy
                     )
+                    guard let createdStatus = lstat(next),
+                          (createdStatus.st_mode & mode_t(S_IFMT))
+                            == mode_t(S_IFDIR) else {
+                        throw WorkerError.destinationIsNotDirectory(next.url)
+                    }
                 }
-                try DurableFileIO.syncDirectory(
-                    current.url,
-                    fullSync: true,
-                    policy: syncPolicy
-                )
-                guard let createdStatus = lstat(next),
-                      (createdStatus.st_mode & mode_t(S_IFMT))
-                        == mode_t(S_IFDIR) else {
-                    throw WorkerError.destinationIsNotDirectory(next.url)
-                }
+            }
+            let values = try next.url.resourceValues(forKeys: [.isHiddenKey, .isPackageKey])
+            guard values.isHidden != true, values.isPackage != true else {
+                throw WorkerError.unsafeDestination(next.url)
             }
             current = next
         }

@@ -1,0 +1,2 @@
+retirement completed; cleanup quarantined recorded inode before simulated crash
+retirement unresolvedOperations=1 unresolvedFiles=1 quarantineExists=true details=["Recovery couldn\'t verify that .louppe-cc6dc544-ce5c-4b52-8ef0-9d3c4fa61b9d-2.partial belongs to the interrupted operation, so it left the file untouched."]

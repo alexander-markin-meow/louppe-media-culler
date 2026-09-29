@@ -8,7 +8,7 @@ enum HistogramAnalysisSource: Equatable, Sendable {
 
     var shortLabel: String {
         switch self {
-        case .renderedPreview: return "Rendered"
+        case .renderedPreview: return "Preview"
         case .rawDecode: return "RAW"
         }
     }
@@ -104,11 +104,12 @@ enum ClippingWarningProcessor {
             else { return }
             for pixel in 0..<pixelCount {
                 let offset = pixel * 4
-                guard bytes[offset + 3] > 0 else { continue }
+                let alpha = bytes[offset + 3]
+                guard alpha > 0 else { continue }
                 let value = luminance(
-                    red: bytes[offset],
-                    green: bytes[offset + 1],
-                    blue: bytes[offset + 2]
+                    red: straight(bytes[offset], alpha: alpha),
+                    green: straight(bytes[offset + 1], alpha: alpha),
+                    blue: straight(bytes[offset + 2], alpha: alpha)
                 )
                 sampleCount += 1
                 bins[Int(value)] += 1
@@ -138,20 +139,29 @@ enum ClippingWarningProcessor {
             else { return }
             for pixel in 0..<pixelCount {
                 let offset = pixel * 4
-                guard isWarning(
-                    red: bytes[offset],
-                    green: bytes[offset + 1],
-                    blue: bytes[offset + 2]
-                ) else { continue }
-                // Blend 72% warning red over the original pixel. The alpha is
-                // retained so transparent image edges stay transparent.
-                bytes[offset] = blend(bytes[offset], with: 255)
-                bytes[offset + 1] = blend(bytes[offset + 1], with: 0)
-                bytes[offset + 2] = blend(bytes[offset + 2], with: 0)
+                let alpha = bytes[offset + 3]
+                guard alpha > 0 else { continue }
+                let red = straight(bytes[offset], alpha: alpha)
+                let green = straight(bytes[offset + 1], alpha: alpha)
+                let blue = straight(bytes[offset + 2], alpha: alpha)
+                guard isWarning(red: red, green: green, blue: blue) else { continue }
+                // Blend straight color, then restore valid premultiplied RGBA.
+                // Transparent pixels and their alpha stay untouched.
+                bytes[offset] = premultiplied(blend(red, with: 255), alpha: alpha)
+                bytes[offset + 1] = premultiplied(blend(green, with: 0), alpha: alpha)
+                bytes[offset + 2] = premultiplied(blend(blue, with: 0), alpha: alpha)
             }
         }
 
         return buffer.makeImage()
+    }
+
+    private static func straight(_ component: UInt8, alpha: UInt8) -> UInt8 {
+        UInt8(min(255, (Int(component) * 255 + Int(alpha) / 2) / Int(alpha)))
+    }
+
+    private static func premultiplied(_ component: UInt8, alpha: UInt8) -> UInt8 {
+        UInt8((Int(component) * Int(alpha) + 127) / 255)
     }
 
     private static func blend(_ original: UInt8, with warning: UInt8) -> UInt8 {
@@ -266,7 +276,7 @@ final class HistogramPipeline: @unchecked Sendable {
     func analysis(for item: PhotoItem) async -> HistogramAnalysis? {
         guard item.mediaKind == .photo, item.isSupported else { return nil }
         let key = ImagePipeline.cacheKey(for: item)
-        let url = item.primaryURL
+        let revision = MediaSourceRevision(item)
         let requestID = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -293,12 +303,14 @@ final class HistogramPipeline: @unchecked Sendable {
                     guard let self, let operation, !operation.isCancelled
                     else { return }
                     let result = autoreleasepool {
-                        ImagePipeline.decodeImage(
-                            url: url,
-                            maxPixel: Self.analysisPixelSize
-                        ).flatMap(ClippingWarningProcessor.analyze)
+                        revision.read {
+                            ImagePipeline.decodeImage(
+                                url: revision.url,
+                                maxPixel: Self.analysisPixelSize
+                            ).flatMap(ClippingWarningProcessor.analyze)
+                        }
                     }
-                    self.finish(key: key, result: result)
+                    self.finish(key: key, operation: operation, result: result)
                 }
                 operation.qualityOfService = .userInitiated
                 inFlight[key] = PendingAnalysis(
@@ -313,13 +325,14 @@ final class HistogramPipeline: @unchecked Sendable {
         }
     }
 
-    private func finish(key: String, result: HistogramAnalysis?) {
+    private func finish(key: String, operation: BlockOperation, result: HistogramAnalysis?) {
         lock.lock()
-        guard let pending = inFlight.removeValue(forKey: key) else {
+        guard let pending = inFlight[key], pending.operation === operation else {
             lock.unlock()
             return
         }
-        if let result {
+        inFlight.removeValue(forKey: key)
+        if let result, !operation.isCancelled {
             cache[key] = result
             touch(key)
             while cacheOrder.count > Self.resultCacheLimit {
@@ -432,7 +445,7 @@ enum RawHistogramProcessor {
 
     static func analyze(url: URL) -> HistogramAnalysis? {
         guard let outputColorSpace, let context,
-              let filter = CIRAWFilter(imageURL: url)
+              let filter = RawImageRendering.filter(url: url)
         else { return nil }
 
         let nativeSize = filter.nativeSize
@@ -586,7 +599,7 @@ final class RawHistogramPipeline: @unchecked Sendable {
         if let cached = cachedAnalysis(for: item) { return cached }
 
         let key = ImagePipeline.cacheKey(for: item)
-        let url = item.primaryURL
+        let revision = MediaSourceRevision(item)
         let requestID = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -613,9 +626,9 @@ final class RawHistogramPipeline: @unchecked Sendable {
                     guard let self, let operation, !operation.isCancelled
                     else { return }
                     let result = autoreleasepool {
-                        self.decoder(url)
+                        revision.read { self.decoder(revision.url) }
                     }
-                    self.finish(key: key, result: result)
+                    self.finish(key: key, operation: operation, result: result)
                 }
                 operation.qualityOfService = .utility
                 operation.queuePriority = .low
@@ -631,13 +644,14 @@ final class RawHistogramPipeline: @unchecked Sendable {
         }
     }
 
-    private func finish(key: String, result: HistogramAnalysis?) {
+    private func finish(key: String, operation: BlockOperation, result: HistogramAnalysis?) {
         lock.lock()
-        guard let pending = inFlight.removeValue(forKey: key) else {
+        guard let pending = inFlight[key], pending.operation === operation else {
             lock.unlock()
             return
         }
-        if let result {
+        inFlight.removeValue(forKey: key)
+        if let result, !operation.isCancelled {
             cache[key] = result
             touch(key)
             while cacheOrder.count > cacheLimit {
@@ -710,19 +724,19 @@ final class ClippingPreviewPipeline: @unchecked Sendable {
         cache.totalCostLimit = Self.cacheCostLimit
     }
 
-    func cachedImage(for item: PhotoItem) -> NSImage? {
+    func cachedImage(for item: PhotoItem, mode: RawDisplayMode = .fast, decoder: AppleRawDecoder = .appleDefault) -> NSImage? {
         cache.object(
-            forKey: ImagePipeline.cacheKey(for: item) as NSString
+            forKey: ImagePipeline.fullCacheKey(for: item, mode: mode, decoder: decoder) as NSString
         )
     }
 
-    func image(for item: PhotoItem) async -> NSImage? {
+    func image(for item: PhotoItem, mode: RawDisplayMode = .fast, decoder: AppleRawDecoder = .appleDefault) async -> NSImage? {
         guard item.mediaKind == .photo, item.isSupported else { return nil }
-        let key = ImagePipeline.cacheKey(for: item)
+        let key = ImagePipeline.fullCacheKey(for: item, mode: mode, decoder: decoder)
         if let cached = cache.object(forKey: key as NSString) {
             return cached
         }
-        guard let source = await ImagePipeline.shared.fullImage(for: item),
+        guard let source = await ImagePipeline.shared.fullImage(for: item, mode: mode, decoder: decoder),
               let cgImage = source.cgImage(
                 forProposedRect: nil,
                 context: nil,

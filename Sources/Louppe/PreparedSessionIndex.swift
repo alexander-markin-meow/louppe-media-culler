@@ -69,6 +69,8 @@ struct PreparedSessionIndex {
             return
         }
         switch sort.key {
+        case .folderHierarchy:
+            rebuildFolderHierarchySort(items, ascending: sort.ascending)
         case .decision, .starRating, .colorLabel:
             let metadata = items.map(\.metadataState)
             sortedIndices = items.indices.sorted {
@@ -83,6 +85,37 @@ struct PreparedSessionIndex {
             sortedIndices = items.indices.sorted {
                 sort.areInOrder(items[$0], items[$1])
             }
+        }
+    }
+
+    /// Compare each distinct directory only once, then sort by small ranks.
+    /// Large folders should not repeatedly split paths or perform localized
+    /// component comparisons for every pair of photos in the sort.
+    private mutating func rebuildFolderHierarchySort(
+        _ items: [PhotoItem],
+        ascending: Bool
+    ) {
+        var folderIndexByIdentity: [Data: Int] = [:]
+        var folders: [PhotoSort.FolderPath] = []
+        let itemFolders = items.map { item in
+            let identity = PhotoSort.FolderPath.identity(for: item)
+            if let index = folderIndexByIdentity[identity] { return index }
+            let index = folders.count
+            folderIndexByIdentity[identity] = index
+            folders.append(PhotoSort.FolderPath(identity: identity))
+            return index
+        }
+        let orderedFolders = folders.indices.sorted {
+            folders[$0].isOrdered(before: folders[$1], ascending: ascending)
+        }
+        var ranks = Array(repeating: 0, count: folders.count)
+        for (rank, index) in orderedFolders.enumerated() { ranks[index] = rank }
+        let chronological = PhotoSort()
+        sortedIndices = items.indices.sorted {
+            let leftRank = ranks[itemFolders[$0]]
+            let rightRank = ranks[itemFolders[$1]]
+            if leftRank != rightRank { return leftRank < rightRank }
+            return chronological.areInOrder(items[$0], items[$1])
         }
     }
 

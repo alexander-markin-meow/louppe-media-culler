@@ -326,6 +326,7 @@ enum FileOperationJournal {
             }
             let resolvedIdentity: FileIdentity?
             if let identityURL {
+                try FileOperationJournal.requireRegularEntry(at: identityURL)
                 let current = try FileOperationJournal.fileIdentity(
                     at: identityURL
                 )
@@ -529,6 +530,7 @@ enum FileOperationJournal {
                 case .moveToTrash, .restoreFromTrash:
                     temporary = nil
                 }
+                try requireRegularEntry(at: seed.identityURL)
                 let currentIdentity = try fileIdentity(at: seed.identityURL)
                 if kind != .exportCopy,
                    seed.role != .preparedXMP,
@@ -1083,9 +1085,9 @@ enum FileOperationJournal {
             return RecoveredFileCounts()
         }
         let current = try fileIdentity(at: copy)
-        guard try contentDigest(at: copy) == expectedDigest,
-              let recorded = state?.resolvedIdentity,
-              state?.state == .staged || state?.state == .completed,
+        guard let recorded = state?.resolvedIdentity,
+              state?.state == .started || state?.state == .staged
+                || state?.state == .completed,
               identitiesMatch(
                 expected: recorded,
                 actual: current,
@@ -1096,6 +1098,12 @@ enum FileOperationJournal {
             // filename and digest alone.
             throw RecoveryError.unverifiedOwnedFile(copy)
         }
+        if state?.state != .started,
+           try contentDigest(at: copy) != expectedDigest {
+            throw RecoveryError.unverifiedOwnedFile(copy)
+        }
+        // A failed generated write checkpoints its exact partial inode as
+        // started. Rollback owns that inode without requiring complete bytes.
         return try removeRecordedPartialCopy(
             copy,
             temporary: temporary,
@@ -1291,25 +1299,29 @@ enum FileOperationJournal {
             )
         }
 
-        guard pathEntryExists(destination) || candidates.isEmpty else {
-            throw RecoveryError.unverifiedOwnedFile(temporary)
-        }
-        guard pathEntryExists(destination) else {
+        let artifact = sourceExists ? destination : candidates.first
+        guard let artifact else {
             // The worker or an earlier recovery already retired the exact
             // source after the durable completed checkpoint.
             return RecoveredFileCounts()
         }
-        let current = try fileIdentity(at: destination)
+        // Cleanup can crash after transferring the retired packet from its
+        // target to the other journal-owned path. Both names are recoverable.
+        let current = try fileIdentity(at: artifact)
         let expected = state?.resolvedIdentity ?? file.identity
         guard identitiesMatch(
             expected: expected,
             actual: current,
             includeStatusChange: false
         ) else {
-            throw RecoveryError.unverifiedOwnedFile(destination)
+            throw RecoveryError.unverifiedOwnedFile(artifact)
+        }
+        if let digest = file.expectedSourceDigest,
+           try contentDigest(at: artifact) != digest {
+            throw RecoveryError.unverifiedOwnedFile(artifact)
         }
         var result = try removeRecordedPartialCopy(
-            destination,
+            artifact,
             temporary: temporary,
             destination: destination,
             identity: current
@@ -2117,6 +2129,17 @@ enum FileOperationJournal {
         )
     }
 
+    private static func requireRegularEntry(at url: URL) throws {
+        var info = Darwin.stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            path.map { Darwin.lstat($0, &info) } ?? -1
+        }
+        guard result == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+            throw JournalError.missingFileIdentity(url)
+        }
+    }
+
     private static func linkCount(at url: URL) throws -> UInt64 {
         var info = Darwin.stat()
         var status: Int32
@@ -2523,7 +2546,7 @@ enum FileOperationJournal {
             repeat {
                 descriptor = Darwin.open(
                     pointer,
-                    O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+                    O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
                 )
             } while descriptor < 0 && errno == EINTR
             if descriptor < 0 { openFailure = errno }
@@ -2739,6 +2762,9 @@ enum FileOperationJournal {
                 return result
             }
             if status == 0 {
+                guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+                    return false
+                }
                 let identity = "\(UInt64(info.st_dev)):\(UInt64(info.st_ino))"
                 switch role {
                 case .source:

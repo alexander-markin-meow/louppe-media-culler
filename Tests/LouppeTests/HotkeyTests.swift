@@ -7,6 +7,22 @@ import XCTest
 final class HotkeyTests: XCTestCase {
     private static var retainedHostingWindows: [NSWindow] = []
 
+    func testFeedbackPromptOwnsKeysUntilDismissed() {
+        let store = readyStore(itemCount: 3, firstItemIsVideo: false)
+        let view = SessionView(store: store)
+        store.isEarlyUserFeedbackPresented = true
+        XCTAssertTrue(store.isSessionCommandPresentationActive)
+        XCTAssertFalse(view.handleKey(keyEvent(code: 3, characters: "f")))
+        XCTAssertFalse(view.handleKey(keyEvent(code: 37, characters: "l")))
+        XCTAssertFalse(view.handleKey(keyEvent(code: 14, characters: "e")))
+        XCTAssertEqual(store.items[0].rating, .undecided)
+        XCTAssertEqual(store.currentIndex, 0)
+        XCTAssertFalse(store.isExportPresented)
+        store.isEarlyUserFeedbackPresented = false
+        XCTAssertTrue(view.handleKey(keyEvent(code: 3, characters: "f")))
+        XCTAssertEqual(store.items[0].rating, .yes)
+    }
+
     func testArrowKeysNavigateGridEvenWhenCurrentItemIsVideo() {
         let store = readyStore(itemCount: 6, firstItemIsVideo: true)
         store.viewMode = .grid

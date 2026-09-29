@@ -1,0 +1,5 @@
+quota refusal: {"disabled":true,"reloads":0,"staleAcceptancePresent":false}
+quota fresh page: {"scripts":0,"disabled":true}
+unpersistable refusal before older queued event: {"disabled":true,"reloads":0}
+after older queued event: {"disabled":true,"downloads":0,"reloads":0}
+Final quota and queued older acceptance refusal assertions passed

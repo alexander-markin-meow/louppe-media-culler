@@ -1,0 +1,24 @@
+
+> test
+> node --test scripts/*.test.mjs
+
+✔ no analytics request before opt-in or from copied deployments (4.245875ms)
+✔ withdrawal disables every open tab before further download events (0.908458ms)
+✔ download checks revoke consent even if the storage event was missed (0.766417ms)
+✔ storage removal, clear, corrupt data, and expired consent fail closed (1.674125ms)
+✔ focus and visibility reconcile missed consent changes (0.737125ms)
+✔ expiry timer disables an otherwise continuously active tab (0.434208ms)
+✔ revocation while the tag is loading disables it and reacceptance is explicit (0.709666ms)
+✔ blocked storage allows only the current visit’s explicit opt-in (0.424333ms)
+✔ unrelated storage events do not change the current choice (0.401ms)
+✔ write-only storage failure cannot revive stale acceptance through reload (0.870708ms)
+✔ unpersistable withdrawal stays disabled without an automatic reload (0.335041ms)
+✔ draft isolation, publication, validation and withdrawal (663.618666ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 723.639625

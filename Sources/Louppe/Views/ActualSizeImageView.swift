@@ -13,6 +13,11 @@ struct ActualSizeImageView: NSViewRepresentable {
     let onLoading: (Bool) -> Void
     var zoomScale: CGFloat = 1
     var onZoomScaleChanged: (CGFloat, Bool) -> Void = { _, _ in }
+    var previewIsRAW = false
+    var decoder: AppleRawDecoder = .appleDefault
+    var retryGeneration: UInt64 = 0
+    var onRenderingFailure: (Bool) -> Void = { _ in }
+    var onRepresentation: (PhotoRepresentation) -> Void = { _ in }
 
     func makeNSView(context: Context) -> ActualSizeScrollView {
         ActualSizeScrollView()
@@ -30,7 +35,12 @@ struct ActualSizeImageView: NSViewRepresentable {
             onDoubleClick: onDoubleClick,
             onLoading: onLoading,
             zoomScale: zoomScale,
-            onZoomScaleChanged: onZoomScaleChanged
+            onZoomScaleChanged: onZoomScaleChanged,
+            previewIsRAW: previewIsRAW,
+            decoder: decoder,
+            retryGeneration: retryGeneration,
+            onRenderingFailure: onRenderingFailure,
+            onRepresentation: onRepresentation
         )
     }
 
@@ -45,9 +55,21 @@ struct ActualSizeImageView: NSViewRepresentable {
 @MainActor
 final class ActualSizeScrollView: NSScrollView {
     private let canvas = ActualSizeCanvasView()
+    private var sourceLoader: @MainActor (PhotoItem, AppleRawDecoder) async -> ZoomImageSource? = {
+        await HighResolutionImagePipeline.shared.source(for: $0, decoder: $1)
+    }
+    var displayedSourceKey: String? { canvas.source?.key }
+
+    convenience init(sourceLoader: @escaping @MainActor (PhotoItem, AppleRawDecoder) async -> ZoomImageSource?) {
+        self.init(frame: .zero)
+        self.sourceLoader = sourceLoader
+    }
     private var sourceTask: Task<Void, Never>?
     private var currentContentRevision: PhotoContentRevision?
+    private var currentSourceKey: String?
+    private var currentRetryGeneration: UInt64 = 0
     private var sourceGeneration: UInt64 = 0
+    private var representationGeneration: UInt64 = 0
     private var appliedPositionRequestGeneration: UInt64?
     private var backingScale: CGFloat = 1
     private var isApplyingViewport = false
@@ -116,7 +138,12 @@ final class ActualSizeScrollView: NSScrollView {
         onDoubleClick: @escaping () -> Void = {},
         onLoading: @escaping (Bool) -> Void,
         zoomScale: CGFloat = 1,
-        onZoomScaleChanged: @escaping (CGFloat, Bool) -> Void = { _, _ in }
+        onZoomScaleChanged: @escaping (CGFloat, Bool) -> Void = { _, _ in },
+        previewIsRAW: Bool = false,
+        decoder: AppleRawDecoder = .appleDefault,
+        retryGeneration: UInt64 = 0,
+        onRenderingFailure: @escaping (Bool) -> Void = { _ in },
+        onRepresentation: @escaping (PhotoRepresentation) -> Void = { _ in }
     ) {
         self.viewport = viewport
         self.onLoading = onLoading
@@ -130,13 +157,36 @@ final class ActualSizeScrollView: NSScrollView {
             self?.onLoading(active)
         }
         canvas.onDoubleClick = onDoubleClick
+        representationGeneration &+= 1
+        let representationGeneration = self.representationGeneration
+        canvas.previewIsRAW = previewIsRAW
+        canvas.onRenderingFailure = { [weak self] failed in
+            let generation = self?.sourceGeneration
+            Task { @MainActor [weak self] in
+                guard let self, self.sourceGeneration == generation,
+                      self.representationGeneration == representationGeneration else { return }
+                onRenderingFailure(failed)
+            }
+        }
+        canvas.onRepresentation = { [weak self] representation in
+            guard let self else { return }
+            let generation = self.sourceGeneration
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.sourceGeneration == generation,
+                      self.representationGeneration == representationGeneration,
+                      self.currentContentRevision == item.contentRevision else { return }
+                onRepresentation(representation)
+            }
+        }
         canvas.setPreview(preview)
         let clippingChanged = canvas.setShowsClippingWarnings(
             showsClippingWarnings
         )
 
         let requestedRevision = item.contentRevision
-        let itemChanged = currentContentRevision != requestedRevision
+        let sourceKey = HighResolutionImagePipeline.sourceKey(for: item, decoder: decoder)
+        let itemChanged = currentContentRevision != requestedRevision || currentSourceKey != sourceKey || currentRetryGeneration != retryGeneration
         if itemChanged {
             if zoomAnimationTask != nil {
                 // The store has already requested the centered S destination.
@@ -148,18 +198,18 @@ final class ActualSizeScrollView: NSScrollView {
             }
             pendingPlacement = nil
             currentContentRevision = requestedRevision
+            currentSourceKey = sourceKey
+            currentRetryGeneration = retryGeneration
             sourceGeneration &+= 1
             let generation = sourceGeneration
             sourceTask?.cancel()
-            canvas.beginItem(key: ImagePipeline.cacheKey(for: item))
+            canvas.beginItem(key: "\(sourceKey)|retry-\(retryGeneration)")
             HighResolutionImagePipeline.shared.cancelTileRequests(
                 exceptSourceKey: nil
             )
             sourceTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                let source = await HighResolutionImagePipeline.shared.source(
-                    for: item
-                )
+                let source = await self.sourceLoader(item, decoder)
                 guard !Task.isCancelled,
                       self.sourceGeneration == generation,
                       self.currentContentRevision == requestedRevision
@@ -204,6 +254,7 @@ final class ActualSizeScrollView: NSScrollView {
             updateAccessibilityZoomLabel()
         }
         canvas.setUsesSourceTiles(magnification >= 1)
+        canvas.reportRepresentation()
 
         if positionRequestChanged {
             appliedPositionRequestGeneration =
@@ -237,6 +288,7 @@ final class ActualSizeScrollView: NSScrollView {
         sourceTask = nil
         sourceGeneration &+= 1
         currentContentRevision = nil
+        currentSourceKey = nil
         canvas.prepareForRemoval()
         HighResolutionImagePipeline.shared.cancelTileRequests(
             exceptSourceKey: nil
@@ -460,6 +512,7 @@ final class ActualSizeScrollView: NSScrollView {
         }
         isApplyingViewport = false
         canvas.updateVisibleRect(contentView.documentVisibleRect)
+        canvas.reportRepresentation()
     }
 
     private func updateBackingScale() {
@@ -555,6 +608,12 @@ private final class ActualSizeCanvasView: NSView {
     var onPanMove: (CGPoint) -> Void = { _ in }
     var onPanEnd: () -> Void = {}
     private var isPhotoPanning = false
+    var previewIsRAW = false
+    var onRepresentation: (PhotoRepresentation) -> Void = { _ in }
+    var onRenderingFailure: (Bool) -> Void = { _ in }
+    private var visibleCoordinates: Set<ZoomTileCoordinate> = []
+    private var failedCoordinates: Set<ZoomTileCoordinate> = []
+    private var sourceFailed = false
 
     private var itemKey: String?
     private var preview: NSImage?
@@ -573,6 +632,9 @@ private final class ActualSizeCanvasView: NSView {
         cancelPhotoPan()
         stopReportingActivity()
         itemKey = key
+        sourceFailed = false
+        visibleCoordinates = []
+        failedCoordinates = []
         source = nil
         tiles = [:]
         pending = []
@@ -592,6 +654,7 @@ private final class ActualSizeCanvasView: NSView {
     func setUsesSourceTiles(_ value: Bool) {
         guard usesSourceTiles != value else { return }
         usesSourceTiles = value
+        failedCoordinates = []
         if !value {
             stopReportingActivity()
             generation &+= 1
@@ -606,6 +669,7 @@ private final class ActualSizeCanvasView: NSView {
                 )
             }
         }
+        reportRepresentation()
         needsDisplay = true
     }
 
@@ -614,6 +678,7 @@ private final class ActualSizeCanvasView: NSView {
         guard showsClippingWarnings != value else { return false }
         stopReportingActivity()
         showsClippingWarnings = value
+        failedCoordinates = []
         tiles = [:]
         pending = []
         wanted = []
@@ -630,6 +695,9 @@ private final class ActualSizeCanvasView: NSView {
         backingScale: CGFloat
     ) {
         self.source = source
+        sourceFailed = source == nil
+        failedCoordinates = []
+        visibleCoordinates = []
         self.backingScale = validScale(backingScale)
         tiles = [:]
         pending = []
@@ -704,6 +772,12 @@ private final class ActualSizeCanvasView: NSView {
                 }
             }
         }
+        visibleCoordinates = Set(coordinates.filter { coordinate in
+            guard let rect = coordinate.pixelRect(sourceSize: source.pixelSize) else { return false }
+            let intersection = rect.intersection(sourceRect)
+            return !intersection.isNull && !intersection.isEmpty
+        })
+        failedCoordinates.formIntersection(coordinates)
         wanted = coordinates
         tiles = tiles.filter { coordinates.contains($0.key) }
         HighResolutionImagePipeline.shared.retainTileRequests(
@@ -828,7 +902,7 @@ private final class ActualSizeCanvasView: NSView {
     }
 
     private func requestMissingTiles(source: ZoomImageSource) {
-        let missing = wanted.subtracting(tiles.keys).subtracting(pending)
+        let missing = wanted.subtracting(tiles.keys).subtracting(pending).subtracting(failedCoordinates)
         guard !missing.isEmpty else {
             updateActivityReport()
             return
@@ -848,8 +922,11 @@ private final class ActualSizeCanvasView: NSView {
                 self.pending.remove(coordinate)
                 defer { self.updateActivityReport() }
                 guard self.source?.key == source.key,
-                      self.wanted.contains(coordinate),
-                      let tile else { return }
+                      self.wanted.contains(coordinate) else { return }
+                guard let tile else {
+                    self.failedCoordinates.insert(coordinate)
+                    return
+                }
                 let pointSize = CGSize(
                     width: tile.pixelRect.width / self.backingScale,
                     height: tile.pixelRect.height / self.backingScale
@@ -871,7 +948,20 @@ private final class ActualSizeCanvasView: NSView {
         }
     }
 
+    func reportRepresentation() {
+        onRenderingFailure(sourceFailed || !failedCoordinates.isDisjoint(with: visibleCoordinates))
+        onRepresentation(PhotoRepresentation.viewport(
+            hasSource: source != nil,
+            usesTiles: usesSourceTiles,
+            visibleTilesReady: !visibleCoordinates.isEmpty && visibleCoordinates.isSubset(of: Set(tiles.keys)),
+            hasPreview: preview != nil,
+            previewIsRAW: previewIsRAW,
+            failed: sourceFailed || !failedCoordinates.isDisjoint(with: visibleCoordinates)
+        ))
+    }
+
     private func updateActivityReport() {
+        reportRepresentation()
         let active = !pending.isEmpty
         guard active != reportsTileActivity else { return }
         reportsTileActivity = active

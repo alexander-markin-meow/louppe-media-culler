@@ -16,26 +16,44 @@ extension Color {
 /// welcome screen → scanning progress → the culling session.
 struct RootView: View {
     @ObservedObject var store: SessionStore
+    @AppStorage(EarlyUserFeedback.shownKey) private var hasShownEarlyUserFeedback = false
+    @State private var welcomeContentSize: CGSize = .zero
+    @State private var warningHeight: CGFloat = 0
+    @State private var availableContentSize: CGSize?
 
     var body: some View {
         Group {
             switch store.phase {
             case .welcome:
-                WelcomeView(store: store)
+                WelcomeView(
+                    store: store,
+                    availableScreenWidth: availableContentSize?.width
+                        ?? NSScreen.main?.visibleFrame.width ?? 1280,
+                    scrollsVertically: MainWindowLayout.welcome.needsVerticalScrolling(
+                        measuredWelcome: welcomeContentSize,
+                        warningHeight: warningHeight,
+                        availableContentSize: availableContentSize
+                    )
+                )
             case .scanning(let found):
                 ScanningView(store: store, found: found)
             case .ready:
                 SessionView(store: store)
             }
         }
+        .sheet(isPresented: $store.isEarlyUserFeedbackPresented) {
+            EarlyUserFeedbackView()
+                .onAppear { hasShownEarlyUserFeedback = true }
+        }
+        .task(id: canPresentEarlyUserFeedback) {
+            if canPresentEarlyUserFeedback {
+                store.isEarlyUserFeedbackPresented = true
+            }
+        }
         .accessibilityHidden(store.isRecoveringInterruptedOperations)
         // Tint every standard control (buttons, links, pickers, toggles,
         // progress bars — including sheets and popovers) with the brand purple.
         .tint(Color.louppeAccent)
-        .frame(
-            minWidth: windowLayout.minimumContentSize.width,
-            minHeight: windowLayout.minimumContentSize.height
-        )
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if store.recoveryNeedsAttention {
@@ -56,7 +74,21 @@ struct RootView: View {
                 }
             }
             .accessibilityHidden(store.isRecoveringInterruptedOperations)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: WindowWarningSizeKey.self,
+                        value: geometry.size
+                    )
+                }
+            }
         }
+        .frame(
+            minWidth: minimumContentSize.width,
+            minHeight: minimumContentSize.height
+        )
+        .onPreferenceChange(WelcomeContentSizeKey.self) { welcomeContentSize = $0 }
+        .onPreferenceChange(WindowWarningSizeKey.self) { warningHeight = $0.height }
         .overlay {
             if store.isRecoveringInterruptedOperations {
                 InterruptedOperationRecoveryOverlay()
@@ -75,16 +107,43 @@ struct RootView: View {
         // The same NSWindow survives all three phases. Welcome/Scanning use a
         // compact full-size-content layout; the active session expands and
         // opts out so photos cannot scroll behind the glass toolbar.
-        .background(WindowContentLayout(layout: windowLayout))
+        .background(WindowContentLayout(
+            layout: windowLayout,
+            minimumContentSize: minimumContentSize,
+            onAvailableContentSizeChange: { availableContentSize = $0 }
+        ))
+    }
+
+    private var canPresentEarlyUserFeedback: Bool {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? ""
+        guard EarlyUserFeedback.shouldPresent(
+            version: version,
+            hasBeenShown: hasShownEarlyUserFeedback
+        ), !store.isFileOperationRunning,
+           !store.isXMPPublicationRunning,
+           !store.isSessionCommandPresentationActive else { return false }
+        if case .scanning = store.phase { return false }
+        return true
     }
 
     private var windowLayout: MainWindowLayout {
         switch store.phase {
-        case .welcome, .scanning:
-            return .launch
+        case .welcome:
+            return .welcome
+        case .scanning:
+            return .scanning
         case .ready:
             return .session
         }
+    }
+
+    private var minimumContentSize: CGSize {
+        windowLayout.minimumContentSize(
+            measuredWelcome: welcomeContentSize,
+            warningHeight: warningHeight,
+            availableContentSize: availableContentSize
+        )
     }
 
     private var operationRecoveryReportIsPresented: Binding<Bool> {
@@ -224,26 +283,77 @@ private struct PersistenceWarningBanner: View {
     }
 }
 
-private enum MainWindowLayout: Equatable {
-    case launch
+/// Welcome reports its padded intrinsic content before its outer fill frame.
+/// The measurement therefore describes needed space, not the current window.
+struct WelcomeContentSizeKey: PreferenceKey {
+    static let defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        value.width = max(value.width, next.width)
+        value.height = max(value.height, next.height)
+    }
+}
+
+private struct WindowWarningSizeKey: PreferenceKey {
+    static let defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        value.width = max(value.width, next.width)
+        value.height = max(value.height, next.height)
+    }
+}
+
+enum MainWindowLayout: Equatable {
+    case welcome
+    case scanning
     case session
 
-    var usesFullSizeContent: Bool {
-        self == .launch
-    }
+    var usesFullSizeContent: Bool { self != .session }
 
     var minimumContentSize: CGSize {
         switch self {
-        case .launch:
+        case .welcome:
+            return CGSize(width: 456, height: 180)
+        case .scanning:
             return CGSize(width: 520, height: 520)
         case .session:
             return CGSize(width: 900, height: 600)
         }
     }
 
+    func minimumContentSize(
+        measuredWelcome: CGSize,
+        warningHeight: CGFloat,
+        availableContentSize: CGSize? = nil
+    ) -> CGSize {
+        let measured = self == .welcome ? measuredWelcome : .zero
+        let requiredHeight = ceil(max(minimumContentSize.height, measured.height)
+            + max(0, warningHeight))
+        return CGSize(
+            width: ceil(max(minimumContentSize.width, measured.width)),
+            height: self == .welcome
+                ? min(requiredHeight, availableContentSize?.height ?? requiredHeight)
+                : requiredHeight
+        )
+    }
+
+    func needsVerticalScrolling(
+        measuredWelcome: CGSize,
+        warningHeight: CGFloat,
+        availableContentSize: CGSize?
+    ) -> Bool {
+        guard self == .welcome, let availableContentSize else { return false }
+        return ceil(measuredWelcome.height + max(0, warningHeight))
+            > availableContentSize.height
+    }
+
     var preferredContentSize: CGSize {
         switch self {
-        case .launch:
+        case .welcome:
+            return minimumContentSize
+        case .scanning:
             return CGSize(width: 560, height: 560)
         case .session:
             return CGSize(width: 1100, height: 700)
@@ -253,54 +363,170 @@ private enum MainWindowLayout: Equatable {
 
 /// Keeps the persistent app window's size and content layout in sync with the
 /// current SwiftUI phase. Window corner geometry remains entirely system-owned.
-private struct WindowContentLayout: NSViewRepresentable {
+struct WindowContentLayout: NSViewRepresentable {
     let layout: MainWindowLayout
+    /// Required usable area, excluding the native titlebar and toolbar.
+    let minimumContentSize: CGSize
+    var onAvailableContentSizeChange: (CGSize) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSView {
         let view = Configurator()
-        view.layout = layout
+        view.windowLayout = layout
+        view.minimumContentSize = minimumContentSize
+        view.onAvailableContentSizeChange = onAvailableContentSizeChange
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let view = nsView as? Configurator else { return }
-        view.layout = layout
+        view.windowLayout = layout
+        view.minimumContentSize = minimumContentSize
+        view.onAvailableContentSizeChange = onAvailableContentSizeChange
         view.apply()
     }
 
-    private final class Configurator: NSView {
-        var layout = MainWindowLayout.launch
+    final class Configurator: NSView {
+        var windowLayout = MainWindowLayout.welcome
+        var minimumContentSize = MainWindowLayout.welcome.minimumContentSize
         private var appliedLayout: MainWindowLayout?
+        var onAvailableContentSizeChange: (CGSize) -> Void = { _ in }
+        private var isApplying = false
+        private var reportedAvailableContentSize: CGSize?
+        private var shouldFitToCurrentScreen = false
+
+        deinit { NotificationCenter.default.removeObserver(self) }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(
+                self, name: NSWindow.didChangeScreenNotification, object: nil
+            )
+            NotificationCenter.default.removeObserver(
+                self, name: NSApplication.didChangeScreenParametersNotification, object: nil
+            )
+            if let window {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(screenChanged),
+                    name: NSWindow.didChangeScreenNotification, object: window
+                )
+                // Resolution, scaling, and display arrangement can change
+                // while this window remains on the same NSScreen instance.
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(screenChanged),
+                    name: NSApplication.didChangeScreenParametersNotification, object: nil
+                )
+            }
+            apply()
+            // SwiftUI may install the native toolbar after attaching this
+            // bridge. Recheck once then; later layout passes track its inset.
+            DispatchQueue.main.async { [weak self] in self?.apply() }
+        }
+
+        override func layout() {
+            super.layout()
             apply()
         }
 
+        @objc private func screenChanged() {
+            shouldFitToCurrentScreen = true
+            apply()
+        }
+
+        private func reportAvailableContentSize(_ size: CGSize) {
+            guard size != reportedAvailableContentSize else { return }
+            reportedAvailableContentSize = size
+            // Defer SwiftUI state changes out of native layout; retain only
+            // the newest display/toolbar measurement during reflow.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.reportedAvailableContentSize == size,
+                      self.window != nil else { return }
+                self.onAvailableContentSizeChange(size)
+            }
+        }
+
         func apply() {
-            guard let window else { return }
-            if window.styleMask.contains(.fullSizeContentView) != layout.usesFullSizeContent {
-                if layout.usesFullSizeContent {
+            guard let window, !isApplying else { return }
+            isApplying = true
+            defer { isApplying = false }
+            if window.styleMask.contains(.fullSizeContentView) != windowLayout.usesFullSizeContent {
+                if windowLayout.usesFullSizeContent {
                     window.styleMask.insert(.fullSizeContentView)
                 } else {
                     window.styleMask.remove(.fullSizeContentView)
                 }
             }
 
-            window.contentMinSize = layout.minimumContentSize
-            guard appliedLayout != layout else { return }
-            appliedLayout = layout
+            let current = window.contentRect(forFrameRect: window.frame).size
+            let usable = window.contentLayoutRect.size
+            let covered = CGSize(
+                width: max(0, current.width - usable.width),
+                height: max(0, current.height - usable.height)
+            )
+            let available = window.screen.map {
+                window.contentRect(forFrameRect: $0.visibleFrame).size
+            }
+            if let available {
+                reportAvailableContentSize(CGSize(
+                    width: max(1, available.width - covered.width),
+                    height: max(1, available.height - covered.height)
+                ))
+            }
+            let nativeMinimum = CGSize(
+                width: minimumContentSize.width + covered.width,
+                height: windowLayout == .welcome
+                    ? min(minimumContentSize.height + covered.height,
+                          available?.height ?? .greatestFiniteMagnitude)
+                    : minimumContentSize.height + covered.height
+            )
+            window.contentMinSize = nativeMinimum
 
-            switch layout {
-            case .launch:
-                window.setContentSize(layout.preferredContentSize)
-            case .session:
-                let current = window.contentLayoutRect.size
-                if current.width < layout.preferredContentSize.width
-                    || current.height < layout.preferredContentSize.height {
-                    window.setContentSize(layout.preferredContentSize)
+            let changedPhase = appliedLayout != windowLayout
+            let wasLaunch = appliedLayout?.usesFullSizeContent == true
+            appliedLayout = windowLayout
+            var target = current
+            if changedPhase {
+                let preferred = CGSize(
+                    width: windowLayout.preferredContentSize.width + covered.width,
+                    height: windowLayout.preferredContentSize.height + covered.height
+                )
+                if windowLayout == .welcome {
+                    target = nativeMinimum
+                } else if windowLayout == .session {
+                    target = available ?? preferred
+                } else if !wasLaunch {
+                    target = preferred
                 }
             }
+            target.width = max(target.width, nativeMinimum.width)
+            target.height = max(target.height, nativeMinimum.height)
+            if windowLayout == .session, shouldFitToCurrentScreen, let available {
+                target.width = max(available.width, nativeMinimum.width)
+                target.height = max(available.height, nativeMinimum.height)
+                shouldFitToCurrentScreen = false
+            }
+            if windowLayout == .welcome, let available {
+                // Vertical overflow remains reachable through the welcome
+                // scroll fallback. Width waits for the columns to reflow.
+                target.height = min(target.height, available.height)
+                if shouldFitToCurrentScreen, nativeMinimum.width <= available.width {
+                    target.width = min(target.width, available.width)
+                    shouldFitToCurrentScreen = false
+                }
+            }
+            guard target != current else { return }
+            window.setContentSize(target)
+            keepWindowOnScreen(window)
+        }
+
+        private func keepWindowOnScreen(_ window: NSWindow) {
+            guard let visible = window.screen?.visibleFrame,
+                  window.frame.width <= visible.width,
+                  window.frame.height <= visible.height else { return }
+            let origin = CGPoint(
+                x: min(max(window.frame.minX, visible.minX), visible.maxX - window.frame.width),
+                y: min(max(window.frame.minY, visible.minY), visible.maxY - window.frame.height)
+            )
+            if window.frame.origin != origin { window.setFrameOrigin(origin) }
         }
     }
 }

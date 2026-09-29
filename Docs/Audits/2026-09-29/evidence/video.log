@@ -1,0 +1,59 @@
+Sources/Louppe/VideoPlaybackController.swift:349:23: warning: 'AVPlayerItemDidPlayToEndTime' was deprecated in macOS 27.0: Use AVPlayerItem.didPlayToEndTimeNotification instead. [#DeprecatedDeclaration]
+347 |         removeObservers()
+348 |         endObserver.replace(with: NotificationCenter.default.addObserver(
+349 |             forName: .AVPlayerItemDidPlayToEndTime,
+    |                       `- warning: 'AVPlayerItemDidPlayToEndTime' was deprecated in macOS 27.0: Use AVPlayerItem.didPlayToEndTimeNotification instead. [#DeprecatedDeclaration]
+350 |             object: playerItem,
+351 |             queue: .main
+
+Sources/Louppe/VideoPlaybackController.swift:362:23: warning: 'AVPlayerItemFailedToPlayToEndTime' was deprecated in macOS 27.0: Use AVPlayerItem.failedToPlayToEndTimeNotification instead. [#DeprecatedDeclaration]
+360 |         })
+361 |         failureObserver.replace(with: NotificationCenter.default.addObserver(
+362 |             forName: .AVPlayerItemFailedToPlayToEndTime,
+    |                       `- warning: 'AVPlayerItemFailedToPlayToEndTime' was deprecated in macOS 27.0: Use AVPlayerItem.failedToPlayToEndTimeNotification instead. [#DeprecatedDeclaration]
+363 |             object: playerItem,
+364 |             queue: .main
+
+[#DeprecatedDeclaration]: <https://docs.swift.org/compiler/documentation/diagnostics/deprecated-declaration>
+Tests/VideoChecks/main.swift:183:15: warning: 'expectsMediaDataInRealTime' was deprecated in macOS 27.0: Use the input receiver's appendImmediately(...) method instead [#DeprecatedDeclaration]
+181 |             ]
+182 |         )
+183 |         input.expectsMediaDataInRealTime = false
+    |               `- warning: 'expectsMediaDataInRealTime' was deprecated in macOS 27.0: Use the input receiver's appendImmediately(...) method instead [#DeprecatedDeclaration]
+184 |         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+185 |             assetWriterInput: input,
+
+Tests/VideoChecks/main.swift:184:23: warning: 'AVAssetWriterInputPixelBufferAdaptor' was deprecated in macOS 27.0: Use AVAssetWriter.inputPixelBufferReceiver(for:pixelBufferAttributes:) instead [#DeprecatedDeclaration]
+182 |         )
+183 |         input.expectsMediaDataInRealTime = false
+184 |         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+    |                       `- warning: 'AVAssetWriterInputPixelBufferAdaptor' was deprecated in macOS 27.0: Use AVAssetWriter.inputPixelBufferReceiver(for:pixelBufferAttributes:) instead [#DeprecatedDeclaration]
+185 |             assetWriterInput: input,
+186 |             sourcePixelBufferAttributes: [
+
+Tests/VideoChecks/main.swift:193:16: warning: 'add' was deprecated in macOS 27.0: Use the appropriate AVAssetWriter.inputReceiver(for:...) overload for your input and optional adaptor instead [#DeprecatedDeclaration]
+191 |         )
+192 |         guard writer.canAdd(input) else { throw CheckFailure("ProRes writer input was rejected") }
+193 |         writer.add(input)
+    |                `- warning: 'add' was deprecated in macOS 27.0: Use the appropriate AVAssetWriter.inputReceiver(for:...) overload for your input and optional adaptor instead [#DeprecatedDeclaration]
+194 |         guard writer.startWriting() else {
+195 |             throw writer.error ?? CheckFailure("movie writer did not start")
+
+Tests/VideoChecks/main.swift:194:22: warning: 'startWriting()' was deprecated in macOS 27.0: Use start() instead [#DeprecatedDeclaration]
+192 |         guard writer.canAdd(input) else { throw CheckFailure("ProRes writer input was rejected") }
+193 |         writer.add(input)
+194 |         guard writer.startWriting() else {
+    |                      `- warning: 'startWriting()' was deprecated in macOS 27.0: Use start() instead [#DeprecatedDeclaration]
+195 |             throw writer.error ?? CheckFailure("movie writer did not start")
+196 |         }
+
+Tests/VideoChecks/main.swift:204:26: warning: 'isReadyForMoreMediaData' was deprecated in macOS 27.0: Use the input receiver's async append(...) method instead [#DeprecatedDeclaration]
+202 |         ]
+203 |         for (time, color) in frames {
+204 |             while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
+    |                          `- warning: 'isReadyForMoreMediaData' was deprecated in macOS 27.0: Use the input receiver's async append(...) method instead [#DeprecatedDeclaration]
+205 |             guard let buffer = makePixelBuffer(color: color), adaptor.append(buffer, withPresentationTime: time) else {
+206 |                 throw writer.error ?? CheckFailure("movie frame append failed")
+
+[#DeprecatedDeclaration]: <https://docs.swift.org/compiler/documentation/diagnostics/deprecated-declaration>
+Media checks passed

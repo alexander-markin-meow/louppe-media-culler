@@ -1,16 +1,41 @@
 import SwiftUI
 
 /// Compact Gallery zoom control. Fit is an explicit state; the slider shows
-/// source-pixel magnification from 5% to 400% on a logarithmic scale.
+/// source-pixel magnification from 30% to 400% on a logarithmic scale.
 struct PhotoZoomControl: View {
     @ObservedObject var store: SessionStore
     @State private var lastReading: ZoomReading?
+    @AppStorage(RawDisplayMode.preferenceKey) private var rawDisplayMode = RawDisplayMode.fast
+    @AppStorage(AppleRawDecoder.preferenceKey) private var rawDecoder = AppleRawDecoder.appleDefault
 
-    private let minimum = Double(ActualSizeGeometry.minimumZoom)
+    private let minimum = 0.30
     private let maximum = Double(ActualSizeGeometry.maximumZoom)
 
     var body: some View {
         HStack(spacing: 5) {
+            if store.currentItem?.isRaw == true {
+                Menu {
+                    Picker("RAW display", selection: $rawDisplayMode) {
+                        ForEach(RawDisplayMode.allCases, id: \.self) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    Picker("Apple RAW decoder", selection: $rawDecoder) {
+                        ForEach(AppleRawDecoder.allCases, id: \.self) { decoder in
+                            Text(decoder.title).tag(decoder)
+                                .disabled(decoder == .raw9 && !AppleRawDecoder.supportsRAW9)
+                        }
+                    }
+                } label: {
+                    Text(store.currentPhotoRepresentation?.label ?? "…")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("RAW display and decoder. RAW 9 uses more time and memory and requires a supported file on macOS 27.")
+                .accessibilityLabel("RAW display")
+                .accessibilityValue("\(store.currentPhotoRepresentation?.label ?? "Loading"), \(rawDecoder.title)")
+            }
             Button("Fit") { store.zoomToFit() }
                 .buttonStyle(.bordered)
                 .fontWeight(store.zoomMode == .fit ? .semibold : .regular)
@@ -22,7 +47,7 @@ struct PhotoZoomControl: View {
                 .disabled(displayedScale == nil)
                 .accessibilityLabel("Photo zoom")
                 .accessibilityValue(currentValueLabel)
-                .help("Zoom from 5% to 400%. At 100%, one source pixel fills one display pixel.")
+                .help("Zoom from 30% to 400%. At 100%, one source pixel fills one display pixel.")
 
             Text(currentValueLabel)
                 .font(.caption.monospacedDigit())
@@ -49,7 +74,7 @@ struct PhotoZoomControl: View {
     private var displayedScale: CGFloat? {
         if let reading = currentReading { return reading.scale }
         // Fit/Phone report their scale after layout. Hold the current photo's
-        // last value during that handoff: sending the native slider to 5%
+        // last value during that handoff: resetting the native slider
         // and disabling/re-enabling it interrupts its knob/track animation.
         guard lastReading?.revision == store.currentItem?.contentRevision
         else { return nil }
@@ -64,9 +89,7 @@ struct PhotoZoomControl: View {
     private var sliderValue: Binding<Double> {
         Binding(
             get: {
-                let scale = Double(ActualSizeGeometry.clampedZoom(
-                    displayedScale ?? ActualSizeGeometry.minimumZoom
-                ))
+                let scale = min(max(Double(displayedScale ?? minimum), minimum), maximum)
                 return log(scale / minimum) / log(maximum / minimum)
             },
             set: { fraction in

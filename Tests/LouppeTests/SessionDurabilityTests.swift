@@ -2767,7 +2767,7 @@ final class SessionDurabilityTests: XCTestCase {
 
         store.openFolder(openedFolder)
         try await waitForScanError(
-            containing: "different folder path",
+            containing: "saved ratings from a different location",
             in: store
         )
         XCTAssertTrue(store.canOpenMismatchedSessionAnyway)
@@ -2999,6 +2999,374 @@ final class SessionDurabilityTests: XCTestCase {
         XCTAssertEqual(migrated.entries.first?.filename, "A.png")
         XCTAssertEqual(migrated.entries.first?.rating, Rating.yes.rawValue)
         XCTAssertFalse(migrated.entries.contains { $0.filename == "B.png" })
+    }
+
+    func testCommittedSidecarRequiresDirectoryFlushOrDurableBackupBeforeSuccess() async throws {
+        let fixture = try makeFixture(named: "SidecarFlushFailure")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let failures = PersistenceFailureSwitch()
+        failures.setEnabled(true)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+                }
+            },
+            beforeBackupValidationForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "write", path: "backup", code: ENOSPC)
+                }
+            },
+            beforeDirectorySyncRetryForTesting: { _ in
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+                }
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        let failed = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(failed, .failed(.init(sidecar: .other, backup: .outOfSpace)))
+        XCTAssertFalse(failed.canDiscardInMemoryState)
+        XCTAssertEqual(try readSidecar(in: fixture.photos)?.snapshotGeneration, 1)
+        XCTAssertEqual(try readSidecar(in: fixture.photos)?.entries.first?.rating, Rating.yes.rawValue)
+
+        // Visible bytes remain our CAS lineage, but must not supersede Retry.
+        failures.setEnabled(false)
+        let retried = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(retried, .savedToSidecar)
+        XCTAssertEqual(try readSidecar(in: fixture.photos)?.snapshotGeneration, 2)
+        let superseded = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(superseded, .superseded)
+    }
+
+    func testCommittedSidecarRecoversWithARealDirectoryFlushEvenWithoutBackup() async throws {
+        let fixture = try makeFixture(named: "RetrySidecarDirectoryFlush")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        // A regular file cannot host a backup snapshot.
+        try Data("not a directory".utf8).write(to: fixture.backup)
+        let flushReached = DispatchSemaphore(value: 0)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+            },
+            beforeDirectorySyncRetryForTesting: { _ in flushReached.signal() }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        let flushAttempt = await waitForSemaphore(flushReached)
+        XCTAssertEqual(flushAttempt, .success)
+        XCTAssertEqual(result, .savedToSidecar)
+        XCTAssertTrue(result.canDiscardInMemoryState)
+    }
+
+    func testFailedSidecarFlushUsesDurableBackupAndReportsBackupSuccess() async throws {
+        let fixture = try makeFixture(named: "SidecarFlushBackupFallback")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+            },
+            beforeDirectorySyncRetryForTesting: { _ in
+                throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(result, .savedToBackup(sidecarFailure: .other))
+        XCTAssertTrue(result.canDiscardInMemoryState)
+        let backup = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: fixture.backup, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try readSession(at: backup).entries.first?.rating, Rating.yes.rawValue)
+    }
+
+    func testOfflineBackupRenameWithFailedFlushRemainsRetryable() async throws {
+        let fixture = try makeFixture(named: "OfflineBackupFlushFailure")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let failures = PersistenceFailureSwitch()
+        failures.setEnabled(true)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterBackupReplaceForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "backup", code: ENOSPC)
+                }
+            },
+            beforeDirectorySyncRetryForTesting: { _ in
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "backup", code: ENOSPC)
+                }
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .no)
+        let disconnected = fixture.root.appendingPathComponent("Disconnected", isDirectory: true)
+        try FileManager.default.moveItem(at: fixture.photos, to: disconnected)
+        let failed = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(failed, .failed(.init(sidecar: .volumeUnavailable, backup: .outOfSpace)))
+        XCTAssertFalse(failed.canDiscardInMemoryState)
+        let backup = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: fixture.backup, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try readSession(at: backup).snapshotGeneration, 1)
+
+        failures.setEnabled(false)
+        let retried = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(retried, .savedToBackup(sidecarFailure: .volumeUnavailable))
+        XCTAssertEqual(try readSession(at: backup).snapshotGeneration, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.photos.path))
+    }
+
+    func testFailedBackupAfterSidecarDisconnectStillAdoptsOwnCommitOnReconnect() async throws {
+        let fixture = try makeFixture(named: "BothFailAfterDisconnect")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let disconnected = fixture.root.appendingPathComponent("Disconnected", isDirectory: true)
+        let folder = fixture.photos
+        let disconnectOnce = OneShotFlag()
+        let failures = PersistenceFailureSwitch()
+        failures.setEnabled(true)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                if disconnectOnce.take() {
+                    try FileManager.default.moveItem(at: folder, to: disconnected)
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: ENODEV)
+                }
+            },
+            beforeBackupValidationForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "write", path: "backup", code: ENOSPC)
+                }
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        let failed = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(failed, .failed(.init(sidecar: .volumeUnavailable, backup: .outOfSpace)))
+        try FileManager.default.moveItem(at: disconnected, to: fixture.photos)
+        failures.setEnabled(false)
+        let retried = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(retried, .savedToSidecar)
+        XCTAssertEqual(try readSidecar(in: fixture.photos)?.snapshotGeneration, 2)
+    }
+
+    func testUnsyncedVisibleSidecarCannotMakeDirtySessionSafeForQuit() async throws {
+        let fixture = try makeFixture(named: "QuitAfterDirectoryFlushFailure")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let failures = PersistenceFailureSwitch()
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+                }
+            },
+            beforeBackupValidationForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "write", path: "backup", code: ENOSPC)
+                }
+            },
+            beforeDirectorySyncRetryForTesting: { _ in
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+                }
+            }
+        )
+        let store = SessionStore(persistence: persistence, saveTrailingDelay: 10, saveMaximumDelay: 20)
+        store.openFolder(fixture.photos)
+        try await waitForReadySession(store)
+        _ = try await waitForSidecar(in: fixture.photos) { $0.entries.first?.rating == Rating.undecided.rawValue }
+        let initialIdle = await store.waitForPersistenceIdleForTesting()
+        XCTAssertTrue(initialIdle)
+        failures.setEnabled(true)
+        store.rate(.yes, at: 0)
+        store.beginTerminationPreparation()
+        let quitResult = await store.saveSessionForTermination()
+        XCTAssertEqual(quitResult, .failed(.init(sidecar: .other, backup: .outOfSpace)))
+        XCTAssertEqual(quitResult?.canDiscardInMemoryState, false)
+        guard case .ready = store.phase else { return XCTFail("failed save discarded the session") }
+        XCTAssertEqual(store.items.first?.rating, .yes)
+        let failedIdle = await store.waitForPersistenceIdleForTesting()
+        XCTAssertTrue(failedIdle)
+        XCTAssertTrue(store.canRetryPersistence)
+        XCTAssertNotEqual(store.sessionSaveStatus, "Saved")
+        XCTAssertNotNil(store.persistenceWarning)
+
+        store.cancelTerminationPreparation()
+        failures.setEnabled(false)
+        store.beginTerminationPreparation()
+        let retriedQuitResult = await store.saveSessionForTermination()
+        XCTAssertEqual(retriedQuitResult, .savedToSidecar)
+        XCTAssertEqual(retriedQuitResult?.canDiscardInMemoryState, true)
+        XCTAssertEqual(try readSidecar(in: fixture.photos)?.entries.first?.rating, Rating.yes.rawValue)
+        // The final-save caller receives the worker result before the separate
+        // UI completion observer necessarily retires its active-save count.
+        let finalIdle = await store.waitForPersistenceIdleForTesting()
+        XCTAssertTrue(finalIdle)
+        XCTAssertEqual(store.sessionSaveStatus, "Saved")
+    }
+
+    func testReadOnlySourceReportsPermissionDeniedWithDurableBackup() async throws {
+        let fixture = try makeFixture(named: "ReadOnlySourceReason")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.photos.path)
+            try? FileManager.default.removeItem(at: fixture.root)
+        }
+        let persistence = SessionPersistence(backupDirectory: fixture.backup)
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: fixture.photos.path)
+        let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(result, .savedToBackup(sidecarFailure: .permissionDenied))
+        XCTAssertTrue(result.canDiscardInMemoryState)
+    }
+
+    func testDescriptorFailuresPreserveSpaceVolumeAndPermissionReasons() async throws {
+        let cases: [(Int32, SessionPersistence.FailureReason)] = [
+            (ENOSPC, .outOfSpace), (ENODEV, .volumeUnavailable),
+            (EACCES, .permissionDenied), (EPERM, .permissionDenied),
+            (EROFS, .permissionDenied), (ENOENT, .volumeUnavailable),
+        ]
+        for (code, expected) in cases {
+            let fixture = try makeFixture(named: "DescriptorFailure-\(code)")
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.photos.path)
+                try? FileManager.default.removeItem(at: fixture.root)
+            }
+            let persistence = SessionPersistence(
+                backupDirectory: fixture.backup,
+                beforeBackupValidationForTesting: {
+                    throw DurableFileIO.IOError.system(operation: "write", path: "backup", code: code)
+                }
+            )
+            let read = await persistence.read(for: fixture.photos)
+            let access = try XCTUnwrap(read.access)
+            let session = currentSession(folder: fixture.photos,
+                file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: fixture.photos.path)
+            let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+            XCTAssertEqual(result, .failed(.init(sidecar: .permissionDenied, backup: expected)))
+        }
+    }
+
+    func testDirectorySyncRetryRevalidatesSourceFolderBeforeTouchingReplacement() async throws {
+        let fixture = try makeFixture(named: "SyncRetryFolderReplacement")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let folder = fixture.photos
+        let retired = fixture.root.appendingPathComponent("Retired", isDirectory: true)
+        let replacementBytes = Data("replacement folder owns this file".utf8)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: EIO)
+            },
+            beforeDirectorySyncRetryForTesting: { snapshot in
+                try FileManager.default.moveItem(at: folder, to: retired)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try replacementBytes.write(to: snapshot)
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(result, .sourceFolderChanged)
+        XCTAssertFalse(result.canDiscardInMemoryState)
+        XCTAssertEqual(try Data(contentsOf: SessionPersistence.sidecarURL(for: folder)), replacementBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.backup.path))
+    }
+
+    func testOfflineBackupSyncRetryRejectsExternalDestinationEdit() async throws {
+        let fixture = try makeFixture(named: "SyncRetryBackupEdit")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let externalBytes = Data("external backup writer".utf8)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterBackupReplaceForTesting: {
+                throw DurableFileIO.IOError.system(operation: "fsync", path: "backup", code: EIO)
+            },
+            beforeDirectorySyncRetryForTesting: { snapshot in
+                try externalBytes.write(to: snapshot)
+            }
+        )
+        let read = await persistence.read(for: fixture.photos)
+        let access = try XCTUnwrap(read.access)
+        let session = currentSession(folder: fixture.photos,
+            file: fixture.photos.appendingPathComponent("A.png"), rating: .yes)
+        try FileManager.default.moveItem(at: fixture.photos,
+            to: fixture.root.appendingPathComponent("Disconnected", isDirectory: true))
+        let result = await persistence.save(session, for: fixture.photos, sequence: 1, access: access)
+        XCTAssertEqual(result, .sidecarChanged)
+        XCTAssertFalse(result.canDiscardInMemoryState)
+        let backup = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: fixture.backup, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try Data(contentsOf: backup), externalBytes)
+    }
+
+    func testRetryReconnectingDuringBackupValidationAdoptsOnlyItsMarkedSidecar() async throws {
+        let fixture = try makeFixture(named: "ReconnectDuringFailedSaveRetry")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let folder = fixture.photos
+        let disconnected = fixture.root.appendingPathComponent("Disconnected", isDirectory: true)
+        let disconnectOnce = OneShotFlag()
+        let reconnectOnce = OneShotFlag()
+        let failures = PersistenceFailureSwitch()
+        failures.setEnabled(true)
+        let persistence = SessionPersistence(
+            backupDirectory: fixture.backup,
+            afterSidecarReplaceForTesting: {
+                if disconnectOnce.take() {
+                    try FileManager.default.moveItem(at: folder, to: disconnected)
+                    throw DurableFileIO.IOError.system(operation: "fsync", path: "sidecar", code: ENODEV)
+                }
+            },
+            beforeBackupValidationForTesting: {
+                if failures.isEnabled {
+                    throw DurableFileIO.IOError.system(operation: "write", path: "backup", code: ENOSPC)
+                }
+                if reconnectOnce.take() {
+                    try FileManager.default.moveItem(at: disconnected, to: folder)
+                }
+            }
+        )
+        let read = await persistence.read(for: folder)
+        let access = try XCTUnwrap(read.access)
+        var session = currentSession(folder: folder,
+            file: folder.appendingPathComponent("A.png"), rating: .yes)
+        let failed = await persistence.save(session, for: folder, sequence: 1, access: access)
+        XCTAssertEqual(failed, .failed(.init(sidecar: .volumeUnavailable, backup: .outOfSpace)))
+
+        failures.setEnabled(false)
+        session.entries[0].rating = Rating.no.rawValue
+        let backupSave = await persistence.save(session, for: folder, sequence: 1, access: access)
+        XCTAssertEqual(backupSave, .savedToBackup(sidecarFailure: .volumeUnavailable))
+        XCTAssertEqual(try readSidecar(in: folder)?.snapshotGeneration, 1)
+        let backup = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: fixture.backup, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try readSession(at: backup).snapshotGeneration, 2)
+        XCTAssertEqual(try readSession(at: backup).entries.first?.rating, Rating.no.rawValue)
+
+        let repaired = await persistence.save(session, for: folder, sequence: 2, access: access)
+        XCTAssertEqual(repaired, .savedToSidecar)
+        XCTAssertEqual(try readSidecar(in: folder)?.snapshotGeneration, 3)
+        XCTAssertEqual(try readSidecar(in: folder)?.entries.first?.rating, Rating.no.rawValue)
     }
 
     private struct Fixture {
@@ -3234,6 +3602,23 @@ final class SessionDurabilityTests: XCTestCase {
         return backupDirectory.appendingPathComponent(
             String(format: "%016llx.json", hash)
         )
+    }
+}
+
+private final class PersistenceFailureSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enabled = false
+
+    var isEnabled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return enabled
+    }
+
+    func setEnabled(_ value: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        enabled = value
     }
 }
 

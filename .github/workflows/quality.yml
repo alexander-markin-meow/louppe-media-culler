@@ -17,7 +17,8 @@ concurrency:
 jobs:
   verify:
     name: Swift, filesystem, UI logic, and release package
-    runs-on: macos-26
+    # RAW 9 resource APIs require the macOS 27 SDK.
+    runs-on: xcode-27
     timeout-minutes: 30
 
     steps:

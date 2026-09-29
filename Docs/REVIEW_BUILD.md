@@ -246,3 +246,7 @@ The website's twelve regressions passed; its consent fix was committed and pushe
 GitHub Pages deployment succeeded, and the live script matched source. Two-tab
 browser acceptance remains in the website backlog. The app update remains
 unreleased; no public 1.10 release or updater-feed promotion was performed.
+
+The first remote quality run selected Xcode 26.6 and could not compile the
+macOS 27 RAW-resource API. The quality workflow now uses GitHub’s `xcode-27`
+runner, matching the local SDK requirement; application source is unchanged.

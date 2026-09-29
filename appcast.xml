@@ -5,13 +5,13 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Louppe Updates</title>
-        <link>https://github.com/alexander-markin-meow/louppe</link>
+        <link>https://github.com/murlexander/louppe-media-culler</link>
         <description>Secure automatic updates for Louppe.</description>
         <language>en</language>
         <item>
             <title>1.9.0</title>
             <pubDate>Sun, 27 Sep 2026 00:43:59 +0200</pubDate>
-            <link>https://github.com/alexander-markin-meow/louppe-media-culler/releases/tag/v1.9.0</link>
+            <link>https://github.com/murlexander/louppe-media-culler/releases/tag/v1.9.0</link>
             <sparkle:version>11</sparkle:version>
             <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -76,11 +76,11 @@ to Louppe and its approach to reviewing media.
   the current SDK version in the packaged app.
 
 ]]></description>
-            <enclosure url="https://github.com/alexander-markin-meow/louppe-media-culler/releases/download/v1.9.0/Louppe.zip" length="6096278" type="application/octet-stream" sparkle:edSignature="bzXNYJXzvw9o/Nwqv9kmizb9CplJQiwPZKgInybguOS8ob4QEmV705E/5n6MZ8M7zs9IUBALKej/MGiLwUuYBQ=="/>
+            <enclosure url="https://github.com/murlexander/louppe-media-culler/releases/download/v1.9.0/Louppe.zip" length="6096278" type="application/octet-stream" sparkle:edSignature="bzXNYJXzvw9o/Nwqv9kmizb9CplJQiwPZKgInybguOS8ob4QEmV705E/5n6MZ8M7zs9IUBALKej/MGiLwUuYBQ=="/>
         </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: jg4ebzEh4jTB/46fBNNmtpzs/aqjYq6GMqwZtzGP0/8I2aZCxfoyV3wUsAVUpR/HCfXREPdazaKyC9Klj1lvDA==
-length: 4824
+edSignature: kQJwTMaqCm2pMHdEjQAfPvJ4n7RMkyFm5PuGUVM9uiYqKhqWG/6NoJYOmzG0mHlcV/8Yi0kuaqudZGO3i20DAw==
+length: 4807
 -->

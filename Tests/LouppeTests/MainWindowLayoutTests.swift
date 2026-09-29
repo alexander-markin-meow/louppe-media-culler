@@ -36,17 +36,18 @@ final class MainWindowLayoutTests: XCTestCase {
         let (window, controller) = makeWindow(minimum: required)
         defer { window.close() }
         controller.apply()
+        let fittedHeight = fittingWelcomeHeight(required.height, in: window)
         XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
-        XCTAssertGreaterThan(window.contentMinSize.height, required.height)
+        XCTAssertGreaterThan(window.contentMinSize.height, fittedHeight)
         XCTAssertGreaterThanOrEqual(window.contentLayoutRect.width, required.width)
-        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, required.height)
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, fittedHeight)
         XCTAssertEqual(
             window.contentMinSize.height,
-            required.height + nativeCoveredHeight(window), accuracy: 0.5
+            fittedHeight + nativeCoveredHeight(window), accuracy: 0.5
         )
         window.setContentSize(window.contentMinSize)
         controller.apply()
-        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, required.height)
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, fittedHeight)
     }
 
     func testAddedContentGrowsWindowAndRemovingContentOnlyLowersMinimum() {
@@ -55,7 +56,9 @@ final class MainWindowLayoutTests: XCTestCase {
         controller.minimumContentSize = CGSize(width: 961, height: 690)
         controller.apply()
         XCTAssertGreaterThanOrEqual(window.contentLayoutRect.width, 961)
-        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, 690)
+        XCTAssertGreaterThanOrEqual(
+            window.contentLayoutRect.height, fittingWelcomeHeight(690, in: window)
+        )
         let grownFrame = window.frame.size
         let grownMinimum = window.contentMinSize
 
@@ -114,9 +117,10 @@ final class MainWindowLayoutTests: XCTestCase {
         controller.apply()
         XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
         XCTAssertGreaterThanOrEqual(window.contentLayoutRect.width, 961)
-        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, 650)
+        let fittedHeight = fittingWelcomeHeight(650, in: window)
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, fittedHeight)
         XCTAssertEqual(window.contentLayoutRect.width, 961, accuracy: 1)
-        XCTAssertEqual(window.contentLayoutRect.height, 650, accuracy: 1)
+        XCTAssertEqual(window.contentLayoutRect.height, fittedHeight, accuracy: 1)
     }
 
     func testSessionKeepsManualResizeUntilDisplayChanges() throws {
@@ -311,6 +315,18 @@ final class MainWindowLayoutTests: XCTestCase {
         content.addSubview(controller)
         controller.apply()
         return (window, controller)
+    }
+
+    // Welcome preserves its intrinsic minimum until the display requires the
+    // documented scroll fallback. Hosted runners can have only 608 usable points.
+    private func fittingWelcomeHeight(_ required: CGFloat, in window: NSWindow) -> CGFloat {
+        guard let screen = window.screen else {
+            XCTFail("window needs a screen")
+            return required
+        }
+        let available = window.contentRect(forFrameRect: screen.visibleFrame).height
+            - nativeCoveredHeight(window)
+        return min(required, available)
     }
 
     private func nativeCoveredHeight(_ window: NSWindow) -> CGFloat {

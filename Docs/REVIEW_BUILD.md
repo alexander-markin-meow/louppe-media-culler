@@ -250,3 +250,9 @@ unreleased; no public 1.10 release or updater-feed promotion was performed.
 The first remote quality run selected Xcode 26.6 and could not compile the
 macOS 27 RAW-resource API. The quality workflow now uses GitHub’s `xcode-27`
 runner, matching the local SDK requirement; application source is unchanged.
+
+The Xcode 27 hosted runner exposes 608 points of usable window height. Three
+layout tests assumed 650–690 points and produced six assertion failures despite
+the correct welcome overflow cap. Their assertions now check intrinsic height
+when it fits and the actual display limit otherwise. Existing overflow scrolling
+and full-size toolbar checks remain; production window behavior is unchanged.

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   update:
-    if: github.repository == 'alexander-markin-meow/louppe-media-culler'
+    if: github.repository == 'murlexander/louppe-media-culler'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

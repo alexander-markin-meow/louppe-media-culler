@@ -208,7 +208,7 @@ without seeing the screen. Screen capture is NOT available for verification
 
 ## Repo conventions
 
-- GitHub: `alexander-markin-meow/louppe-media-culler` (public). Commit/push only when the
+- GitHub: `murlexander/louppe-media-culler` (public). Commit/push only when the
   owner asks; he reviews PRs via the GitHub UI "Merge" button or asks here.
 - **Use `main` only.** Do not create or retain local or remote feature branches
   unless the owner explicitly asks for one. Commit directly to `main` only when

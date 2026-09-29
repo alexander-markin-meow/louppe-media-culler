@@ -7,17 +7,17 @@ installer, hosting service, or Homebrew repository is needed.
 ## Install
 
 ```sh
-brew tap alexander-markin-meow/louppe https://github.com/alexander-markin-meow/louppe-media-culler
-brew install --cask alexander-markin-meow/louppe/louppe
+brew tap murlexander/louppe https://github.com/murlexander/louppe-media-culler
+brew install --cask murlexander/louppe/louppe
 ```
 
 If Homebrew requests trust for this non-official tap, follow its prompt to trust
-only `alexander-markin-meow/louppe/louppe`.
+only `murlexander/louppe/louppe`.
 
 Louppe requires Apple silicon and macOS 14 or newer. It retains the built-in
 Sparkle updater. `auto_updates true` tells Homebrew that the app updates itself;
 users who prefer Homebrew can explicitly upgrade this cask with
-`brew upgrade --cask --greedy alexander-markin-meow/louppe/louppe`.
+`brew upgrade --cask --greedy murlexander/louppe/louppe`.
 
 The cask deliberately has no cleanup rule that deletes ratings, folder access,
 or preferences. Uninstalling removes the app, not photo-library files.

@@ -128,7 +128,7 @@ struct LouppeApp: App {
         credits.append(NSAttributedString(string: "louppe.eu", attributes: link))
         credits.append(NSAttributedString(string: "\n", attributes: base))
 
-        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe-media-culler/releases")!
+        link[.link] = URL(string: "https://github.com/murlexander/louppe-media-culler/releases")!
         credits.append(NSAttributedString(string: "Version History", attributes: link))
         credits.append(NSAttributedString(string: "\n\n", attributes: base))
 
@@ -139,7 +139,7 @@ struct LouppeApp: App {
         credits.append(NSAttributedString(string: "a@alex-markin.com", attributes: link))
         credits.append(NSAttributedString(string: "\n", attributes: base))
 
-        link[.link] = URL(string: "https://github.com/alexander-markin-meow/louppe-media-culler")!
+        link[.link] = URL(string: "https://github.com/murlexander/louppe-media-culler")!
         credits.append(NSAttributedString(string: "GitHub", attributes: link))
 
         return credits

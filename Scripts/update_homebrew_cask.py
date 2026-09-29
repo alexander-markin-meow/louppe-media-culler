@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import zipfile
 
-REPOSITORY = "alexander-markin-meow/louppe-media-culler"
+REPOSITORY = "murlexander/louppe-media-culler"
 ROOT = Path(__file__).resolve().parents[1]
 
 

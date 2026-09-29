@@ -16,7 +16,7 @@ macOS 14 or newer on an Apple silicon Mac. The current download does not support
 
 ## Download
 
-Download **[Louppe.zip from the latest release](https://github.com/alexander-markin-meow/louppe-media-culler/releases/latest)**,
+Download **[Louppe.zip from the latest release](https://github.com/murlexander/louppe-media-culler/releases/latest)**,
 unzip it, and drag `Louppe.app` into Applications.
 
 The public download is signed and notarized by Apple. Open it normally;

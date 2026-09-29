@@ -1,7 +1,7 @@
 # Louppe 1.9.0 (11) release record
 
 Published 27 September 2026 (local time):
-[GitHub release](https://github.com/alexander-markin-meow/louppe-media-culler/releases/tag/v1.9.0).
+[GitHub release](https://github.com/murlexander/louppe-media-culler/releases/tag/v1.9.0).
 
 ## Provenance
 
@@ -23,7 +23,7 @@ in ignored `dist/notarization.json` and `dist/notarization-log.json`.
 ## Verification
 
 - Full GitHub quality run on the exact app commit passed:
-  [36277061138](https://github.com/alexander-markin-meow/louppe-media-culler/actions/runs/36277061138).
+  [36277061138](https://github.com/murlexander/louppe-media-culler/actions/runs/36277061138).
   It includes strict compilation, all 415 XCTest cases, deterministic
   filesystem checks, scrollbar/media checks, and release packaging.
 - All 34 HotkeyTests also passed locally before installation. Earlier combined

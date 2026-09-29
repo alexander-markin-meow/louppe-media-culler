@@ -211,7 +211,7 @@ Verification of the integrated source passed:
 
 - Full XCTest: 537 tests, zero failures, three explicit skips (optional Fuji
   benchmark, optional real RAW fixture, and hosted-drive accessibility).
-  All 34 mandatory HotkeyTests passed. A further real Fuji preview run removed
+  All 35 mandatory HotkeyTests passed. A further real Fuji preview run removed
   the RAW-fixture skip: 10 focused tests, zero failures, one optional benchmark skip.
 - Strict Swift 6 concurrency build with warnings as errors passed.
 - Performance/file-safety checks: 75/75, including real Trash/restore. The first
